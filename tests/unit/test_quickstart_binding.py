@@ -13,6 +13,8 @@ never have been true is that the port was theirs to reach.
 
 from __future__ import annotations
 
+import pathlib
+
 from echo_memory.cli import quickstart
 
 
@@ -48,20 +50,66 @@ def test_a_new_container_is_published_on_loopback_only(monkeypatch):
     assert not published.startswith("5433:"), "a bare port binds every interface"
 
 
-def test_the_password_is_still_the_known_one(monkeypatch):
-    """Deliberately unchanged. It is a local throwaway container and the
-    connection string is printed on screen; rotating it would imply the
-    exposure was about secrecy rather than about reachability."""
-    recorder = _Recorder()
-    monkeypatch.setattr(quickstart, "_run", recorder)
-    monkeypatch.setattr(quickstart, "container_state", lambda name=None: "none")
-    monkeypatch.setattr(quickstart, "free_port", lambda port: port)
+def test_every_install_gets_its_own_password(monkeypatch):
+    """The second lock, and only the second. Loopback is what decides whether
+    anything can reach the port; this decides what happens if something does,
+    which is the case you do not get to assume away."""
+    seen = []
+    for _ in range(2):
+        recorder = _Recorder()
+        monkeypatch.setattr(quickstart, "_run", recorder)
+        monkeypatch.setattr(quickstart, "container_state", lambda name=None: "none")
+        monkeypatch.setattr(quickstart, "free_port", lambda port: port)
+        quickstart.start_database(port=5433)
+        run_cmd = next(c for c in recorder.calls if "run" in c)
+        seen.append(next(a for a in run_cmd if a.startswith("POSTGRES_PASSWORD=")))
 
-    quickstart.start_database(port=5433)
+    assert seen[0] != seen[1], "two installs got the same password"
+    assert "POSTGRES_PASSWORD=postgres" not in seen
+    assert len(seen[0].split("=", 1)[1]) >= 24
 
-    run_cmd = next(c for c in recorder.calls if "run" in c)
-    assert "POSTGRES_PASSWORD=postgres" in run_cmd
-    assert "postgres:postgres@localhost" in quickstart.database_url(5433)
+
+def test_a_generated_password_survives_a_connection_string(monkeypatch):
+    """A password carrying @ or : builds a URL that parses into the wrong
+    fields rather than failing, which is a bug nobody can read."""
+    from urllib.parse import urlparse
+
+    password = quickstart.new_password()
+    monkeypatch.setattr(quickstart, "container_password", lambda name=None: password)
+
+    parsed = urlparse(quickstart.database_url(5433))
+
+    assert parsed.hostname == "localhost"
+    assert parsed.port == 5433
+    assert parsed.password == password
+    assert parsed.username == "postgres"
+
+
+def test_the_password_is_read_back_from_the_container(monkeypatch):
+    """Nothing new is stored on disk, and a container made before this change
+    still works: those carry "postgres" and this returns it."""
+    class Inspect:
+        returncode = 0
+        stdout = "PATH=/usr/bin\nPOSTGRES_PASSWORD=older-container\nPOSTGRES_DB=echo_memory\n"
+        stderr = ""
+
+    monkeypatch.setattr(quickstart, "_run", lambda *a, **k: Inspect())
+
+    assert quickstart.container_password() == "older-container"
+    assert "older-container@localhost:5433" in quickstart.database_url(5433)
+
+
+def test_no_credential_is_hardcoded_anywhere_in_the_module():
+    """What the scanner was pointing at, pinned so it cannot come back. The
+    finding was wrong about the danger and right that a shared secret should
+    not be a literal in the source."""
+    source = pathlib.Path(quickstart.__file__).read_text()
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    assert "postgres:postgres@" not in code
+    assert "POSTGRES_PASSWORD=postgres" not in code
 
 
 def test_a_container_bound_to_every_interface_is_reported_as_exposed(monkeypatch):
