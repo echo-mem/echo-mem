@@ -20,6 +20,7 @@ it needed one is a command nobody should run.
 
 from __future__ import annotations
 
+import secrets
 import shutil
 import socket
 import subprocess
@@ -31,8 +32,53 @@ import time
 IMAGE = "ghcr.io/ayushcodes10/echo-mem-postgres:pg16-age1.5.0"
 CONTAINER = "echo-memory-db"
 PORT = 5433
-def database_url(port: int = PORT) -> str:
-    return f"postgresql://postgres:postgres@localhost:{port}/echo_memory"
+# Generated per install, never shared, and never written to a file of ours.
+#
+# The old value was the literal string "postgres", the same on every machine
+# that has ever run this. Combined with a port published on 0.0.0.0 that was
+# enough to read anybody's memory graph off the network; the port is bound to
+# loopback now, and this is the second lock rather than a replacement for the
+# first. A password only matters once something can reach the port, and the
+# point of defence in depth is that you do not get to assume nothing ever will.
+#
+# url-safe on purpose: a password reaches Postgres through a connection string,
+# and one containing @ or : would produce a URL that parses into the wrong
+# fields rather than an error anybody could read.
+PASSWORD_BYTES = 24
+
+
+def new_password() -> str:
+    return secrets.token_urlsafe(PASSWORD_BYTES)
+
+
+def container_password(name: str = CONTAINER) -> str | None:
+    """The password the running container was actually created with.
+
+    Read back rather than remembered, so nothing new is stored on disk and a
+    container from before this change still works: those were made with
+    "postgres", and this returns that just as happily as a generated one.
+    """
+    probe = _run([
+        "docker", "inspect", "-f",
+        '{{range .Config.Env}}{{println .}}{{end}}', name,
+    ], timeout=20)
+    if probe.returncode != 0:
+        return None
+    for line in probe.stdout.splitlines():
+        if line.startswith("POSTGRES_PASSWORD="):
+            return line.split("=", 1)[1].strip() or None
+    return None
+
+
+def database_url(port: int = PORT, password: str | None = None) -> str:
+    """The connection string for the container this command manages.
+
+    `password` is required in practice and defaulted only so a caller asking
+    for the shape of the URL does not have to invent one. It reads from the
+    container when it can, because the answer lives there.
+    """
+    secret = password or container_password() or "postgres"
+    return f"postgresql://postgres:{secret}@localhost:{port}/echo_memory"
 
 # Long enough for a first-run pull and initdb on a slow disk, short enough that
 # a wedged container is reported rather than waited on forever.
@@ -117,25 +163,26 @@ def start_database(
         return "restarted", published_port(name) or port
 
     chosen = free_port(port)
+    password = new_password()
     created = _run([
         "docker", "run", "-d", "--name", name,
         "--restart", "unless-stopped",
-        "-e", "POSTGRES_PASSWORD=postgres",
+        "-e", f"POSTGRES_PASSWORD={password}",
         "-e", "POSTGRES_DB=echo_memory",
-        # 127.0.0.1, not a bare port. `-p 5433:5432` binds 0.0.0.0 and [::],
-        # so the database is reachable from every machine on the network with
-        # the password three lines above this one. Verified on 2026-09-20 by
-        # connecting to a quickstart container as superuser over a laptop's LAN
-        # address rather than loopback.
+        # 127.0.0.1, not a bare port. `-p 5433:5432` binds 0.0.0.0 and [::], so
+        # every database this command made was reachable from any machine on
+        # the same network, and until the line above it every one of them had
+        # the same password. Verified on 2026-09-20 by connecting to a real
+        # quickstart container as superuser over a laptop's LAN address.
         #
         # What is behind it is the whole point: a memory graph holds hostnames,
         # account numbers and client names, which is why the README's own
         # screenshots use a synthetic store. A café or office network was
         # enough to read all of it.
         #
-        # The password is not the bug and changing it would not fix this. An
-        # attacker on the same network can reach the port either way; what
-        # should never have been true is that the port was theirs to reach.
+        # This is the lock that mattered. A generated password helps only once
+        # something can reach the port; binding to loopback is what decides
+        # whether anything can.
         "-p", f"127.0.0.1:{chosen}:5432",
         "-v", f"{name}-data:/var/lib/postgresql/data",
         image,
@@ -306,7 +353,10 @@ def run(args, _config=None, _conn=None) -> int:
         print(f"error: {e}")
         return 1
 
-    url = database_url(port)
+    # From the container rather than from a constant: on a second run this is
+    # whatever the existing container was created with, which for a container
+    # made before passwords were generated is still "postgres".
+    url = database_url(port, container_password())
     initdb.upgrade(url)
     exposed = exposed_to_network()
 
