@@ -6,7 +6,7 @@
 # (`-m echo_memory.server`) and every existing install reference it, and
 # renaming the module would break live configuration to fix a cosmetic mismatch.
 name = "echo-mem"
-version = "0.3.0"
+version = "0.4.0"
 description = "A long-horizon memory architecture for AI agents"
 readme = "README.md"
 license = "Apache-2.0"
