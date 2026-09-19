@@ -26,6 +26,7 @@ import socket
 import subprocess
 import sys
 import time
+from urllib.parse import quote, urlunsplit
 
 # Published multi-arch, so this is a pull rather than a compile. The tag names
 # the AGE release it carries, because "latest" tells a bug report nothing.
@@ -70,15 +71,28 @@ def container_password(name: str = CONTAINER) -> str | None:
     return None
 
 
+DRIVER = "postgresql"
+DB_USER = "postgres"
+DB_HOST = "localhost"
+DB_NAME = "echo_memory"
+
+
 def database_url(port: int = PORT, password: str | None = None) -> str:
     """The connection string for the container this command manages.
 
     `password` is required in practice and defaulted only so a caller asking
     for the shape of the URL does not have to invent one. It reads from the
     container when it can, because the answer lives there.
+
+    Composed from parts rather than interpolated into one string, and the
+    password percent encoded on the way in. `new_password` returns url-safe
+    text today, so nothing needs escaping today; a builder keeps that true if
+    the password ever comes from somewhere else, where an f-string would
+    silently produce a URL that parses into the wrong fields.
     """
     secret = password or container_password() or "postgres"
-    return f"postgresql://postgres:{secret}@localhost:{port}/echo_memory"
+    netloc = f"{DB_USER}:{quote(secret, safe='')}@{DB_HOST}:{port}"
+    return urlunsplit((DRIVER, netloc, f"/{DB_NAME}", "", ""))
 
 # Long enough for a first-run pull and initdb on a slow disk, short enough that
 # a wedged container is reported rather than waited on forever.
