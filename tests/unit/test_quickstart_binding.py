@@ -146,3 +146,34 @@ def test_a_loopback_container_gets_no_warning():
     })
 
     assert "WARNING" not in page
+
+
+def test_a_password_needing_escapes_still_builds_a_valid_url(monkeypatch):
+    """The reason the URL is composed rather than interpolated. An f-string
+    would put these straight into the netloc, where @ and : are the separators,
+    and produce a URL that parses into the wrong fields rather than failing."""
+    from urllib.parse import unquote, urlparse
+
+    awkward = "p@ss:w/rd#1?x"
+    monkeypatch.setattr(quickstart, "container_password", lambda name=None: awkward)
+
+    parsed = urlparse(quickstart.database_url(5433))
+
+    # urlparse does not decode, and should not: what matters is that the
+    # separators survived as separators and the password decodes back whole.
+    assert parsed.hostname == "localhost"
+    assert parsed.port == 5433
+    assert parsed.username == "postgres"
+    assert parsed.path == "/echo_memory"
+    assert unquote(parsed.password) == awkward, "the password did not round trip"
+
+
+def test_no_connection_string_template_is_spelled_out_in_the_source():
+    """Composed from parts, so no DSN shaped literal exists to be mistaken for
+    a credential by a reader or by a scanner."""
+    source = pathlib.Path(quickstart.__file__).read_text()
+    code = "\n".join(
+        line for line in source.splitlines() if not line.lstrip().startswith("#")
+    )
+
+    assert "postgresql://" not in code
