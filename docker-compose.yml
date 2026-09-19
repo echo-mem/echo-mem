@@ -20,8 +20,11 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-echo_memory}
     ports:
-      # 5433, not 5432: avoids colliding with a locally-running Postgres
-      - "5433:5432"
+      # 5433, not 5432: avoids colliding with a locally-running Postgres.
+      # 127.0.0.1, not a bare port: "5433:5432" binds 0.0.0.0 and [::], which
+      # put this database on the network for anyone who could reach the
+      # machine, with the password below. This one holds a real store.
+      - "127.0.0.1:5433:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
@@ -45,7 +48,9 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: ${POSTGRES_DB:-echo_memory}
     ports:
-      - "5434:5432"
+      # Loopback for the same reason as the database above. A test database is
+      # no less reachable for being disposable, and it shares the machine.
+      - "127.0.0.1:5434:5432"
     volumes:
       - postgres-test-data:/var/lib/postgresql/data
     healthcheck:

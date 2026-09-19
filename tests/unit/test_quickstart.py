@@ -224,7 +224,8 @@ def test_a_taken_port_moves_up_instead_of_failing(monkeypatch):
 
     assert port == 5435
     assert "5433 was taken" in outcome
-    assert "5435:5432" in next(c for c in calls if "-d" in c)
+    # Loopback prefixed since 0.4.1; the port it moved to is still the one used.
+    assert "127.0.0.1:5435:5432" in next(c for c in calls if "-d" in c)
 
 
 def test_the_url_follows_the_port_actually_used():

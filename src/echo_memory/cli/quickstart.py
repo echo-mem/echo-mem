@@ -122,7 +122,21 @@ def start_database(
         "--restart", "unless-stopped",
         "-e", "POSTGRES_PASSWORD=postgres",
         "-e", "POSTGRES_DB=echo_memory",
-        "-p", f"{chosen}:5432",
+        # 127.0.0.1, not a bare port. `-p 5433:5432` binds 0.0.0.0 and [::],
+        # so the database is reachable from every machine on the network with
+        # the password three lines above this one. Verified on 2026-09-20 by
+        # connecting to a quickstart container as superuser over a laptop's LAN
+        # address rather than loopback.
+        #
+        # What is behind it is the whole point: a memory graph holds hostnames,
+        # account numbers and client names, which is why the README's own
+        # screenshots use a synthetic store. A café or office network was
+        # enough to read all of it.
+        #
+        # The password is not the bug and changing it would not fix this. An
+        # attacker on the same network can reach the port either way; what
+        # should never have been true is that the port was theirs to reach.
+        "-p", f"127.0.0.1:{chosen}:5432",
         "-v", f"{name}-data:/var/lib/postgresql/data",
         image,
     ], timeout=600)
@@ -148,6 +162,28 @@ def published_port(name: str = CONTAINER) -> int | None:
         return int(probe.stdout.strip())
     except ValueError:
         return None
+
+
+def published_interface(name: str = CONTAINER) -> str | None:
+    """Which host interface an existing container is published on.
+
+    Containers created before the loopback fix are still bound to 0.0.0.0 and
+    docker will not rebind a running one, so this exists to say so rather than
+    to leave everybody who already ran quickstart exposed without knowing.
+    """
+    probe = _run([
+        "docker", "inspect", "-f",
+        '{{ (index (index .NetworkSettings.Ports "5432/tcp") 0).HostIp }}', name,
+    ], timeout=20)
+    if probe.returncode != 0:
+        return None
+    return probe.stdout.strip() or None
+
+
+def exposed_to_network(name: str = CONTAINER) -> bool:
+    """True when this container's database can be reached from off the machine."""
+    host_ip = published_interface(name)
+    return host_ip in {"0.0.0.0", "::", ""}
 
 
 def wait_until_ready(name: str = CONTAINER, timeout_s: int = READY_TIMEOUT_S) -> None:
@@ -200,6 +236,24 @@ def render(result: dict) -> str:
         f"  found      {', '.join(result['clients'])}" if result["clients"]
         else "  found      no agent tools on this machine yet"
     )
+    if result.get("exposed"):
+        # Loud, and above the happy path, because this container predates the
+        # loopback fix and docker will not rebind a container that exists.
+        # Somebody who ran quickstart before today is exposed right now and has
+        # no reason to suspect it.
+        lines += [
+            "",
+            "  WARNING    this database is published on 0.0.0.0, so every machine on",
+            "             your network can reach it with the password quickstart set.",
+            "             A memory graph holds hostnames, account numbers and client",
+            "             names. Containers made before this release bind that way and",
+            "             docker cannot rebind one in place.",
+            "",
+            "             Your memory is in a volume and is not touched by this:",
+            "",
+            f"               docker rm -f {CONTAINER}",
+            "               echo-memory quickstart",
+        ]
     lines += [
         "",
         "Register it with Claude Code. --scope user is once for this machine,",
@@ -254,6 +308,7 @@ def run(args, _config=None, _conn=None) -> int:
 
     url = database_url(port)
     initdb.upgrade(url)
+    exposed = exposed_to_network()
 
     home = Path.home()
     print(render({
@@ -264,5 +319,6 @@ def run(args, _config=None, _conn=None) -> int:
         "clients": detected_clients(home),
         "python": sys.executable,
         "hosted_hint": True,
+        "exposed": exposed,
     }), end="")
     return 0
