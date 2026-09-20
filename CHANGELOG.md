@@ -7,6 +7,46 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## 0.4.1
+
+**Security.** The database `quickstart` creates was reachable from the network,
+and every install used the same password. Both are fixed. Anyone who has run
+`echo-memory quickstart` before this version should recreate their container;
+the command now says so on its final screen, and memory lives in a volume that
+survives it:
+
+```sh
+docker rm -f echo-memory-db && echo-memory quickstart
+```
+
+**The port was published on every interface.** `docker run -p 5433:5432` binds
+0.0.0.0 and [::], not loopback, so the database was reachable from any machine
+on the same network. Verified by connecting to a real quickstart container as
+superuser over a laptop's LAN address. A memory graph holds hostnames, account
+numbers and client names, which is why this repository's own screenshots use a
+synthetic store. Now published on 127.0.0.1.
+
+`docker-compose.yml` had the same bug on both databases, and one of those holds
+a real store.
+
+**The password was the same everywhere.** It was the literal string `postgres`
+on every machine that had ever run this command. It is now generated per
+install and read back from the container when needed, so nothing new is stored
+and a container made before this version keeps working.
+
+This is the second lock and only the second: the binding is what decides
+whether anything can reach the port.
+
+**Correctness.** The connection string is composed from parts with the password
+percent encoded, rather than interpolated into an f-string where `@` and `:`
+are the netloc separators.
+
+### 0.4.0 was tagged and never published
+
+Its tag predates every fix above. Republishing it would have put a database on
+the network for anyone who installed it, so the version was skipped rather than
+released. There is nothing in 0.4.0 that is not also in 0.4.1.
+
 ## 0.4.0
 
 ### The write path got much faster as the store grows
