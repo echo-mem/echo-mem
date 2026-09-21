@@ -337,16 +337,38 @@ def _graph_candidates(
     """
     if not seed_edge_ids:
         return []
+    # Read off the edge table rather than through Cypher. `MATCH (n)-[n2:FACT]-(m)`
+    # leaves both the pattern and the relationship unbound, so AGE expands every
+    # FACT edge in the database against every seed before applying the filter.
+    # Measured 2026-09-21 on a 376 fact scope in a 1,751 edge database: 58,356ms
+    # with graph_hops=1 against 44ms without, which is 1,300x for a hop that is
+    # supposed to be the cheap way to answer a two fact question.
+    #
+    # That is the same defect already fixed twice in this codebase, in
+    # neighbourhood._adjacent and neighbourhood._endpoints, and its cost here
+    # was hidden because the feature it makes unusable is off by default.
+    #
+    # fact_group_start_idx and fact_group_end_idx, both (group_id, start_id) and
+    # (group_id, end_id), have existed since migration 0013. This is the query
+    # they were built for.
     rows = conn.execute(
-        f"""SELECT * FROM cypher('{GRAPH}', $$
-            UNWIND $ids AS eid
-            MATCH (a)-[e:FACT]->(b) WHERE id(e) = eid
-            MATCH (n)-[n2:FACT]-(m)
-            WHERE (id(n) = id(a) OR id(n) = id(b))
-              AND n2.group_id = $gid AND n2.t_invalid IS NULL
-            RETURN eid, id(n2)
-        $$, %s) AS (seed agtype, edge_id agtype)""",
-        (json.dumps({"ids": [int(i) for i in seed_edge_ids], "gid": group_id}),),
+        f"""WITH seeds AS (
+                SELECT e.id AS seed, e.start_id, e.end_id
+                FROM {GRAPH}."FACT" e
+                WHERE e.id = ANY(SELECT unnest(%s::text[])::graphid)
+            ),
+            ends AS (
+                SELECT seed, start_id AS node FROM seeds
+                UNION ALL
+                SELECT seed, end_id AS node FROM seeds
+            )
+            SELECT ends.seed::text, n2.id::text
+            FROM ends
+            JOIN {GRAPH}."FACT" n2
+              ON (n2.start_id = ends.node OR n2.end_id = ends.node)
+            WHERE (n2.properties ->> '"group_id"'::agtype) = %s
+              AND (n2.properties ->> '"t_invalid"'::agtype) IS NULL""",
+        ([str(i) for i in seed_edge_ids], group_id),
     ).fetchall()
 
     order = {edge_id: i for i, edge_id in enumerate(seed_edge_ids)}
@@ -602,11 +624,30 @@ def query_memory(
             # and reciprocal rank fusion is happiest when its inputs are.
             # Everything here is derived from the content channels' own top
             # results, so a fact both retrieves and neighbours gets counted
-            # twice. Not ruled out as a cause of the ranking cost measured on
-            # the multihop shape - and not the only candidate either: seed
-            # count, hub genericness, tie order and truncation depth are all
-            # untested. The attribution in the commit that added this is a
-            # hypothesis, not a finding.
+            # twice.
+            #
+            # Measured properly on 2026-09-22, once the hop stopped costing 58
+            # seconds and a full ablation became something anybody would run.
+            # It is not a wash and it is not close:
+            #
+            #   shape           shipping   + hop   dMRR      95% CI
+            #   entity_pair        0.641   0.499   -0.142   [-0.182, -0.104]
+            #   entity_single      0.690   0.591   -0.099   [-0.135, -0.062]
+            #   prose              0.974   0.849   -0.125   [-0.158, -0.094]
+            #   multihop           0.196   0.200   +0.003   [-0.022, +0.028]
+            #
+            # So it stays off by default, and now for a reason rather than a
+            # suspicion. On questions one fact answers, neighbours of that fact
+            # dilute the ranking: three intervals clear of zero, in the same
+            # direction, is not noise.
+            #
+            # What it does buy is on the shape it was built for, and it is not
+            # in MRR: multihop recall@10 rises 0.635 to 0.769. It finds the
+            # second fact and ranks it badly. That is a real result and the
+            # reason this code is kept rather than deleted, but it is an
+            # argument for turning the hop on per question, once something can
+            # tell a multi hop question from a single hop one, rather than for
+            # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
             lists.append(_graph_candidates(conn, group_id, seeds, LIST_DEPTH))
         fused = reciprocal_rank_fusion(lists, k=k) if graph_hops else content
