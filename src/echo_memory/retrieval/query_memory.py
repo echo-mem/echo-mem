@@ -624,11 +624,30 @@ def query_memory(
             # and reciprocal rank fusion is happiest when its inputs are.
             # Everything here is derived from the content channels' own top
             # results, so a fact both retrieves and neighbours gets counted
-            # twice. Not ruled out as a cause of the ranking cost measured on
-            # the multihop shape - and not the only candidate either: seed
-            # count, hub genericness, tie order and truncation depth are all
-            # untested. The attribution in the commit that added this is a
-            # hypothesis, not a finding.
+            # twice.
+            #
+            # Measured properly on 2026-09-22, once the hop stopped costing 58
+            # seconds and a full ablation became something anybody would run.
+            # It is not a wash and it is not close:
+            #
+            #   shape           shipping   + hop   dMRR      95% CI
+            #   entity_pair        0.641   0.499   -0.142   [-0.182, -0.104]
+            #   entity_single      0.690   0.591   -0.099   [-0.135, -0.062]
+            #   prose              0.974   0.849   -0.125   [-0.158, -0.094]
+            #   multihop           0.196   0.200   +0.003   [-0.022, +0.028]
+            #
+            # So it stays off by default, and now for a reason rather than a
+            # suspicion. On questions one fact answers, neighbours of that fact
+            # dilute the ranking: three intervals clear of zero, in the same
+            # direction, is not noise.
+            #
+            # What it does buy is on the shape it was built for, and it is not
+            # in MRR: multihop recall@10 rises 0.635 to 0.769. It finds the
+            # second fact and ranks it badly. That is a real result and the
+            # reason this code is kept rather than deleted, but it is an
+            # argument for turning the hop on per question, once something can
+            # tell a multi hop question from a single hop one, rather than for
+            # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
             lists.append(_graph_candidates(conn, group_id, seeds, LIST_DEPTH))
         fused = reciprocal_rank_fusion(lists, k=k) if graph_hops else content

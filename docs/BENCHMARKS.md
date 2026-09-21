@@ -170,6 +170,34 @@ The remaining growth, roughly 2x across that range, is the vector index getting
 larger as it gains rows. That one is real rather than a defect, and it is the
 number to beat next.
 
+## The graph hop, measured after it stopped costing a minute
+
+`query_memory(graph_hops=1)` expands from the facts a query already found, and
+has been off by default since it was written. It turned out to take **58,356ms
+against 44ms** on a 376 fact scope, because its Cypher left the pattern unbound
+and AGE walked every edge in the database per seed. That is now 21.1ms against
+21.4ms: the hop is free.
+
+Which made a full ablation worth running, on this author's store, 2026-09-22:
+
+| shape | shipping | + graph hop | ΔMRR | 95% CI |
+|---|---:|---:|---:|---|
+| entity_pair | 0.641 | 0.499 | −0.142 | [−0.182, −0.104] |
+| entity_single | 0.690 | 0.591 | −0.099 | [−0.135, −0.062] |
+| prose | 0.974 | 0.849 | −0.125 | [−0.158, −0.094] |
+| multihop | 0.196 | 0.200 | +0.003 | [−0.022, +0.028] |
+
+**It stays off.** Three intervals clear of zero in the same direction is not
+noise: on a question one fact answers, the neighbours of that fact dilute the
+ranking.
+
+The thing it does buy does not show up in MRR at all. On the multihop shape,
+recall@10 rises **0.635 to 0.769**. It finds the second fact and ranks it
+badly, which is why the code is kept, and why the useful version of this
+feature turns the hop on per question rather than for everybody. Nothing can
+yet tell a multi hop question from a single hop one, and that is the actual v1b
+problem.
+
 ## Reproducing any of it
 
 Point every script at a scratch database. They write real facts through the
