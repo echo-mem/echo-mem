@@ -228,6 +228,21 @@ Three tiers, not one flat graph:
   server calls a model on a background path, which is compatible with the write path
   never calling one but makes `docs/WRITE-COST.md` a claim about writes specifically
   rather than about the service, so that document needs a sentence when this lands.
+
+  **The acceptance criteria exist already**, in
+  `tests/fixtures/consolidation_invariants.json`: five fixtures naming source facts, a
+  candidate summary, an expected verdict and the invariant responsible. They are skipped
+  rather than absent, so the day a consolidator appears the first question is not whether
+  retrieval still looks good. One of them cannot be settled deterministically against the
+  current schema at all, because `confidence` records how a fact was obtained rather than
+  the modality of its claim, so "may have been caused by" becoming "was caused by" has
+  nothing structured to compare against.
+
+  **The open design question that fixture raises** is whether the write path should carry
+  conditions, exceptions and modality as fields rather than leaving them inside prose to
+  be reconstructed on every consolidation. That is a change to the tool contract agents
+  follow, which makes it the expensive kind, and it is worth deciding before consolidation
+  is built rather than after.
 - **Archived tier:** consolidated nodes that stop being accessed at all eventually
   demote further, excluded from retrieval by default, but never deleted (append-only
   principle holds throughout; see the audit log design).

@@ -1,0 +1,78 @@
+{
+  "about": "Executable acceptance criteria for consolidation, written before consolidation exists. Contributed by Jayasurya Mahadevan by email, 2026-09-21, against docs/designs/echo-memory-design.md. Each fixture names the source facts, the candidate summary a consolidator might produce, the expected verdict, and the single invariant responsible for that verdict. A consolidator that cannot turn these green is not ready to run against anybody's memory.",
+  "invariants": {
+    "no_unconditionalization": "A conditional claim cannot silently become unconditional.",
+    "causal_direction_preserved": "A caused B cannot become B caused A.",
+    "no_unsupported_strengthening": "Possibly X or probably X cannot become X because compression removed the hedge.",
+    "supersession_respected": "A summary as of t2 cannot assert what was superseded at t2.",
+    "faithful_compression": "Rewording that preserves every decision relevant property is accepted. Without controls the suite can be passed by rejecting everything."
+  },
+  "fixtures": [
+    {
+      "id": "condition-loss",
+      "invariant": "no_unconditionalization",
+      "verdict": "reject",
+      "sources": [
+        {"source": "supplier A", "target": "procurement policy", "relation_type": "selected_by",
+         "fact": "Use supplier A unless lead time exceeds 10 days; then use supplier B.",
+         "confidence": "extracted"}
+      ],
+      "candidate": "Use supplier A.",
+      "why": "The exception is the decision rule. An agent reading the candidate orders from supplier A on a 14 day lead time, which is the opposite of what the source says to do. Provenance stays perfectly intact while the effective instruction inverts."
+    },
+    {
+      "id": "causal-reversal",
+      "invariant": "causal_direction_preserved",
+      "verdict": "reject",
+      "sources": [
+        {"source": "queue saturation", "target": "request latency", "relation_type": "caused",
+         "fact": "Queue saturation caused request latency to increase.",
+         "confidence": "extracted"}
+      ],
+      "candidate": "Request latency caused queue saturation.",
+      "why": "Both directions name the same two entities, so any check comparing entity sets passes. Acting on the reversal means scaling the wrong component."
+    },
+    {
+      "id": "unsupported-strengthening",
+      "invariant": "no_unsupported_strengthening",
+      "verdict": "reject",
+      "sources": [
+        {"source": "outage", "target": "expired credential", "relation_type": "possibly_caused_by",
+         "fact": "The outage may have been caused by an expired credential.",
+         "confidence": "inferred"}
+      ],
+      "candidate": "The outage was caused by an expired credential.",
+      "why": "The confidence enum cannot settle this and it is important to say why rather than treat it as an oversight. extracted, inferred and ambiguous record how the agent obtained the fact, not the modality of the claim. The hedge lives in the word may, inside the prose, so a deterministic check has nothing structured to compare and this fixture currently belongs to the independent evaluator."
+    },
+    {
+      "id": "superseded-fact",
+      "invariant": "supersession_respected",
+      "verdict": "reject",
+      "sources": [
+        {"source": "primary database", "target": "db-a", "relation_type": "is",
+         "fact": "Primary database is db-a.", "confidence": "extracted",
+         "valid_from": "t1", "valid_until": "t2"},
+        {"source": "primary database", "target": "db-b", "relation_type": "is",
+         "fact": "Primary database moved to db-b.", "confidence": "extracted",
+         "valid_from": "t2"}
+      ],
+      "candidate": "Primary database is db-a.",
+      "as_of": "t2",
+      "why": "Superseded facts are never deleted here, so they remain visible to anything walking the graph. A consolidator that reads every fact about an entity without reading t_invalid will summarise the retired one, and this is the fixture that catches it."
+    },
+    {
+      "id": "faithful-control",
+      "invariant": "faithful_compression",
+      "verdict": "accept",
+      "sources": [
+        {"source": "service A", "target": "Q", "relation_type": "writes_to",
+         "fact": "Service A writes events to Q.", "confidence": "extracted"},
+        {"source": "worker B", "target": "Q", "relation_type": "consumes",
+         "fact": "Worker B consumes Q and writes normalized records to S.",
+         "confidence": "extracted"}
+      ],
+      "candidate": "Service A sends events through Q to Worker B, which stores normalized records in S.",
+      "why": "A control, and the suite is not meaningful without one. Every rejection fixture can be passed by refusing all consolidation, which would make the harness look perfect while making the feature useless."
+    }
+  ]
+}
