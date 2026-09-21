@@ -207,6 +207,27 @@ Three tiers, not one flat graph:
   demotes; it never deletes.** Raw facts remain queryable (and remain what
   `echo-memory why`'s audit trail resolves against), just not part of the default
   retrieval path once consolidated.
+
+  **Traceability is not preservation, and this design currently confuses the two.**
+  Keeping an edge back to all fifty facts proves where a summary came from. It does not
+  establish that the summary still says what they said. A summariser collapsing an
+  iteration into "the outcome and rationale" is being asked, in as many words, to drop
+  sequence, and sequence is where qualification and exception structure live: "we chose
+  X" is a faithful summary of a thread that concluded "X, unless the queue is backed up,
+  in which case Y", and an agent reading the summary acts on a claim nobody made.
+
+  Retrieval metrics cannot see this. Hit rate and recall measure whether the right node
+  came back, and the right node did. So consolidation needs an acceptance test that does
+  not derive its questions from its own answers: generate claims from the source
+  subgraph before and after, and compare temporal ordering, qualifiers, causal direction
+  and exception coverage. Raised by Jayasurya Mahadevan by email on 2026-09-21, against
+  this paragraph, before any of it was built.
+
+  Two consequences for whoever builds it. The invariant check is a gate on shipping
+  consolidation at all, not a metric to add afterwards. And "via LLM" above means the
+  server calls a model on a background path, which is compatible with the write path
+  never calling one but makes `docs/WRITE-COST.md` a claim about writes specifically
+  rather than about the service, so that document needs a sentence when this lands.
 - **Archived tier:** consolidated nodes that stop being accessed at all eventually
   demote further, excluded from retrieval by default, but never deleted (append-only
   principle holds throughout; see the audit log design).

@@ -95,8 +95,12 @@ echo-memory benchmark              # write, query and digest latency
 Two sessions that never knew about each other resolve onto the same entity by name, so
 the second inherits what the first learned.
 
-**Bounded retrieval.** Old, rarely read memory consolidates into higher level summaries
-over time. Nothing is discarded; what changes is how much a query has to walk.
+**Bounded retrieval, designed but not built.** The plan is that old, rarely read memory
+demotes into higher level summaries over time, with nothing discarded and every summary
+still edged back to the facts it came from. None of it exists yet: there is no tiering,
+no summarisation, and retrieval today walks every active fact in the scope. It is
+described in [`docs/designs/`](docs/designs/) and listed below as v1c, and this paragraph
+used to claim it in the present tense.
 
 **Provenance on every fact.** Who wrote it, which tool, which project, when, and which
 reads returned it. A superseded fact is never deleted. It stops being drawn and stays
@@ -258,6 +262,7 @@ and the v1a to v1b plan.
 |---|---|
 | **v1a, built** | Basic recall. Six MCP tools, thirty CLI commands, on PyPI and in the MCP registry. |
 | **v1b, gated** | Causal typing and multi hop retrieval. 187 questions no single fact answers score MRR 0.212 today; the number to beat exists before the feature does. |
+| **v1c, designed** | Consolidation: hot, consolidated and archived tiers, so retrieval cost stops tracking total facts written. Nothing implemented. |
 | **v1.1, planned** | Organisation wide tenancy: per agent, per team, or org wide graphs. |
 
 The validated wedge driving v1a is memory shared across coding agents, which is the
