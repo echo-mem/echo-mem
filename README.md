@@ -106,9 +106,12 @@ used to claim it in the present tense.
 reads returned it. A superseded fact is never deleted. It stops being drawn and stays
 reachable with its history.
 
-**Causal typing.** Edges can be tagged `caused_by`, `led_to`, `blocked_by`,
-`contradicts`, set by the agent's own read of the conversation rather than inferred
-statistically.
+**Causal typing, designed but not built.** The plan is that an edge can be tagged
+`caused_by`, `led_to`, `blocked_by` or `contradicts` by the agent's own read of the
+conversation rather than inferred statistically. Today `relation_type` is a free string
+and nothing writes a causal tag: `causal_hint` is returned on every query result and is
+always null, because migration 0001 reserved it for v1b and no write path sets it. Like
+consolidation above, this paragraph used to claim it in the present tense.
 
 **No inference on the write path.** Extraction happens in the calling agent, so storing
 a memory invokes no model on the server. The cost moved rather than vanished: the agent
