@@ -63,6 +63,32 @@ def embedding_text(source: str, target: str, fact: str) -> str:
     return f"{source} {target}. {fact}" if source and target else fact
 
 
+def _refused(reason: str) -> dict:
+    """A refusal, shaped like every other answer this function gives.
+
+    It used to be `{"error": ...}` and nothing else, which quietly made the
+    only reliable success check impossible. A caller cannot ask
+    `len(result["edges_created"])` on a response that has no such key, so the
+    checks people actually write are "did it return" or "did it throw" - and
+    a refusal does neither. It returns, without raising, having stored
+    nothing.
+
+    That is not hypothetical. A customer bulk loading 26,633 facts counted
+    every non-null response as a success and stored 1,650, because roughly
+    nineteen thousand episodes were refused by validation and every refusal
+    looked exactly like a write that had worked. Validation also happens
+    before anything touches the graph, so those refusals left no audit entry
+    either: from the outside the writes simply evaporated.
+
+    Carrying the empty lists costs nothing and makes one check correct
+    everywhere: `edges_created` is empty on every path that stored nothing,
+    whether it was refused, deferred for ambiguity, or accepted and found to
+    change nothing.
+    """
+    return {"error": reason, "edges_created": [], "superseded": [],
+            "ambiguous_entities": []}
+
+
 class ValidationError(Exception):
     pass
 
@@ -359,7 +385,7 @@ def write_episode(
             _logger, group_id, session_id, len(entities), len(facts), 0, 0,
             (time.perf_counter() - start) * 1000, error=str(e),
         )
-        return {"error": str(e)}
+        return _refused(str(e))
 
     # After validation, never before. Prefetching reads every entity name, so
     # on a malformed episode it embedded the bad input and failed there -
@@ -544,7 +570,7 @@ def write_episode(
             _logger, group_id, session_id, len(entities), len(facts), 0, 0,
             (time.perf_counter() - start) * 1000, error=str(e),
         )
-        return {"error": str(e)}
+        return _refused(str(e))
 
     log_write_episode(
         _logger, group_id, session_id, len(entities), len(facts),
