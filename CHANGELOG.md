@@ -7,6 +7,46 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## 0.5.1
+
+**The vector index has never been used.** pgvector's HNSW index answers
+exactly one shape, `ORDER BY <distance> LIMIT n`, and both vector searches
+here had a second sort key. Neither was ever answerable by the index it was
+built with, so every query read every embedding in the scope and sorted them.
+
+Measured against a real 38,169 fact scope: **52.47ms scanning against 3.85ms
+using the index**, and the scan is O(n) - ten times the facts is half a
+second, on every query.
+
+The tiebreak was deliberate and its reasoning was sound: two facts at an
+identical distance should resolve the same way every time. It did not need to
+be in the ORDER BY, and now happens in Python on at most fifty rows.
+
+`ECHO_MEMORY_HNSW_EF_SEARCH` controls how hard the index looks, defaulting to
+200 rather than pgvector's 40 - which was below this code's own candidate
+depth of 50. Recall of the exact top fifty, over twenty probes on that scope:
+
+    ef_search   mean recall   worst   top 10 identical   mean ms
+    40 (dflt)         0.817    0.24          10 of 20       1.85
+    200               0.980    0.86          17 of 20       3.85
+    exact             1.000    1.00          20 of 20      52.47
+
+So: 98% of the exact answer for 7% of its cost, stated rather than implied.
+On pgvector 0.7 and older there is no iterative scan to enable, and the
+search stays exact and linear as it always has, with one warning in the log.
+
+**Retrieval says why a fact is in the answer.** Every ranked fact now carries
+`rank`, `score` and `matched`.
+
+`score` is cosine similarity to the query, not the fusion score: RRF values
+are sums of 1/(k+rank) and mean nothing from one query to the next, so a
+caller thresholding on them would be thresholding on noise. It is `null`, not
+zero, when only full text search found the fact - no similarity was computed
+for it. `matched` names the channels that did.
+
+This exists because a customer wrote relevance filters at four call sites to
+reconstruct, from the fact text, something retrieval already knew.
+
 ## 0.5.0
 
 **Licence.** This version and everything after it are under the Business
