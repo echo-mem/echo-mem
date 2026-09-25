@@ -24,6 +24,7 @@ from echo_memory.ingestion import bootstrap as bootstrap_mod
 from echo_memory.ingestion import capture
 from echo_memory.ingestion.embeddings import Embedder, LocalEmbedder
 from echo_memory.ingestion.write_episode import write_episode as _write_episode
+from echo_memory.retrieval.causality import trace_cause as _trace_cause
 from echo_memory.retrieval.query_memory import query_memory as _query_memory
 from echo_memory.trial import observations as _observations
 from echo_memory.trial import reads as _reads
@@ -148,20 +149,22 @@ def write_episode(
     stated preference, or context that would otherwise be re-explained to
     another tool or a later session. Call it the moment you notice one, not
     batched and not at the end - a missed memory costs more than an extra
-    call. You extract the entities and facts; this server never calls an LLM.
+    call. You extract the entities and facts; this server never infers.
 
-    entities: [{"name": "Postgres", "type": "tool"}, ...]
+    entities:
       name  non-empty, unique within this call
       type  any short string ("tool", "person", "decision") - not an enum
 
-    facts: [{"source": ..., "target": ..., "relation_type": ...,
-             "fact": ..., "confidence": ...}, ...]
+    facts:
       source/target   must each exactly match a name in entities
-      relation_type   any short string ("uses", "caused_by") - not an enum
+      relation_type   any short string ("uses", "decided") - not an enum
       fact            the sentence to remember, plain text
       confidence      exactly one of "extracted" (stated), "inferred"
                       (deduced), "ambiguous" (uncertain). Anything else,
-                      including a number or omitting it, is rejected.
+                      or a number, is rejected.
+      causal_hint     optional, only when the session said so: caused_by,
+                      led_to, enabled_by, blocked_by, contradicts. What
+                      trace_cause walks. Omit when merely associative.
 
     entity_resolutions (optional): only after a call returned
     ambiguous_entities, to say which candidate a mention meant:
@@ -193,6 +196,46 @@ def write_episode(
                 conn, group_id, session_id, entities, facts, entity_resolutions, _state.embedder,
                 project=_state.config.project, agent_id=_state.config.agent_id,
                 assume_new=assume_new,
+            )
+    except psycopg.OperationalError as e:
+        return _operational_error(e)
+
+
+
+@_tool
+def trace_cause(
+    scope: str,
+    subject: str,
+    direction: str = "both",
+    max_hops: int = 3,
+) -> dict:
+    """Why something happened, not what resembles it. Follows the causal links
+    recorded on facts about `subject` and returns them as chains, ordered from
+    the subject outwards.
+
+    Use this when the question is "why", "what did this break", "what was this
+    a consequence of", or "what happens if we undo it". query_memory ranks
+    facts by similarity and returns a flat list, which cannot answer those -
+    the chain is the answer.
+
+    direction: "upstream" for what led here, "downstream" for what followed,
+    "both" for both. max_hops: 1 to 6, default 3.
+
+    causes/effects are chains, each a list of facts. contradictions are facts
+    explicitly recorded as contradicting one of the matched entities.
+
+    Only links a caller recorded are followed. Nothing here infers a cause, so
+    an empty answer means nobody asserted one - not that none exists. Pass
+    causal_hint on a fact in write_episode to make it traceable."""
+    try:
+        group_id = _state.config.group_id(scope)
+    except ConfigError as e:
+        return {"error": str(e)}
+    try:
+        with _state.pool.connection() as conn:
+            return _trace_cause(
+                conn, group_id, subject, _state.embedder,
+                direction=direction, max_hops=max_hops,
             )
     except psycopg.OperationalError as e:
         return _operational_error(e)
