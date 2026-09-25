@@ -76,6 +76,11 @@ write_episode(
 - `facts[].confidence` — **exactly** one of `"extracted"` (the user said it),
   `"inferred"` (you deduced it), `"ambiguous"` (uncertain). Not a number, not
   `"high"`/`"low"`, never omitted. Anything else is rejected.
+- `facts[].causal_hint` — optional, and only when the session **said** so: one
+  of `"caused_by"`, `"led_to"`, `"enabled_by"`, `"blocked_by"`,
+  `"contradicts"`. This is the field `trace_cause` walks. Omit it when the link
+  is merely associative, which most are. Never infer one: a guessed cause is
+  indistinguishable from a real one once it is stored.
 
 ## When it asks you to disambiguate
 
@@ -95,9 +100,13 @@ Resolving to `"new"` when the entity already exists creates a duplicate; folding
 two distinct things into one node is worse and harder to undo. Read the
 candidate names before choosing.
 
-If you already know an entity is new, you can pre-declare it in
-`entity_resolutions` on the first call and skip the round-trip — but only when
-you're confident, since it bypasses the existence check entirely.
+If you already know **every** entity in the call is new — a symbol you just
+read, a title you just coined — pass `assume_new=True` instead of naming each
+one. Anything you do name in `entity_resolutions` keeps the answer you gave it.
+
+Neither one bypasses an exact name match. Case-insensitive name equality is
+this system's definition of identity, so saying "new" for a name the scope
+already holds resolves to the existing node rather than minting a second one.
 
 ## solo vs shared
 
@@ -110,6 +119,26 @@ you're confident, since it bypasses the existence check entirely.
 Never construct a `group_id`. Scope resolves it server-side. The project is
 resolved from the working directory the same way and is likewise never passed
 in.
+
+## Asking why
+
+`query_memory` ranks facts by similarity and returns a flat list. It cannot
+answer "why did this happen", because the answer to why is an ordered chain.
+`trace_cause` walks the chain:
+
+```
+trace_cause(scope="shared", subject="checkout 502s", direction="upstream")
+trace_cause(scope="shared", subject="the pool rewrite")   # both directions
+```
+
+It follows only links somebody recorded with `causal_hint`, in the direction
+the hint says causality runs, so `"A led_to B"` and `"B caused_by A"` — the
+same claim written from opposite ends — assemble into the same chain. Use it
+for "why", "what did this break", "what was this a consequence of".
+
+An empty answer means nobody asserted a cause, not that none exists. That is
+why recording `causal_hint` at write time matters: you are the only one who
+reads the sentence that states it.
 
 ## Reading it back outside the tools
 
