@@ -19,7 +19,14 @@ def test_pooled_connection_runs_write_episode(migrated_db):
             result = write_episode(
                 conn, "g1", "s1", [{"name": "Postgres", "type": "tool"}], [], {}, embedder
             )
-            assert result == {"edges_created": [], "ambiguous_entities": [], "superseded": []}
+            # This test is about the connection, not the response shape, so it
+            # asserts the parts that say the write reached the database and
+            # leaves the rest to test_write_path_gaps.py. It used to compare
+            # the whole dict and broke the moment a key was added.
+            assert result["edges_created"] == []
+            assert result["ambiguous_entities"] == []
+            assert result["superseded"] == []
+            assert "error" not in result
 
         with pool.connection() as conn:
             (count,) = conn.execute("SELECT count(*) FROM public.node_embedding").fetchone()

@@ -63,6 +63,83 @@ def embedding_text(source: str, target: str, fact: str) -> str:
     return f"{source} {target}. {fact}" if source and target else fact
 
 
+def _not_stored(result: dict) -> dict:
+    """Say plainly, in the response, when an episode changed nothing.
+
+    Three different paths end with an empty `edges_created`, and from a
+    caller's side they are indistinguishable without inspecting which other
+    key happens to be populated:
+
+      refused   validation rejected it - too long, or a source naming an
+                entity the episode did not declare
+      deferred  an entity mention was similar enough to an existing node to
+                be worth asking about and not similar enough to merge, so the
+                episode was held rather than attached to a guess
+      unchanged every fact in it already exists, unaltered
+
+    The deferred case is the one that hurts at scale and the one that looks
+    most like success: it returns a well formed response, no error anywhere,
+    `isError` false, and nothing stored. A customer loading 26,633 facts read
+    that as 26,633 successes and stored 1,650.
+
+    So the response now states it. A caller that checks nothing else still
+    sees `stored: false` and a `not_stored` reason naming which of the three
+    happened, instead of having to know that an empty list in one key and a
+    populated list in another together mean "we did not write your data".
+    """
+    created = result.get("edges_created") or []
+    superseded = result.get("superseded") or []
+    if created or superseded:
+        result["stored"] = True
+        return result
+
+    result["stored"] = False
+    if result.get("error"):
+        result["not_stored"] = "refused"
+    elif result.get("ambiguous_entities"):
+        mentions = ", ".join(
+            str(a.get("mention")) for a in result["ambiguous_entities"][:3]
+        )
+        result["not_stored"] = "deferred"
+        result["not_stored_detail"] = (
+            f"held on ambiguous entities ({mentions}). Nothing was written. "
+            "Pass entity_resolutions to say which existing node each mention "
+            "is, or {\"resolved_to\": \"new\"} if it is a new one."
+        )
+    else:
+        result["not_stored"] = "unchanged"
+        result["not_stored_detail"] = (
+            "every fact in this episode already exists, unaltered."
+        )
+    return result
+
+
+def _refused(reason: str) -> dict:
+    """A refusal, shaped like every other answer this function gives.
+
+    It used to be `{"error": ...}` and nothing else, which quietly made the
+    only reliable success check impossible. A caller cannot ask
+    `len(result["edges_created"])` on a response that has no such key, so the
+    checks people actually write are "did it return" or "did it throw" - and
+    a refusal does neither. It returns, without raising, having stored
+    nothing.
+
+    That is not hypothetical. A customer bulk loading 26,633 facts counted
+    every non-null response as a success and stored 1,650, because roughly
+    nineteen thousand episodes were refused by validation and every refusal
+    looked exactly like a write that had worked. Validation also happens
+    before anything touches the graph, so those refusals left no audit entry
+    either: from the outside the writes simply evaporated.
+
+    Carrying the empty lists costs nothing and makes one check correct
+    everywhere: `edges_created` is empty on every path that stored nothing,
+    whether it was refused, deferred for ambiguity, or accepted and found to
+    change nothing.
+    """
+    return _not_stored({"error": reason, "edges_created": [], "superseded": [],
+                        "ambiguous_entities": []})
+
+
 class ValidationError(Exception):
     pass
 
@@ -359,7 +436,7 @@ def write_episode(
             _logger, group_id, session_id, len(entities), len(facts), 0, 0,
             (time.perf_counter() - start) * 1000, error=str(e),
         )
-        return {"error": str(e)}
+        return _refused(str(e))
 
     # After validation, never before. Prefetching reads every entity name, so
     # on a malformed episode it embedded the bad input and failed there -
@@ -544,7 +621,7 @@ def write_episode(
             _logger, group_id, session_id, len(entities), len(facts), 0, 0,
             (time.perf_counter() - start) * 1000, error=str(e),
         )
-        return {"error": str(e)}
+        return _refused(str(e))
 
     log_write_episode(
         _logger, group_id, session_id, len(entities), len(facts),
@@ -566,6 +643,7 @@ def write_episode(
     }
     if onboarding_sample is not None:
         result["onboarding_sample"] = onboarding_sample
+    _not_stored(result)
 
     # Computed after the transaction commits, and never inside it: this is
     # advice about the next episode, and a failure to produce it must not cost
