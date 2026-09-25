@@ -76,3 +76,26 @@ def test_the_confidence_enum_is_stated_in_full():
     visible = _tools()["write_episode"][:MAX_DESCRIPTION]
     for value in ("extracted", "inferred", "ambiguous"):
         assert value in visible
+
+
+def test_descriptions_are_published_without_source_indentation():
+    """The SDK publishes `fn.__doc__` verbatim, so a docstring nested inside a
+    function arrives with four spaces on every line. On write_episode that was
+    140 characters - 7% of the budget above - spent on whitespace, and it is
+    also just worse to read. `_tool` dedents; this is what stops the next tool
+    from being registered with the raw decorator again."""
+    indented = {
+        name: description
+        for name, description in _tools().items()
+        if any(line.startswith(" ") for line in description.splitlines()[:2])
+    }
+    assert not indented, f"published with source indentation: {sorted(indented)}"
+
+
+def test_assume_new_is_reachable_from_the_schema_and_explained():
+    """A parameter a model cannot see is a parameter that does not exist. It
+    has to be in the input schema AND inside the truncation window, or the
+    round trip it removes goes on being paid."""
+    tool = {t.name: t for t in server.server._tool_manager.list_tools()}["write_episode"]
+    assert "assume_new" in tool.parameters["properties"]
+    assert "assume_new" in _tools()["write_episode"][:MAX_DESCRIPTION]

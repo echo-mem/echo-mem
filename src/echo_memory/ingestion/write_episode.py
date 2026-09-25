@@ -416,8 +416,30 @@ def write_episode(
     embedder,
     project: str = PROJECT_UNKNOWN,
     agent_id: str = PROJECT_UNKNOWN,
+    assume_new: bool = False,
 ) -> dict:
-    resolutions = resolutions or {}
+    # Every mention in this episode is a new entity, said once instead of
+    # named one at a time.
+    #
+    # The deferral exists because two names that look alike might be one
+    # thing, and guessing is worse than asking. But a caller recording "here
+    # is a function I just found" already knows the answer, and making it
+    # discover the question first costs a round trip per write. A store of
+    # mostly-distinct names - source symbols, bug titles, player names -
+    # spends that round trip on nearly every call and answers "new" every
+    # time.
+    #
+    # This is exactly equivalent to passing resolved_to "new" for each
+    # entity, which is what callers were doing reactively. Explicit
+    # resolutions still win: a caller that names one entity and assumes the
+    # rest is saying something more specific, and specificity should not be
+    # overridden by a default.
+    resolutions = dict(resolutions or {})
+    if assume_new:
+        for entity in entities:
+            name = (entity or {}).get("name")
+            if name and name not in resolutions:
+                resolutions[name] = {"resolved_to": "new"}
     start = time.perf_counter()
 
     try:

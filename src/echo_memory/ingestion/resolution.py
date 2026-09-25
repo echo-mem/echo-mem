@@ -15,6 +15,7 @@ correctly against whichever node was created first. Documented, not silently
 dropped; see MATHS.local.md's open questions."""
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -43,7 +44,14 @@ from echo_memory.infra.db import GRAPH_NAME as GRAPH
 # One threshold decision the data does support is at the silent-merge boundary,
 # and it is handled by _differing_numeric_tokens rather than by moving
 # HIGH_THRESHOLD - see that function.
-LOW_THRESHOLD = 0.45
+# Overridable, because the right bar depends on what an entity name IS in a
+# given store. Names drawn from prose separate reasonably at 0.45. Names that
+# are short technical identifiers sharing a prefix - "echo-mem backfill" and
+# "echo-mem landing page" score 0.708 - defer constantly at it, and a caller
+# whose names are overwhelmingly distinct pays a round trip for a question
+# with a known answer. Such a store can raise this without waiting for a
+# release of ours.
+LOW_THRESHOLD = float(os.environ.get("ECHO_MEMORY_RESOLUTION_LOW", "0.45"))
 HIGH_THRESHOLD = 0.92
 
 # Whether a pair above HIGH_THRESHOLD may merge without asking anybody.
@@ -466,7 +474,17 @@ def resolve_entities(
                 }
             )
         elif best is not None and (best.similarity >= low_threshold or blocked):
-            outcome.ambiguous.append(Ambiguous(mention=name, candidates=candidates))
+            # Only the candidates at or above the bar that caused this. The
+            # full top-5 used to ship, so a deferral triggered by a 0.708
+            # match also listed neighbours at 0.10 and 0.067 - and a reader
+            # reasonably concluded the threshold was somewhere near 0.06.
+            # A caller cannot act on a list whose entries had no part in the
+            # decision; `blocked` keeps the best one regardless, because then
+            # the reason is the name guard rather than the score.
+            near = [c for c in candidates if c.similarity >= low_threshold]
+            outcome.ambiguous.append(
+                Ambiguous(mention=name, candidates=near or [best])
+            )
         else:
             outcome.new_entities.add(name)
 

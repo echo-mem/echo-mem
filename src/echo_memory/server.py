@@ -5,6 +5,7 @@ Runs over stdio by default (mcp.server.mcpserver's MCPServer.run default),
 not a network listener at all, let alone one bound beyond localhost; see
 the design doc's Constraints ("v1 is single-user, local-only")."""
 
+import inspect
 import json
 import threading
 import time
@@ -121,13 +122,27 @@ def _warm(warm) -> None:
         _logger.warning("embedder_warm_failed", exc_info=True)
 
 
-@server.tool()
+def _tool(fn):
+    """Register a tool with its docstring dedented.
+
+    The SDK publishes `fn.__doc__` verbatim, so every line of a tool
+    description arrives at the client carrying the four spaces that put the
+    docstring inside a function. Claude Code truncates a description at 2048
+    characters (see tests/unit/test_tool_descriptions.py), and on
+    write_episode that indentation was 140 of them - 7% of the budget spent
+    on whitespace no reader wanted. cleandoc strips it and nothing else.
+    """
+    return server.tool(description=inspect.cleandoc(fn.__doc__ or ""))(fn)
+
+
+@_tool
 def write_episode(
     scope: str,
     session_id: str,
     entities: list[dict],
     facts: list[dict],
     entity_resolutions: dict | None = None,
+    assume_new: bool = False,
 ) -> dict:
     """Record something worth remembering later: a decision, a correction, a
     stated preference, or context that would otherwise be re-explained to
@@ -152,9 +167,13 @@ def write_episode(
     ambiguous_entities, to say which candidate a mention meant:
     {"mention": {"resolved_to": "<node_id>" | "new"}}. Omit otherwise.
 
+    assume_new (optional): True when you know every entity here is new - a
+    symbol just read, a title just coined. It answers "new" up front, so the
+    call cannot come back asking. Explicit resolutions win.
+
     related_entities in the reply: names this scope already uses for what
-    you just wrote. Reuse them next time rather than coin a near-synonym.
-    Advisory - nothing is written from them and no reply is needed.
+    you just wrote. Reuse them rather than coin a near-synonym. Advisory;
+    no reply needed.
 
     Example:
     write_episode(scope="solo", session_id="s1",
@@ -173,12 +192,13 @@ def write_episode(
             return _write_episode(
                 conn, group_id, session_id, entities, facts, entity_resolutions, _state.embedder,
                 project=_state.config.project, agent_id=_state.config.agent_id,
+                assume_new=assume_new,
             )
     except psycopg.OperationalError as e:
         return _operational_error(e)
 
 
-@server.tool()
+@_tool
 def query_memory(scope: str, query: str | None = None, top_k: int = 10, digest: bool = False) -> dict:
     """Recall prior facts relevant to query, from this agent's own memory
     (scope="solo") or the pool shared across this user's agents
@@ -360,7 +380,7 @@ def _author_of(conn, group_id: str, fact_id: str) -> str | object | None:
     return str(row[0]).strip('"')
 
 
-@server.tool()
+@_tool
 def record_recall_save(
     scope: str,
     fact_id: str,
@@ -497,7 +517,7 @@ def record_recall_save(
     return result
 
 
-@server.tool()
+@_tool
 def get_audit_log(scope: str, since: str | None = None) -> dict:
     """Human-readable audit trail: what was written, invalidated, superseded,
     or resolved, and why. since is an ISO8601 timestamp; entries at or after
@@ -513,7 +533,7 @@ def get_audit_log(scope: str, since: str | None = None) -> dict:
         return _operational_error(e)
 
 
-@server.tool()
+@_tool
 def pending_documents(project: str | None = None) -> dict:
     """Memory files this project has written that are not in the graph yet.
 
@@ -539,7 +559,7 @@ def pending_documents(project: str | None = None) -> dict:
     }
 
 
-@server.tool()
+@_tool
 def mark_ingested(paths: list[str], session_id: str | None = None) -> dict:
     """Close pending documents once their content is in the graph.
 
