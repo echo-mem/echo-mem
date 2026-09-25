@@ -3,7 +3,7 @@ agents (see client.py and docs/INTEGRATIONS.md). Mirrors test_server.py's
 coverage since it's the same engine, just a different entry point - no
 stdio, no @server.tool() wiring, plain method calls."""
 
-from fake_embedder import REFERENCE, VectorEmbedder
+from fake_embedder import REFERENCE, VectorEmbedder, unit_vector_at_angle
 
 from echo_memory.client import EchoMemory
 from echo_memory.infra.config import Config
@@ -76,3 +76,42 @@ def test_digest_available_without_query(migrated_db):
     result = mem.query_memory("solo", None, 5, digest=True)
 
     assert result["facts"][0]["fact"] == "server restarted cleanly"
+
+
+def test_trace_cause_is_reachable_without_mcp(migrated_db):
+    """Parity, and the reason it matters: INTEGRATIONS.md sends every non-MCP
+    agent to this class, so a tool that exists only on the MCP surface exists
+    for half the audience."""
+    mem = _client(
+        migrated_db,
+        VectorEmbedder(
+            {
+                "pool size 5": REFERENCE,
+                "checkout 502s": unit_vector_at_angle(-0.5),
+                "the pool was sized 5 and checkout started returning 502s": REFERENCE,
+            }
+        ),
+    )
+
+    written = mem.write_episode(
+        "solo",
+        "sess-1",
+        [{"name": "pool size 5", "type": "config"},
+         {"name": "checkout 502s", "type": "incident"}],
+        [{
+            "source": "pool size 5", "target": "checkout 502s",
+            "relation_type": "caused", "confidence": "extracted",
+            "causal_hint": "led_to",
+            "fact": "the pool was sized 5 and checkout started returning 502s",
+        }],
+        assume_new=True,
+    )
+    assert len(written["edges_created"]) == 1
+
+    traced = mem.trace_cause("solo", "checkout 502s", direction="upstream")
+    assert [a["name"] for a in traced["anchors"]] == ["checkout 502s"]
+    assert [link["fact"] for link in traced["causes"][0]] == [
+        "the pool was sized 5 and checkout started returning 502s"
+    ]
+
+    assert "error" in mem.trace_cause("org", "anything")

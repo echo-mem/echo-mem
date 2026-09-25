@@ -8,7 +8,8 @@ section and point it at the same server; the JSON shape there works for any MCP 
 not just Claude Code.
 
 If it doesn't speak MCP, use `EchoMemory` from `echo_memory.client` directly. It's the
-same engine the MCP server runs (`write_episode`, `query_memory`, `get_audit_log`),
+same engine the MCP server runs (`write_episode`, `query_memory`, `trace_cause`,
+`get_audit_log`),
 called in-process as plain Python methods instead of over stdio. No separate server
 process, no protocol framing.
 
@@ -142,6 +143,45 @@ agent handles the next request should still see this traveler's preferences.
 - **`shared`**: a pool every agent under the same `ECHO_MEMORY_USER_ID` can read and
   write. Use it for memory about the outside world - a customer, a traveler, a decision
   - that more than one agent instance or tool should be able to recall.
+
+## Asking why
+
+`query_memory` ranks facts by similarity and returns a flat list. That answers "what do I
+know about this" and cannot answer "why did this happen", because the answer to why is an
+ordered chain.
+
+Record the link while you are already reading the sentence that states it:
+
+```python
+mem.write_episode(
+    scope="shared", session_id=session,
+    entities=[{"name": "checkout 502s", "type": "incident"},
+              {"name": "pool size 5", "type": "config"}],
+    facts=[{
+        "source": "pool size 5", "target": "checkout 502s",
+        "relation_type": "caused", "confidence": "extracted",
+        "causal_hint": "led_to",
+        "fact": "the pool was sized 5 and checkout started returning 502s under load",
+    }],
+)
+```
+
+Then ask:
+
+```python
+chain = mem.trace_cause(scope="shared", subject="checkout 502s", direction="upstream")
+for links in chain["causes"]:
+    print(" <- ".join(link["fact"] for link in links))
+```
+
+`causal_hint` is one of `caused_by`, `led_to`, `enabled_by`, `blocked_by`, `contradicts`,
+and only ever what the conversation said. Nothing infers it, so an empty answer means
+nobody recorded a cause rather than that none exists. Omit it when the link is merely
+associative, which most are: filling the graph with causality nobody asserted makes the
+field worth less than not having it.
+
+`"A led_to B"` and `"B caused_by A"` are the same claim written from opposite ends. Use
+whichever fits the sentence you just read; both assemble into the same chain.
 
 ## digest and get_audit_log
 

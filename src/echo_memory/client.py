@@ -1,7 +1,8 @@
 """Direct Python API for agents that don't speak MCP: a DevOps agent, a
 booking agent, a plain chatbot loop, anything with its own function-calling
 system. Same engine as the MCP server (server.py) - write_episode,
-query_memory, get_audit_log - called in-process instead of over stdio, so
+query_memory, trace_cause, get_audit_log - called in-process instead of
+over stdio, so
 there's no separate server process to run and no protocol framing to worry
 about. See docs/INTEGRATIONS.md for worked examples.
 
@@ -15,6 +16,7 @@ from echo_memory.infra.config import Config, ConfigError, load_config
 from echo_memory.infra.pool import make_pool
 from echo_memory.ingestion.embeddings import Embedder, LocalEmbedder
 from echo_memory.ingestion.write_episode import write_episode as _write_episode
+from echo_memory.retrieval.causality import trace_cause as _trace_cause
 from echo_memory.retrieval.query_memory import query_memory as _query_memory
 
 
@@ -57,6 +59,27 @@ class EchoMemory:
             return {"error": str(e)}
         with self._pool.connection() as conn:
             return _query_memory(conn, group_id, query, top_k, self._embedder, digest=digest)
+
+    def trace_cause(
+        self,
+        scope: str,
+        subject: str,
+        direction: str = "both",
+        max_hops: int = 3,
+    ) -> dict:
+        """Causal chains through the entities `subject` matches, in the
+        direction the recorded hints say causality runs. query_memory ranks
+        facts by similarity; this returns the chain, which is what a "why"
+        question is actually asking for."""
+        try:
+            group_id = self._config.group_id(scope)
+        except ConfigError as e:
+            return {"error": str(e)}
+        with self._pool.connection() as conn:
+            return _trace_cause(
+                conn, group_id, subject, self._embedder,
+                direction=direction, max_hops=max_hops,
+            )
 
     def get_audit_log(self, scope: str, since: str | None = None) -> dict:
         try:
