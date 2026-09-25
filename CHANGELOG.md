@@ -7,6 +7,64 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## 0.5.0
+
+**Licence.** This version and everything after it are under the Business
+Source License 1.1, not Apache 2.0. Production use is free for an organisation
+with fewer than 50 employees AND under US$5,000,000 in annual revenue, counting
+parents and subsidiaries; development, testing, evaluation, research and
+teaching are free for everybody at any size. Each version converts to Apache
+2.0 four years after it is published.
+
+**0.4.1 and everything before it stay Apache 2.0, permanently.** Relicensing
+cannot reach backwards. `LICENSE-APACHE-2.0` is kept in the repository and
+ships in the wheel for exactly that reason. For other arrangements:
+hello@echo-mem.com.
+
+**Causality is now something you can ask about.** `causal_hint` on a fact, one
+of `caused_by`, `led_to`, `enabled_by`, `blocked_by`, `contradicts`, and a new
+`trace_cause` tool that walks them.
+
+Retrieval has always ranked facts by similarity and returned a flat list. That
+answers "what do I know that looks like this" and cannot answer "why did this
+happen", because the answer to why is an ordered chain and a chain is
+structure rather than score.
+
+`trace_cause(scope, subject, direction, max_hops)` anchors on the entities a
+subject matches and walks only facts carrying a hint, in the direction the
+hint says causality runs. "A led_to B" and "B caused_by A" are one claim
+written from opposite ends, and both assemble into the same chain. Links
+written by three sessions that never knew about each other come back ordered,
+nearest cause first.
+
+Nothing infers a cause. The server calls no model, and a guessed cause is
+indistinguishable from a real one once it is stored. An empty answer says
+which kind of empty it is.
+
+**`assume_new` on `write_episode`.** A caller that already knows its entities
+are new - a symbol it just read, a title it just coined - can say so once
+instead of once per entity, and skip the round trip that asks which existing
+node it meant. Explicit `entity_resolutions` still win, and it does not
+override an exact name match.
+
+**Ambiguity now offers only the candidates that caused it.**
+`ambiguous_entities` shipped the whole top-5 regardless of score, so a
+deferral triggered by a 0.708 match also listed neighbours at 0.10 and 0.067.
+A reader of that list reasonably concluded the bar sat near 0.06.
+
+**`ECHO_MEMORY_RESOLUTION_LOW`.** The bar for "worth asking about" is 0.45,
+calibrated against prose-shaped names. Short technical identifiers sharing a
+prefix do not separate there. A store that knows its own names can raise it
+without waiting for a release. The default has not moved. The silent-merge
+threshold is deliberately not configurable.
+
+**Tool descriptions are published dedented.** The SDK sends a docstring
+verbatim, indentation included, and Claude Code truncates at 2048 characters.
+On `write_episode` that whitespace was 140 characters of the budget.
+
+**Package metadata names the licence properly.** `License-Expression:
+BUSL-1.1`, with both licence texts in the wheel.
+
 ## 0.4.1
 
 **Security.** The database `quickstart` creates was reachable from the network,
