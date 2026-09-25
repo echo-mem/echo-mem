@@ -466,7 +466,17 @@ def resolve_entities(
                 }
             )
         elif best is not None and (best.similarity >= low_threshold or blocked):
-            outcome.ambiguous.append(Ambiguous(mention=name, candidates=candidates))
+            # Only the candidates at or above the bar that caused this. The
+            # full top-5 used to ship, so a deferral triggered by a 0.708
+            # match also listed neighbours at 0.10 and 0.067 - and a reader
+            # reasonably concluded the threshold was somewhere near 0.06.
+            # A caller cannot act on a list whose entries had no part in the
+            # decision; `blocked` keeps the best one regardless, because then
+            # the reason is the name guard rather than the score.
+            near = [c for c in candidates if c.similarity >= low_threshold]
+            outcome.ambiguous.append(
+                Ambiguous(mention=name, candidates=near or [best])
+            )
         else:
             outcome.new_entities.add(name)
 

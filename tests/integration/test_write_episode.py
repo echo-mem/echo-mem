@@ -607,3 +607,33 @@ def test_a_deferred_fact_is_never_embedded(migrated_db):
 
     assert result["ambiguous_entities"], "the mention was not treated as ambiguous"
     assert result["edges_created"] == []
+
+
+def test_a_deferral_lists_only_candidates_at_or_above_the_bar(migrated_db):
+    """The candidate list is the caller's evidence for a choice, and it used to
+    be the whole top-5 regardless of score. A deferral caused by one 0.708
+    match therefore also offered neighbours at 0.10 and 0.067 - entries that
+    had no part in the decision and cannot be chosen on their merits. A reader
+    of that list reasonably concluded the bar was somewhere near 0.06.
+
+    All in the plane of the first two axes, so every similarity below is the
+    cosine of an angle and not a model's opinion: the mention sits at 0.80
+    from 'Postgres' and 0.12 from 'Nagoya'."""
+    conn = connect(migrated_db)
+    embedder = VectorEmbedder({
+        "Postgres": REFERENCE,
+        "Nagoya": unit_vector_at_angle(-0.50),
+        "Postgres DB": unit_vector_at_angle(0.80),
+    })
+
+    for name in ("Postgres", "Nagoya"):
+        write_episode(conn, "g1", "s1", [{"name": name, "type": "tool"}], [], {}, embedder)
+
+    result = write_episode(
+        conn, "g1", "s2", [{"name": "Postgres DB", "type": "tool"}], [], {}, embedder,
+    )
+
+    (ambiguous,) = result["ambiguous_entities"]
+    offered = ambiguous["candidates"]
+    assert [c["name"] for c in offered] == ["Postgres"], offered
+    assert all(c["similarity"] >= 0.45 for c in offered)
