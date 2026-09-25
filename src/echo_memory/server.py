@@ -254,6 +254,12 @@ def query_memory(scope: str, query: str | None = None, top_k: int = 10, digest: 
     facts instead, as an opt-in "catch me up" convenience; call it
     explicitly at session start if you want one, it's never automatic.
 
+    Each fact carries rank (1 first), score and matched. score is cosine
+    similarity to your query, comparable across queries, and null when only
+    the lexical channel found the fact. matched names the channels that did:
+    a fact both found is a stronger answer than one only one reached. Use
+    them instead of writing your own relevance filter over the text.
+
     A pending_ingest field appears when memory files have been written that
     the graph hasn't heard about yet. Read each listed file and call
     write_episode with the entities and facts it states, then mark it done

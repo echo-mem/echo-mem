@@ -297,8 +297,13 @@ VECTOR_CANDIDATE_SQL = f"""
 
 
 def _vector_candidates(
-    conn, group_id: str, embedding: list[float], limit: int, floor: float | None = None
+    conn, group_id: str, embedding: list[float], limit: int, floor: float | None = None,
+    scores: dict[str, float] | None = None,
 ) -> list[str]:
+    """Ids, best first. Pass `scores` to also collect the cosine similarity
+    this already computed and then threw away - the one number in this system
+    a caller can threshold on, because unlike a fusion score it means the same
+    thing from one query to the next."""
     # ORDER BY the distance and NOTHING else. pgvector's HNSW index can only
     # answer `ORDER BY <distance> LIMIT n`; a second sort key makes the whole
     # clause unindexable, and the planner falls back to reading every
@@ -318,9 +323,11 @@ def _vector_candidates(
     # list of at most LIST_DEPTH rows, which is free. Python's sort is stable,
     # so rows that were already ordered by the index keep that order.
     ranked = sorted(
-        ((edge_id, score) for edge_id, score in rows if score >= floor),
+        ((edge_id, float(score)) for edge_id, score in rows if score >= floor),
         key=lambda row: (-row[1], row[0]),
     )
+    if scores is not None:
+        scores.update(dict(ranked))
     return [edge_id for edge_id, _ in ranked]
 
 
@@ -555,6 +562,47 @@ def _provenance(raw, agent_id, project) -> dict | None:
     return out
 
 
+def _annotate(
+    facts: list[dict], similarity: dict[str, float],
+    vector_ids: set[str], lexical_ids: set[str],
+) -> None:
+    """Say why each fact is in the answer, in place.
+
+    Retrieval returned a bare ordered list and nothing else, so a caller who
+    wanted "only use this if it is actually about my question" had no number
+    to test. The first customer to hit it wrote relevance filters at four
+    call sites to reconstruct, from the fact text, something this function
+    already knew.
+
+    Three fields, each chosen because a caller can act on it:
+
+    rank        position in this answer, 1 first. Cheap, and enough for
+                "only consider the top three".
+    score       cosine similarity to the query, or null when the fact came
+                only from the lexical channel and no similarity was computed.
+                This is the number to threshold on: unlike a fusion score it
+                means the same thing from one query to the next, and it is
+                the same quantity the adaptive floor already trusts.
+    matched     which channels found it. A fact both channels found is a
+                different kind of answer from one only the vector channel
+                reached, and that distinction is free here and impossible to
+                recover afterwards.
+
+    Absent on a digest, which ranks nothing.
+    """
+    for position, fact in enumerate(facts, start=1):
+        edge_id = fact["fact_id"]
+        matched = [
+            name for name, ids in (("vector", vector_ids), ("lexical", lexical_ids))
+            if edge_id in ids
+        ]
+        if not matched:
+            continue
+        fact["rank"] = position
+        fact["score"] = round(similarity[edge_id], 4) if edge_id in similarity else None
+        fact["matched"] = matched
+
+
 def query_memory(
     conn, group_id: str, query: str | None, top_k: int, embedder,
     digest: bool = False, lexical_only: bool = False,
@@ -604,6 +652,7 @@ def query_memory(
         )
         return {"error": str(e)}
 
+    similarity: dict[str, float] = {}
     if digest:
         ranked_ids = _digest_candidates(conn, group_id, top_k)
         vector_ids, lexical_ids = [], []
@@ -613,7 +662,9 @@ def query_memory(
         ranked_ids = lexical_ids[:top_k]
     else:
         embedding = embedder.embed(query)
-        vector_ids = _vector_candidates(conn, group_id, embedding, LIST_DEPTH, floor=floor)
+        vector_ids = _vector_candidates(
+            conn, group_id, embedding, LIST_DEPTH, floor=floor, scores=similarity
+        )
         # ANY-term, not websearch_to_tsquery's implicit AND.
         #
         # The AND form requires every non-stopword term of the query to appear
@@ -681,6 +732,7 @@ def query_memory(
 
     facts_by_id = _fetch_facts(conn, ranked_ids)
     facts = [facts_by_id[edge_id] for edge_id in ranked_ids if edge_id in facts_by_id]
+    _annotate(facts, similarity, set(vector_ids), set(lexical_ids))
 
     log_query_memory(
         _logger,
