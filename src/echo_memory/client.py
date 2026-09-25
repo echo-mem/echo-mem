@@ -35,6 +35,7 @@ class EchoMemory:
         entities: list[dict],
         facts: list[dict],
         entity_resolutions: dict | None = None,
+        assume_new: bool = False,
     ) -> dict:
         try:
             group_id = self._config.group_id(scope)
@@ -44,6 +45,7 @@ class EchoMemory:
             return _write_episode(
                 conn, group_id, session_id, entities, facts, entity_resolutions, self._embedder,
                 project=self._config.project, agent_id=self._config.agent_id,
+                assume_new=assume_new,
             )
 
     def query_memory(

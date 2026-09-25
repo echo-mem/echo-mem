@@ -142,6 +142,7 @@ def write_episode(
     entities: list[dict],
     facts: list[dict],
     entity_resolutions: dict | None = None,
+    assume_new: bool = False,
 ) -> dict:
     """Record something worth remembering later: a decision, a correction, a
     stated preference, or context that would otherwise be re-explained to
@@ -166,9 +167,13 @@ def write_episode(
     ambiguous_entities, to say which candidate a mention meant:
     {"mention": {"resolved_to": "<node_id>" | "new"}}. Omit otherwise.
 
+    assume_new (optional): True when you know every entity here is new - a
+    symbol just read, a title just coined. It answers "new" up front, so the
+    call cannot come back asking. Explicit resolutions win.
+
     related_entities in the reply: names this scope already uses for what
-    you just wrote. Reuse them next time rather than coin a near-synonym.
-    Advisory - nothing is written from them and no reply is needed.
+    you just wrote. Reuse them rather than coin a near-synonym. Advisory;
+    no reply needed.
 
     Example:
     write_episode(scope="solo", session_id="s1",
@@ -187,6 +192,7 @@ def write_episode(
             return _write_episode(
                 conn, group_id, session_id, entities, facts, entity_resolutions, _state.embedder,
                 project=_state.config.project, agent_id=_state.config.agent_id,
+                assume_new=assume_new,
             )
     except psycopg.OperationalError as e:
         return _operational_error(e)

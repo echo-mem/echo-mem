@@ -90,3 +90,12 @@ def test_descriptions_are_published_without_source_indentation():
         if any(line.startswith(" ") for line in description.splitlines()[:2])
     }
     assert not indented, f"published with source indentation: {sorted(indented)}"
+
+
+def test_assume_new_is_reachable_from_the_schema_and_explained():
+    """A parameter a model cannot see is a parameter that does not exist. It
+    has to be in the input schema AND inside the truncation window, or the
+    round trip it removes goes on being paid."""
+    tool = {t.name: t for t in server.server._tool_manager.list_tools()}["write_episode"]
+    assert "assume_new" in tool.parameters["properties"]
+    assert "assume_new" in _tools()["write_episode"][:MAX_DESCRIPTION]
