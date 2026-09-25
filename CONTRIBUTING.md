@@ -12,7 +12,8 @@ The first pull request you open will get a bot comment asking you to sign the
 is asked once ever, not once per PR.
 
 Read [`CLA.md`](CLA.md) for what it grants and why. The short version: you keep your
-copyright, everything you contribute stays available under Apache-2.0 permanently, and
+copyright, everything you contribute stays available under the project's licence, and
+every version converts to Apache-2.0 four years after publication, and
 the agreement adds the right to also distribute your contribution under other terms —
 because a paid hosted edition is planned, and some team features may ship
 source-available. Asking now is the version of that conversation where nobody is

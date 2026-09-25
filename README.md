@@ -3,7 +3,7 @@
 [![CI](https://github.com/echo-mem/echo-mem/actions/workflows/ci.yml/badge.svg)](https://github.com/echo-mem/echo-mem/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/echo-mem)](https://pypi.org/project/echo-mem/)
 [![Python](https://img.shields.io/pypi/pyversions/echo-mem)](https://pypi.org/project/echo-mem/)
-[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
 
 **Shared memory for AI agents, as a graph in your own database.** What Claude Code learns,
 Cursor and Codex can recall. Every fact records who wrote it and when, and the server
@@ -274,7 +274,9 @@ the target this architecture is built toward.
 
 ## Hosted
 
-Running it yourself is free forever under Apache 2.0, with no account and no feature held
+Running it yourself is free under the Business Source License for any non production use,
+and free in production for organisations under 50 people and under $5M revenue, with no
+account and no feature held
 back. [app.echo-mem.com](https://app.echo-mem.com) runs the database for you at $99 a
 month if you would rather not.
 
@@ -293,7 +295,25 @@ issue with the output.
 
 ## License
 
-Apache License 2.0. See [`LICENSE`](LICENSE).
+Business Source License 1.1. See [`LICENSE`](LICENSE).
+
+The source is public and stays public. What changed on 25 September 2026 is who may run it
+in production without an agreement:
+
+| | |
+|---|---|
+| Development, testing, evaluation, research, teaching | free, any size |
+| Production, under 50 employees and under $5M revenue | free |
+| Production, above that | [talk to us](mailto:hello@echo-mem.com) |
+| Offering it to third parties as a hosted service | [talk to us](mailto:hello@echo-mem.com) |
+
+Each released version converts to **Apache 2.0 four years after it is published**, and that
+conversion is automatic and irrevocable.
+
+Versions published before this change remain under Apache 2.0 permanently. That includes
+everything up to and including 0.4.1 on PyPI. Relicensing cannot reach back, and this note
+exists so nobody has to work that out from a git history. The Apache text those versions
+were released under is kept at [`LICENSE-APACHE-2.0`](LICENSE-APACHE-2.0).
 
 <!-- The MCP registry proves you own a PyPI package by finding this line in the
      package's own description. It has to survive into the built distribution,
