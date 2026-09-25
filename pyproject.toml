@@ -9,11 +9,14 @@ name = "echo-mem"
 version = "0.4.1"
 description = "A long-horizon memory architecture for AI agents"
 readme = "README.md"
-# BSL 1.1 has no SPDX identifier PyPI accepts as a license expression,
-# so the file is shipped and named rather than claimed as an SPDX id.
-# Saying "Apache-2.0" here after the change would be a false statement
-# in package metadata, which is worse than an unrecognised string.
-license = { file = "LICENSE" }
+# BUSL-1.1 is the SPDX identifier for the Business Source License 1.1, so
+# the metadata can state it rather than inline the whole licence text.
+# license-files ships both: LICENSE is what this version is under, and
+# LICENSE-APACHE-2.0 is what everything up to 0.4.1 went out under and stays
+# under. Saying "Apache-2.0" here would be a false statement in package
+# metadata that pip, PyPI and every licence scanner would read as fact.
+license = "BUSL-1.1"
+license-files = ["LICENSE", "LICENSE-APACHE-2.0"]
 requires-python = ">=3.11"
 dependencies = [
     "psycopg[binary]>=3.2,<4",

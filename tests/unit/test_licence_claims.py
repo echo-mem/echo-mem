@@ -52,16 +52,28 @@ def test_the_additional_use_grant_says_who_may_use_it_free():
 
 
 def test_the_package_metadata_does_not_still_claim_apache():
+    """pip, PyPI and every licence scanner read this field as fact, so it is
+    the one place a stale "Apache-2.0" would do real damage. BUSL-1.1 is the
+    SPDX identifier for this licence, which makes the claim machine-readable
+    rather than a filename a scanner has to go and parse."""
     data = tomllib.loads((ROOT / "pyproject.toml").read_text())
     licence = data["project"]["license"]
 
-    assert licence == {"file": "LICENSE"}, (
+    assert licence == "BUSL-1.1", (
         f"pyproject says {licence!r}, which is not what LICENSE contains"
     )
     classifiers = " ".join(data["project"].get("classifiers", []))
     assert "Apache" not in classifiers, (
         "a classifier still advertises Apache-2.0"
     )
+
+
+def test_both_licence_texts_ship_with_the_package():
+    """The Apache text is not decoration in the repository. Anyone on 0.4.1 or
+    earlier holds an Apache 2.0 grant, and a wheel that ships only the BSL
+    file tells them the opposite."""
+    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    assert set(data["project"]["license-files"]) == {"LICENSE", "LICENSE-APACHE-2.0"}
 
 
 def test_the_apache_text_is_kept_for_the_versions_released_under_it():
