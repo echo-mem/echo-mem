@@ -83,22 +83,27 @@ def _anchor_nodes(conn, group_id: str, subject: str, embedder, anchors: int) -> 
     question and part of the answer.
     """
     embedding = embedder.embed(subject)
+    # Distance only in the ORDER BY, for the reason spelled out in
+    # query_memory._vector_candidates: a second sort key costs the HNSW index
+    # and turns this into a scan of every entity in the scope. This function
+    # shipped with that mistake in it earlier today. The tiebreak it wanted is
+    # applied below instead, where it is free.
     rows = conn.execute(
         """SELECT ne.node_id::text, -(ne.embedding <#> %s::vector) AS similarity
             FROM public.node_embedding ne
             WHERE ne.group_id = %s
-            -- A stated tiebreak, so two entities at an identical distance
-            -- always resolve the same way and the same store answers the same
-            -- question the same way twice.
-            ORDER BY ne.embedding <#> %s::vector, ne.node_id
+            ORDER BY ne.embedding <#> %s::vector
             LIMIT %s""",
         (embedding, group_id, embedding, anchors),
     ).fetchall()
     if not rows:
         return []
 
-    best = float(rows[0][1])
-    kept = [(nid, float(sim)) for nid, sim in rows if float(sim) >= best - ANCHOR_MARGIN]
+    ordered = sorted(
+        ((nid, float(sim)) for nid, sim in rows), key=lambda row: (-row[1], row[0])
+    )
+    best = ordered[0][1]
+    kept = [(nid, sim) for nid, sim in ordered if sim >= best - ANCHOR_MARGIN]
     names = _node_names(conn, group_id, [nid for nid, _ in kept])
     return [
         {"node_id": nid, "name": names.get(nid, "?"), "similarity": round(sim, 4)}
