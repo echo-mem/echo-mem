@@ -15,6 +15,7 @@ correctly against whichever node was created first. Documented, not silently
 dropped; see MATHS.local.md's open questions."""
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -43,7 +44,14 @@ from echo_memory.infra.db import GRAPH_NAME as GRAPH
 # One threshold decision the data does support is at the silent-merge boundary,
 # and it is handled by _differing_numeric_tokens rather than by moving
 # HIGH_THRESHOLD - see that function.
-LOW_THRESHOLD = 0.45
+# Overridable, because the right bar depends on what an entity name IS in a
+# given store. Names drawn from prose separate reasonably at 0.45. Names that
+# are short technical identifiers sharing a prefix - "echo-mem backfill" and
+# "echo-mem landing page" score 0.708 - defer constantly at it, and a caller
+# whose names are overwhelmingly distinct pays a round trip for a question
+# with a known answer. Such a store can raise this without waiting for a
+# release of ours.
+LOW_THRESHOLD = float(os.environ.get("ECHO_MEMORY_RESOLUTION_LOW", "0.45"))
 HIGH_THRESHOLD = 0.92
 
 # Whether a pair above HIGH_THRESHOLD may merge without asking anybody.
