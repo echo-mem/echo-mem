@@ -78,12 +78,13 @@ echo-memory calibrate              # is entity resolution trustworthy on your da
 echo-memory benchmark              # write, query and digest latency
 ```
 
-### The six MCP tools
+### The seven MCP tools
 
 | Tool | What it does |
 |---|---|
 | `write_episode` | Store entities and the facts connecting them. No model call. |
 | `query_memory` | Hybrid vector and full text retrieval, fused by reciprocal rank. |
+| `trace_cause` | Causal chains through the entities a subject matches, not a ranked list. |
 | `record_recall_save` | Mark that a recalled fact saved re explaining something. Refuses a fact no read returned. |
 | `get_audit_log` | Every change to memory, with a plain language reason. |
 | `pending_documents` | Memory files this project wrote that the graph has not heard about. |
@@ -106,12 +107,18 @@ used to claim it in the present tense.
 reads returned it. A superseded fact is never deleted. It stops being drawn and stays
 reachable with its history.
 
-**Causal typing, designed but not built.** The plan is that an edge can be tagged
-`caused_by`, `led_to`, `blocked_by` or `contradicts` by the agent's own read of the
-conversation rather than inferred statistically. Today `relation_type` is a free string
-and nothing writes a causal tag: `causal_hint` is returned on every query result and is
-always null, because migration 0001 reserved it for v1b and no write path sets it. Like
-consolidation above, this paragraph used to claim it in the present tense.
+**Causal typing, and a walk over it.** A fact can carry `causal_hint`: one of
+`caused_by`, `led_to`, `enabled_by`, `blocked_by` or `contradicts`, set by the agent's
+own read of what the session said and never inferred statistically. `trace_cause` walks
+those links and returns chains rather than a ranked list, because the answer to "why did
+this happen" is an ordered chain and similarity cannot produce one. "A led_to B" and "B
+caused_by A" are one claim written from opposite ends, and both assemble into the same
+chain.
+
+A fact with no hint is associative, which is the default and usually correct. Facts
+written before 0.5.0 have no hint and are not a gap to fix. An empty answer from
+`trace_cause` says which kind of empty it is: nobody recorded a cause here is a
+different fact about a store than there are no chains.
 
 **No inference on the write path.** Extraction happens in the calling agent, so storing
 a memory invokes no model on the server. The cost moved rather than vanished: the agent
@@ -263,8 +270,8 @@ and the v1a to v1b plan.
 
 | | |
 |---|---|
-| **v1a, built** | Basic recall. Six MCP tools, thirty CLI commands, on PyPI and in the MCP registry. |
-| **v1b, gated** | Causal typing and multi hop retrieval. 187 questions no single fact answers score MRR 0.212 today; the number to beat exists before the feature does. |
+| **v1a, built** | Basic recall. Seven MCP tools, thirty CLI commands, on PyPI and in the MCP registry. |
+| **v1b, part built** | Causal typing and `trace_cause` shipped in 0.5.0. Multi hop associative retrieval has not: 187 questions no single fact answers score MRR 0.212 today, and that number is what the rest of v1b has to beat. |
 | **v1c, designed** | Consolidation: hot, consolidated and archived tiers, so retrieval cost stops tracking total facts written. Nothing implemented. |
 | **v1.1, planned** | Organisation wide tenancy: per agent, per team, or org wide graphs. |
 
