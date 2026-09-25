@@ -25,6 +25,36 @@ MAX_FACTS = 200
 MAX_STRING_LEN = 4000
 VALID_CONFIDENCE = {"extracted", "inferred", "ambiguous"}
 
+# How one fact bears on another, when the session said so. This is the field
+# that makes a graph answer "why" rather than "what looks similar", and it is
+# deliberately a small closed set rather than free text: a traversal has to
+# know which end of an edge is the cause, and it cannot learn that from a
+# string it has never seen.
+#
+# Never inferred here. The server does not call an LLM, and statistical causal
+# discovery over agent memory is unsolved - the design doc says never attempt
+# it, and this is where that decision is enforced. A hint is present only
+# because a caller read it in what the session actually stated.
+#
+# Absent is a valid answer and the common one. Most facts relate
+# associatively, and claiming otherwise would fill the graph with causality
+# that nobody asserted.
+VALID_CAUSAL_HINTS = {"caused_by", "led_to", "enabled_by", "blocked_by", "contradicts"}
+
+# Which end of an edge is the cause, per hint, written source-first. AGE stores
+# the edge as (source)-[e]->(target), so a traversal needs this to walk in the
+# direction causality actually runs rather than the direction the sentence
+# happened to be phrased in.
+#
+# "A led_to B" and "B caused_by A" are the same claim written from opposite
+# ends, and a caller will use whichever fits the sentence it just read.
+# Collapsing them here means a chain is assembled correctly either way.
+#
+# contradicts is absent on purpose: it is symmetric and carries no direction,
+# so it is reported alongside a chain rather than walked as part of one.
+CAUSE_IS_SOURCE = {"led_to"}
+CAUSE_IS_TARGET = {"caused_by", "enabled_by", "blocked_by"}
+
 # First-use onboarding nudge (CEO plan scope decision #6): after exactly
 # this many write_episode calls for a group_id, attach a live digest sample
 # to the response so a single-user v1a audience notices the digest feature
@@ -162,6 +192,17 @@ def _validate(entities: list[dict], facts: list[dict]) -> None:
             raise ValidationError("fact text too long")
         if fact.get("confidence") not in VALID_CONFIDENCE:
             raise ValidationError(f"invalid confidence: {fact.get('confidence')!r}")
+        # Absent and null both mean "associative", which is the common case and
+        # is not an error. A value that is neither absent nor one of the five
+        # is, and it is refused rather than dropped: a hint nobody can traverse
+        # is worse than no hint, because the fact reads as causally typed and
+        # answers nothing.
+        hint = fact.get("causal_hint")
+        if hint is not None and hint not in VALID_CAUSAL_HINTS:
+            raise ValidationError(
+                f"invalid causal_hint: {hint!r}, expected one of "
+                f"{sorted(VALID_CAUSAL_HINTS)} or omit it"
+            )
         if fact.get("source") not in entity_names:
             raise ValidationError(f"fact source {fact.get('source')!r} not in entities")
         if fact.get("target") not in entity_names:
@@ -323,6 +364,7 @@ def _create_edge(
               AND a.group_id = $gid AND b.group_id = $gid
             CREATE (a)-[e:FACT {{
                 relation_type: $rel, fact: $fact, confidence: $confidence,
+                causal_hint: $causal_hint,
                 t_valid: $t_valid, t_invalid: null, group_id: $gid,
                 project: $project, agent_id: $agent_id,
                 provenance: {{session_id: $session_id, source_episode_id: $episode_id}}
@@ -337,6 +379,12 @@ def _create_edge(
                     "rel": fact["relation_type"],
                     "fact": fact["fact"],
                     "confidence": fact["confidence"],
+                    # AGE drops a null property at CREATE rather than storing
+                    # it, so an untyped fact carries no causal_hint key at all.
+                    # That is the intended representation of "associative" and
+                    # what every v1a-era fact already looks like; the read path
+                    # treats a missing key and a null the same.
+                    "causal_hint": fact.get("causal_hint"),
                     "t_valid": t_valid,
                     "gid": group_id,
                     "session_id": session_id,
