@@ -114,10 +114,9 @@ def test_a_chain_runs_further_than_one_hop_and_reads_outwards(migrated_db):
 
     assert [a["name"] for a in traced["anchors"]] == [REWRITE]
     assert _chain_facts(traced["causes"]) == [
-        ["which made the pool rewrite necessary"],
         ["which made the pool rewrite necessary",
          "SQLite could not take the write concurrency"],
-    ]
+    ], "the one link prefix of this chain is the same story told shorter"
 
 
 def test_max_hops_stops_the_walk(migrated_db):
@@ -241,3 +240,28 @@ def test_a_scope_with_nothing_matching_says_so(migrated_db):
     traced = trace_cause(conn, GROUP, "switch to Postgres", embedder)
     assert traced["anchors"] == []
     assert "nothing in this scope" in traced["note"]
+
+
+def test_a_branch_survives_but_a_prefix_does_not(migrated_db):
+    """Prefix elimination has to keep the distinction it exists to preserve.
+    Two routes out of one node are two answers; the first half of one route is
+    the same answer stopping early."""
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _write(conn, embedder, SQLITE, SWITCH,
+           "SQLite could not take the write concurrency", "led_to")
+    _write(conn, embedder, OUTAGE, SWITCH,
+           "the outage had nothing to do with it", "led_to")
+    _write(conn, embedder, REWRITE, SQLITE,
+           "which made the pool rewrite necessary", "led_to")
+
+    traced = trace_cause(conn, GROUP, SWITCH, embedder, direction="upstream")
+
+    chains = _chain_facts(traced["causes"])
+    assert ["the outage had nothing to do with it"] in chains, "a branch is an answer"
+    assert ["SQLite could not take the write concurrency"] not in chains, (
+        "this one continues, so the two link version is the answer"
+    )
+    assert ["SQLite could not take the write concurrency",
+            "which made the pool rewrite necessary"] in chains
+    assert len(chains) == 2

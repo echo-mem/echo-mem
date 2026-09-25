@@ -223,13 +223,36 @@ def _walk(conn, group_id: str, seed_nodes: list[str], upstream: bool, max_hops: 
     return chains
 
 
+def _maximal(chains: list[list[tuple[str, str]]]) -> list[list[tuple[str, str]]]:
+    """Drop any chain that is the beginning of a longer one.
+
+    The walk produces one chain per edge it reaches, so a single path of three
+    links arrives as three chains: the first link, the first two, all three.
+    Each is a true statement and only the longest is the answer - a caller
+    asking why got told the same story three times, each time stopping
+    earlier.
+
+    Branches are not prefixes of each other, so two genuinely different routes
+    both survive. That is the distinction worth keeping and the reason this is
+    prefix elimination rather than "keep the longest"."""
+    keys = {tuple(edge for edge, _ in chain) for chain in chains}
+    return [
+        chain for chain in chains
+        if not any(
+            other != (key := tuple(edge for edge, _ in chain))
+            and other[: len(key)] == key
+            for other in keys
+        )
+    ]
+
+
 def _render(chains, facts: dict[str, dict]) -> list[dict]:
     """A chain as a list of facts, anchor end first. The hint rides on each
     fact already - _fetch_facts returns causal_hint - so the walk does not
     restate it and the two cannot disagree."""
     rendered = [
         [facts[edge] for edge, _ in chain if edge in facts]
-        for chain in chains
+        for chain in _maximal(chains)
     ]
     rendered = [chain for chain in rendered if chain]
     # Shortest first. A one-link chain is a direct cause and is usually the
