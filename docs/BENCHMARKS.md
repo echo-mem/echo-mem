@@ -168,10 +168,14 @@ LongMemEval S, the same stratified 15 of each of the six types, 90 questions,
 | multi session | 15 | 0.067 | 0.297 | 0.590 | 0.667 | 0.756 | 0.310 |
 
 `recall@k` here is what the 2026-09-18 table called `turn@k`, and it is identical
-in every cell. **One cell moved**: multi session `session@10`, 0.772 to 0.756,
-and the run's own output says why. 89 of the 90 scopes were already present and
-one was not, so 527 turns were written fresh, and the re-ingested scope is the
-only thing that differed between the two runs.
+in every cell. **One cell moved**: multi session `session@10`, 0.772 to 0.756.
+Two things changed between the runs and neither can be ruled out from here. 89 of
+the 90 scopes were already present and one was not, so 527 turns were written
+fresh into that scope. And 0.5.1 made vector search use the HNSW index, which is
+approximate: 98% of the exact top fifty rather than all of it. That every other
+cell of both tables is identical to three decimals is the useful thing this run
+says about that change, and it is a stronger statement than the 0.980 recall
+figure on its own.
 
 recall@1 and MRR are printed for LongMemEval for the first time, and
 `single-session-preference` at recall@1 0.000 and MRR 0.119 is the sharpest

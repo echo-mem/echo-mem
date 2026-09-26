@@ -1,5 +1,9 @@
 """The reader and the scorer, which are the two places a benchmark lies.
 
+Named apart from the integration file beside it on purpose. Two test modules
+sharing a basename across two directories with no `__init__.py` collect fine one
+directory at a time and fail on the whole tree, which is how CI runs it.
+
 A published-benchmark harness is only worth having if its numbers can be
 trusted, and the ways it can flatter itself are all here rather than in the
 database: dropping questions it cannot answer, counting a near miss as a hit,
