@@ -140,6 +140,12 @@ An empty answer means nobody asserted a cause, not that none exists. That is
 why recording `causal_hint` at write time matters: you are the only one who
 reads the sentence that states it.
 
+A store that predates this field can be backfilled once, by a person, with
+`echo-memory infer-causal-hints`, which re-reads stored fact text and types the
+edges whose own sentence states a cause. It is not a substitute for the hint
+you pass at write time: it can only recover what a fact's text already says,
+and most of what a session states about cause never reaches the text.
+
 ## Reading it back outside the tools
 
 ```bash

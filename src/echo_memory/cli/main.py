@@ -17,6 +17,7 @@ from echo_memory.cli import (
     adopt,
     calibrate,
     health,
+    infer_causal,
     initdb,
     merge,
     quickstart,
@@ -303,6 +304,37 @@ def _add_project_parsers(sub) -> None:
     stop.add_argument(
         "--session-id", default=None,
         help="the calling session, so the gate holds it open at most once",
+    )
+
+    infer = sub.add_parser(
+        "infer-causal-hints",
+        help=(
+            "read existing fact text and type the edges whose own sentence "
+            "states a cause (offline, opt in, uses your own model)"
+        ),
+    )
+    infer.add_argument(
+        "--write", action="store_true",
+        help="apply the hints. Without this nothing is written and the proposals are printed",
+    )
+    infer.add_argument(
+        "--clear", action="store_true",
+        help=(
+            "remove the hints this command applied, leaving hints a caller "
+            "wrote at write time untouched. Needs --write to take effect"
+        ),
+    )
+    infer.add_argument(
+        "--rescan", action="store_true",
+        help="forget which facts have been examined, so their text is read again",
+    )
+    infer.add_argument(
+        "--limit", type=int, default=infer_causal.DEFAULT_LIMIT,
+        help=f"facts to read this run (default: {infer_causal.DEFAULT_LIMIT})",
+    )
+    infer.add_argument(
+        "--batch-size", type=int, default=infer_causal.DEFAULT_BATCH,
+        help=f"facts per model call (default: {infer_causal.DEFAULT_BATCH})",
     )
 
     rec = sub.add_parser(
@@ -615,6 +647,12 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(hooks_cmd.render(result), end="")
         return 0
+
+    if args.command == "infer-causal-hints":
+        # Never reached by anything but a person typing it: not a migration
+        # step, not a hook, not a server path. The engine's write path stays
+        # model free; this reads text already stored.
+        return infer_causal.run(args, config, connect(config.database_url))
 
     if args.command == "reconcile":
         conn = connect(config.database_url)
