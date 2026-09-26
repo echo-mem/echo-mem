@@ -155,7 +155,7 @@ Three ways out, and one is refused:
 
 1. **Prompting at write time.** Shipped - `causal_hint` is in the tool
    description, the skill and the public docs. Slow, honest, compounds.
-2. **An opt-in backfill.** `echo-memory infer-causal-hints` re-reads existing
+2. **An opt-in backfill.** Shipped - `echo-memory infer-causal-hints` re-reads existing
    fact text with the caller's own model and writes hints as ordinary audited
    edges. This does not contradict the standing refusal below: refusing
    statistical causal discovery means refusing to infer causation from
@@ -163,6 +163,15 @@ Three ways out, and one is refused:
    5 SO checkout returned 502s" and typing that edge is extraction - the same
    act the calling agent performs for entities and facts, done late. Offline,
    explicit, reversible, audited.
+
+   As built, the line is enforced rather than promised. A sentence with no
+   causal connective is never sent to a model, so co-occurrence is refused
+   before it costs anything. Every proposal has to quote the words that state
+   the relation, and a quote not literally present in the fact is dropped,
+   which is what stops a model reasoning from the world rather than reading the
+   sentence. Dry run by default, one scope at a time, resumable, and every hint
+   written carries a marker that `--clear` can find and a caller's hint never
+   has.
 3. **Inferring from graph structure.** Refused. See below.
 
 ### 2d. What causality plus bi-temporality gives that nobody has

@@ -71,6 +71,8 @@ echo-memory export                 # everything, as JSON
 echo-memory install --for cursor   # wire one client, project scoped
 echo-memory adopt                  # wire every MCP client on the machine, each with its own id
 
+echo-memory infer-causal-hints     # type the facts whose own sentence states a cause (dry run)
+
 echo-memory eval                   # retrieval quality against your own store
 echo-memory eval --context         # what a recall costs against injecting everything
 echo-memory eval --context --sweep # the same, as a curve across corpus size
@@ -115,13 +117,30 @@ this happen" is an ordered chain and similarity cannot produce one. "A led_to B"
 caused_by A" are one claim written from opposite ends, and both assemble into the same
 chain.
 
-A fact with no hint is associative, which is the default and usually correct. Facts
-written before 0.5.0 have no hint and are not a gap to fix. An empty answer from
-`trace_cause` says which kind of empty it is: nobody recorded a cause here is a
-different fact about a store than there are no chains.
+A fact with no hint is associative, which is the default and usually correct. An empty
+answer from `trace_cause` says which kind of empty it is: nobody recorded a cause here is
+a different fact about a store than there are no chains.
+
+**Filling it in, for a store that predates it.** Facts written before 0.5.0 carry no
+hint, so on an existing store `trace_cause` has nothing to walk.
+`echo-memory infer-causal-hints` re-reads the fact text already stored with your own
+model (`ECHO_MEMORY_LLM_API_KEY`, `ECHO_MEMORY_LLM_MODEL`) and types the edges whose own
+sentence states the relation. Dry run by default; `--write` applies what it printed and
+`--clear --write` takes it back.
+
+This is extraction done late, not causal discovery, and the difference is enforced rather
+than promised. A sentence with no causal connective is never sent to a model, so
+co-occurrence is refused before it costs anything. Every proposal has to quote the words
+that state the relation, and a quote that is not literally in the fact is dropped, so a
+model reasoning from the world instead of reading the sentence gets nothing stored. Each
+hint written is audited and marked as extracted late, which is what makes `--clear`
+able to remove exactly these and never one you wrote at write time.
 
 **No inference on the write path.** Extraction happens in the calling agent, so storing
-a memory invokes no model on the server. The cost moved rather than vanished: the agent
+a memory invokes no model on the server. `infer-causal-hints` above is not an exception
+to that and is worth being precise about: it is a command a person types against facts
+already stored, it never runs as part of a write, a migration or a hook, and a store that
+never runs it never causes a model call. The cost moved rather than vanished: the agent
 has to arrive with entities and facts already extracted, which is what the
 [tool contract](docs/DEVELOPMENT.md) spells out. The comparison that makes this matter is
 Zep/Graphiti, the closest architectural match, whose own description of ingestion is that
