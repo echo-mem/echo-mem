@@ -621,6 +621,10 @@ def means(rows: list[dict]) -> dict:
         for k in KS:
             out[f"answer_words@{k}"] = statistics.mean(r[f"answer_words@{k}"] for r in scoreable)
     out["mean_facts_returned"] = statistics.mean(r["returned"] for r in rows)
+    # What the answer cost, beside whether it was right. A configuration that
+    # finds everything by returning everything is not better, and this is the
+    # number that says so; `eval` reports the same thing as tokens.
+    out["mean_chars_returned"] = statistics.mean(r["chars"] for r in rows)
     return out
 
 
