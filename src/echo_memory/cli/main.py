@@ -818,6 +818,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"error: {exc}", file=sys.stderr)
             return 2
 
+        if not Path(args.path).is_file():
+            print(
+                f"error: no such file: {args.path}\n"
+                f"This corpus is not in the repository and is yours to fetch:\n"
+                f"  {external.DATASET_URLS[args.dataset]}\n"
+                f"tests/fixtures/ holds a small synthetic file in the same schema.",
+                file=sys.stderr,
+            )
+            return 2
+
         conn = connect(config.database_url)
         prefix = external.PREFIXES[args.dataset]
         held = external.foreign_facts(conn, prefix)

@@ -226,6 +226,16 @@ def instances_in(path: str, limit: int = 0) -> Iterator[dict]:
 # name.
 PREFIXES = {"locomo": "locomo", "longmemeval": "lme"}
 
+# Where the file comes from, so a missing path can say so instead of raising
+# FileNotFoundError at whoever typed it. Recorded here rather than only in the
+# docs because the CLI is where somebody finds out they do not have the corpus.
+DATASET_URLS = {
+    "locomo": "https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json",
+    "longmemeval": (
+        "https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s"
+    ),
+}
+
 
 LOCOMO_CATEGORIES = {
     1: "multi hop", 2: "temporal", 3: "open domain",

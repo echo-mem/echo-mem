@@ -18,6 +18,8 @@ from pathlib import Path
 import pytest
 
 from echo_memory.eval.external import (
+    DATASET_URLS,
+    DATASETS,
     KS,
     MAX_FACT,
     PREFIXES,
@@ -125,9 +127,10 @@ def test_a_long_turn_becomes_several_facts_under_one_gold_key():
     assert len({p.node for p in pieces}) == len(pieces)
 
 
-def test_every_dataset_has_a_scope_prefix():
-    """The resume check and the scratch-database guard both key off it."""
-    assert set(PREFIXES) == {"locomo", "longmemeval"}
+def test_every_dataset_has_a_scope_prefix_and_somewhere_to_get_it():
+    """The resume check and the scratch-database guard key off the prefix; the
+    URL is what a missing path prints instead of a FileNotFoundError."""
+    assert set(PREFIXES) == set(DATASETS) == set(DATASET_URLS)
 
 
 # --- splitting a turn the store would refuse ------------------------------
