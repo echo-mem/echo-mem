@@ -459,6 +459,68 @@ def prompt_terms(prompt: str) -> list[str]:
 # one is how the graph hop came to be on for months at -0.142 MRR.
 LEXICAL_BM25 = os.environ.get("ECHO_MEMORY_LEXICAL_BM25", "").lower() in ("1", "true", "yes")
 
+# Whether an unspecified graph_hops asks the router or stays off. Off by
+# default for the same reason BM25 is: this changes which facts a query
+# returns, and the hop it turns on is the one measured at -0.142 MRR when it
+# was on for everybody.
+ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
+    "1", "true", "yes",
+)
+
+
+def needs_expansion(conn, group_id: str, query: str) -> bool:
+    """Whether this question needs a second fact to answer it.
+
+    The first version of this router asked "does the query name two
+    entities", and measuring it is what showed the question was wrong.
+    entity_pair cases name two entities AND are answered by the single edge
+    between them, so routing them to expansion did precisely the thing the
+    ablation says costs -0.142 MRR. Naming two things is not the signal.
+
+    Being UNCONNECTED is. If the two named entities already share an edge,
+    one fact answers the question and its neighbours are noise. If the store
+    holds both and no edge joins them, then whatever relates them is a path,
+    and a path is the one thing the content channels cannot retrieve: they
+    rank facts by resemblance to the query, and the middle of a chain
+    resembles the question least.
+
+    That is also what the eval measured. Expansion helped exactly one shape,
+    multihop, raising recall@10 from 0.635 to 0.769, and multihop cases are
+    built from two facts that do not share an edge.
+
+    Exact lexical containment for the name match, not embedding similarity. A
+    near match would make the router its own retrieval problem with its own
+    threshold to calibrate, and this system already has one threshold whose
+    confidence interval includes chance.
+    """
+    words = sorted(set(prompt_terms(query)))
+    if len(words) < 2:
+        return False
+    rows = conn.execute(
+        f"""SELECT n.id
+              FROM {GRAPH}."Node" n
+             WHERE (n.properties ->> '"group_id"'::agtype) = %s
+               AND EXISTS (
+                   SELECT 1 FROM unnest(%s::text[]) AS w
+                    WHERE position(w IN lower(n.properties ->> '"name"'::agtype)) > 0
+               )
+             LIMIT 8""",
+        (group_id, words),
+    ).fetchall()
+    if len(rows) < 2:
+        return False
+    node_ids = [str(r[0]) for r in rows]
+    (connected,) = conn.execute(
+        f"""SELECT count(*)
+              FROM {GRAPH}."FACT" e
+             WHERE (e.properties ->> '"group_id"'::agtype) = %s
+               AND (e.properties ->> '"t_invalid"'::agtype) IS NULL
+               AND e.start_id::text = ANY(%s)
+               AND e.end_id::text = ANY(%s)""",
+        (group_id, node_ids, node_ids),
+    ).fetchone()
+    return int(connected) == 0
+
 
 def _lexical_any_candidates(
     conn, group_id: str, query: str, limit: int, use_bm25: bool | None = None
@@ -663,7 +725,8 @@ def query_memory(
     conn, group_id: str, query: str | None, top_k: int, embedder,
     digest: bool = False, lexical_only: bool = False,
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
-    rrf_k: int | None = None, graph_hops: int = 0, lexical_bm25: bool | None = None,
+    rrf_k: int | None = None, graph_hops: int | None = None,
+    lexical_bm25: bool | None = None, route_expansion: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -751,7 +814,14 @@ def query_memory(
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
         lists = [vector_ids, lexical_ids]
-        if graph_hops:
+        # Routed, not configured. graph_hops=None asks the router; an explicit
+        # 0 or 1 overrides it, which is what the harness needs to score the
+        # router against always-on and always-off.
+        hops = graph_hops
+        if hops is None:
+            routing = ROUTE_EXPANSION if route_expansion is None else route_expansion
+            hops = 1 if routing and needs_expansion(conn, group_id, query) else 0
+        if hops:
             # Seeded from the two content channels fused, so the expansion
             # follows what the query actually matched rather than whatever the
             # vector list alone happened to put first.
@@ -786,7 +856,7 @@ def query_memory(
             # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
             lists.append(_graph_candidates(conn, group_id, seeds, LIST_DEPTH))
-        fused = reciprocal_rank_fusion(lists, k=k) if graph_hops else content
+        fused = reciprocal_rank_fusion(lists, k=k) if hops else content
         by_score = sorted(fused, key=fused.get, reverse=True)
         # Diversify before truncating, not after: the point is to choose which
         # top_k, and slicing first throws away the candidates MMR would swap in.
