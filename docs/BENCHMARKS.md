@@ -11,8 +11,9 @@ memory returned, writes an answer, and a second model judges it against a gold
 answer. Those are the numbers people quote, including the state of the art
 claims made by hosted memory products.
 
-Echo Memory's harnesses measure **retrieval**: whether the turn holding the
-answer came back at all. No model is called anywhere in either script.
+Echo Memory's harness measures **retrieval**: whether the turn holding the
+answer came back at all. No model is called anywhere in it, and the machine
+readable report it writes says so in the field where accuracy would go.
 
 Retrieval is a **ceiling on** QA accuracy, not a substitute for it. A system
 that never surfaces the evidence cannot answer the question, so a low retrieval
@@ -20,7 +21,7 @@ number is decisive and a high one is necessary rather than sufficient. These
 results are not comparable to a published QA accuracy figure and should never
 be quoted as though they were.
 
-There is a second, sharper caveat specific to this design. Both harnesses feed
+There is a second, sharper caveat specific to this design. The harness feeds
 **raw, unfiltered dialogue turns**, one fact per turn. That deliberately skips
 the step Echo Memory pushes to the calling agent, which is deciding what in a
 conversation was worth remembering at all. So these numbers describe the store
@@ -121,6 +122,101 @@ is reported.
 half the time. A stated preference tends to be a short aside inside a long
 exchange about something else, which is the shape hybrid retrieval handles
 worst. Not chased down, and recorded here so it is not quietly forgotten.
+
+## Both of them through `eval-external`, 2026-09-26
+
+The two standalone scripts are now one module behind `echo-memory eval-external`.
+The first thing to establish about a rewritten harness is that it did not move
+the numbers, so both benchmarks were run again on the same scratch databases the
+runs above filled.
+
+LoCoMo, all 1,982 questions, 5,882 facts already present so nothing was
+rewritten, 53 seconds:
+
+| Category | n | recall@1 | recall@10 | recall@30 | hit@10 | session@10 | MRR |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **overall** | **1,982** | **0.324** | **0.601** | **0.708** | **0.658** | **0.850** | **0.460** |
+| temporal | 321 | 0.439 | 0.691 | 0.794 | 0.717 | 0.860 | 0.556 |
+| single hop | 841 | 0.383 | 0.680 | 0.773 | 0.697 | 0.925 | 0.498 |
+| adversarial | 446 | 0.308 | 0.584 | 0.697 | 0.594 | 0.915 | 0.401 |
+| multi hop | 282 | 0.099 | 0.386 | 0.530 | 0.649 | 0.616 | 0.391 |
+| open domain | 92 | 0.139 | 0.310 | 0.415 | 0.435 | 0.538 | 0.263 |
+
+Every column the script printed is unchanged to three decimals. `session@10` is
+new, and LoCoMo supports it because a `dia_id` names the session it belongs to:
+0.850 against turn recall of 0.601 is the same gap LongMemEval showed, on a
+second corpus. The right conversation comes back far more often than the right
+line in it.
+
+**A resumed run scores facts the old code wrote, so ingest was checked on its
+own.** conv-26 written into an empty database wrote 419 facts, the same count
+the 2026-09-17 run left in its scope, in 20 seconds, and scored its 197
+questions identically: recall@1 0.302, recall@10 0.567, recall@30 0.663, hit@10
+0.614, session@10 0.848, MRR 0.415, the same six figures from both databases.
+
+LongMemEval S, the same stratified 15 of each of the six types, 90 questions,
+170 seconds:
+
+| Question type | n | recall@1 | recall@10 | recall@30 | hit@10 | session@10 | MRR |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **overall** | **90** | **0.181** | **0.727** | **0.834** | **0.833** | **0.937** | **0.428** |
+| single session assistant | 15 | 0.467 | 1.000 | 1.000 | 1.000 | 1.000 | 0.617 |
+| single session user | 15 | 0.300 | 0.933 | 0.933 | 0.933 | 1.000 | 0.501 |
+| knowledge update | 15 | 0.100 | 0.911 | 0.978 | 1.000 | 1.000 | 0.504 |
+| temporal reasoning | 15 | 0.156 | 0.756 | 0.924 | 0.867 | 0.933 | 0.515 |
+| single session preference | 15 | 0.000 | 0.467 | 0.578 | 0.533 | 0.933 | 0.119 |
+| multi session | 15 | 0.067 | 0.297 | 0.590 | 0.667 | 0.756 | 0.310 |
+
+`recall@k` here is what the 2026-09-18 table called `turn@k`, and it is identical
+in every cell. **One cell moved**: multi session `session@10`, 0.772 to 0.756,
+and the run's own output says why. 89 of the 90 scopes were already present and
+one was not, so 527 turns were written fresh, and the re-ingested scope is the
+only thing that differed between the two runs.
+
+recall@1 and MRR are printed for LongMemEval for the first time, and
+`single-session-preference` at recall@1 0.000 and MRR 0.119 is the sharpest
+statement of the gap in the table above: the conversation is found 93% of the
+time and the line inside it is never ranked first.
+
+### The closest this gets to accuracy without a model
+
+`answer_words@10` is **0.629** on LoCoMo, over the 1,242 of 1,982 questions whose
+gold answer has two or more content words, and **0.775** on the LongMemEval
+sample, over 62 of 90.
+
+It is the share of the gold answer's own content words that appear in the ten
+facts that came back. It is not accuracy and must not be quoted as though it
+were: it undercounts every answer that paraphrases the transcript, which in
+LoCoMo is most of them, so it is a floor under what a reader could have written.
+The excluded questions either supply no gold answer at all, which is true of
+LoCoMo's 446 adversarial ones, or supply one that ten facts would match by
+chance, which is what "yes" and "2022" would do to this metric.
+
+The `accuracy` field in the JSON report is `null`, with the reason beside it, for
+as long as no model is called anywhere in this harness.
+
+### Getting the two files
+
+```bash
+curl -sLO https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
+curl -sLo longmemeval_s.json \
+  https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s
+```
+
+Neither needs a credential or an account as of 2026-09-26. What was measured
+above, and what the JSON report records for every run, is:
+
+| File | Bytes | sha256 |
+|---|---:|---|
+| locomo10.json | 2,805,274 | `79fa87e9...ea698ff4` |
+| longmemeval_s | 278,025,796 | `08d8dad4...e117894` |
+
+The LongMemEval hash is also what the Hub serves as that file's `x-linked-etag`,
+which is what makes it a revision identifier rather than only a checksum.
+
+A full LongMemEval run is 500 scopes and 246,930 facts, which is hours and not
+something to start on a machine you need. `--per-type N` is the honest subset and
+`--limit N` is a smoke test, for the reason in the section above.
 
 ## Context cost as the store grows
 

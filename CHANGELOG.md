@@ -7,6 +7,35 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## Unreleased
+
+**`echo-memory eval-external` runs LoCoMo and LongMemEval.** `eval` scores this
+store against itself, which cannot be set beside anybody else's number. This
+runs the corpora the published figures are taken on, through the real
+`write_episode` and `query_memory` paths, and reports recall@k, hit@k, MRR and
+session-level recall per question category, as a readable table and as JSON.
+
+Neither dataset ships here: both are somebody else's to license and
+longmemeval_s is 278MB, so the path is an argument and the report records the
+file's size and sha256. `tests/fixtures/` holds a synthetic file in each schema.
+
+**It reports no accuracy, and says why in the report.** Both benchmarks publish
+model-judged QA accuracy; nothing here calls a model, so `accuracy` is null with
+its reason in the field beside it. `answer_words@k` is the model-free
+approximation, defined as the share of the gold answer's own content words
+present in the returned facts, excluding the gold answers of under two content
+words that ten facts would match by chance. It is a floor under what a reader
+could have written and not an accuracy score.
+
+It refuses to start against a database holding facts outside its own scopes,
+because a full LongMemEval run writes 246,930 of them through the ordinary write
+path and there is no undo. It also resumes: a scope already holding its full
+complement is scored without being rewritten.
+
+`scripts/locomo-bench.py` and `scripts/longmemeval-bench.py` are gone, replaced
+by the subcommand. The numbers are unchanged, and
+[`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) records the run that establishes that.
+
 ## 0.5.2
 
 **`score` is present on every fact of every answer.** It was omitted when only
