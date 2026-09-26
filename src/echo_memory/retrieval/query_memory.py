@@ -12,7 +12,7 @@ import time
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger, log_query_memory
-from echo_memory.retrieval import bm25
+from echo_memory.retrieval import bm25, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
 from echo_memory.retrieval.fusion import K as RRF_K
 
@@ -529,6 +529,10 @@ LEXICAL_BM25 = os.environ.get("ECHO_MEMORY_LEXICAL_BM25", "1").lower() in (
     "1", "true", "yes",
 )
 
+# Whether how often a fact has been recalled enters the ranking. Off until
+# the eval says otherwise, like every other change to what a query returns.
+USE_SALIENCE = os.environ.get("ECHO_MEMORY_SALIENCE", "").lower() in ("1", "true", "yes")
+
 # Whether an unspecified graph_hops asks the router or stays off. Off by
 # default for the same reason BM25 is: this changes which facts a query
 # returns, and the hop it turns on is the one measured at -0.142 MRR when it
@@ -823,7 +827,7 @@ def query_memory(
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
-    as_of: int | None = None,
+    as_of: int | None = None, use_salience: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -956,7 +960,14 @@ def query_memory(
             lists.append(
                 _graph_candidates(conn, group_id, seeds, LIST_DEPTH, as_of=as_of)
             )
-        fused = reciprocal_rank_fusion(lists, k=k) if hops else content
+        # Salience last, over the candidates the content channels found, so
+        # it can reorder an answer but never add to one. It is a prior on
+        # facts, not a signal about this query.
+        salient = USE_SALIENCE if use_salience is None else use_salience
+        if salient:
+            by_content = sorted(content, key=content.get, reverse=True)
+            lists.append(salience.rank(conn, group_id, by_content))
+        fused = reciprocal_rank_fusion(lists, k=k) if (hops or salient) else content
         by_score = sorted(fused, key=fused.get, reverse=True)
         # Diversify before truncating, not after: the point is to choose which
         # top_k, and slicing first throws away the candidates MMR would swap in.
