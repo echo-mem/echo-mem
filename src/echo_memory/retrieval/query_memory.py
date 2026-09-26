@@ -562,33 +562,68 @@ def _provenance(raw, agent_id, project) -> dict | None:
     return out
 
 
+def _missing_similarity(
+    conn, group_id: str, embedding: list[float], edge_ids: list[str]
+) -> dict[str, float]:
+    """Cosine for facts the vector channel never scored.
+
+    The lexical channel computes no similarity, so a fact only it found
+    arrived with score null. That is an implementation detail - which channel
+    happened to retrieve it - leaking into a field callers read as relevance.
+
+    Fixed by computing the number instead of omitting it. At most top_k rows,
+    by primary key, with the query embedding already in hand.
+    """
+    if not edge_ids:
+        return {}
+    rows = conn.execute(
+        """SELECT fe.edge_id::text, -(fe.embedding <#> %s::vector)
+             FROM public.fact_embedding fe
+            WHERE fe.group_id = %s
+              AND fe.edge_id = ANY(SELECT unnest(%s::text[])::graphid)""",
+        (embedding, group_id, list(edge_ids)),
+    ).fetchall()
+    return {str(edge_id): float(score) for edge_id, score in rows}
+
+
 def _annotate(
     facts: list[dict], similarity: dict[str, float],
     vector_ids: set[str], lexical_ids: set[str],
 ) -> None:
     """Say why each fact is in the answer, in place.
 
-    Retrieval returned a bare ordered list and nothing else, so a caller who
-    wanted "only use this if it is actually about my question" had no number
-    to test. The first customer to hit it wrote relevance filters at four
-    call sites to reconstruct, from the fact text, something this function
-    already knew.
+    rank        position in this answer, 1 first. THIS is the ordering to
+                trust and the one to truncate by. It is the fused result of
+                every channel, which is the system's whole opinion; score is
+                one input to it, and re-sorting by a single input discards
+                the fusion.
+    score       cosine similarity to the query. Present on every fact of
+                every answer the MCP surface can ask for, and it means the
+                same thing for every fact whatever channel found it.
+                Diagnostic, NOT a correctness gate: a fact found by exact
+                keyword match can be the right answer at a low semantic
+                score.
 
-    Three fields, each chosen because a caller can act on it:
+                Absent in exactly one place, and not one a tool caller can
+                reach: the UserPromptSubmit hook runs lexical_only in a fresh
+                process precisely to avoid a 6.2 second model load, so there
+                is no embedding to compare against and no honest number to
+                give. Omitted rather than faked.
+    matched     which channels found it, as information rather than quality.
 
-    rank        position in this answer, 1 first. Cheap, and enough for
-                "only consider the top three".
-    score       cosine similarity to the query, or null when the fact came
-                only from the lexical channel and no similarity was computed.
-                This is the number to threshold on: unlike a fusion score it
-                means the same thing from one query to the next, and it is
-                the same quantity the adaptive floor already trusts.
-    matched     which channels found it. A fact both channels found is a
-                different kind of answer from one only the vector channel
-                reached, and that distinction is free here and impossible to
-                recover afterwards.
+    The null that used to appear here caused real harm and the shape of it is
+    worth keeping. score was omitted for lexical-only facts, a customer sorted
+    by score with nulls last, and every fact full text search had found went
+    to the back of the list - where a character budget truncated it and the
+    model filled the gap by inventing something. The fact it dropped was
+    correct and was in the store.
 
-    Absent on a digest, which ranks nothing.
+    Their own calibration says why that is backwards. Over ten questions with
+    every fact judged against every question: lexical-only scored R@3 0.640
+    against vector-only's 0.460, and beat the fused ranking outright on two of
+    the ten. The channel that was being demoted has the better recall.
+
+    Absent on a digest too, which ranks nothing against nothing.
     """
     for position, fact in enumerate(facts, start=1):
         edge_id = fact["fact_id"]
@@ -599,7 +634,8 @@ def _annotate(
         if not matched:
             continue
         fact["rank"] = position
-        fact["score"] = round(similarity[edge_id], 4) if edge_id in similarity else None
+        if edge_id in similarity:
+            fact["score"] = round(similarity[edge_id], 4)
         fact["matched"] = matched
 
 
@@ -653,6 +689,7 @@ def query_memory(
         return {"error": str(e)}
 
     similarity: dict[str, float] = {}
+    query_embedding: list[float] | None = None
     if digest:
         ranked_ids = _digest_candidates(conn, group_id, top_k)
         vector_ids, lexical_ids = [], []
@@ -661,7 +698,7 @@ def query_memory(
         lexical_ids = _lexical_any_candidates(conn, group_id, query, LIST_DEPTH)
         ranked_ids = lexical_ids[:top_k]
     else:
-        embedding = embedder.embed(query)
+        embedding = query_embedding = embedder.embed(query)
         vector_ids = _vector_candidates(
             conn, group_id, embedding, LIST_DEPTH, floor=floor, scores=similarity
         )
@@ -732,6 +769,14 @@ def query_memory(
 
     facts_by_id = _fetch_facts(conn, ranked_ids)
     facts = [facts_by_id[edge_id] for edge_id in ranked_ids if edge_id in facts_by_id]
+    # Score whatever the vector channel did not, so every returned fact has
+    # one. Only on the query path: a digest ranks nothing and has no query to
+    # be similar to.
+    if query_embedding is not None:
+        unscored = [f["fact_id"] for f in facts if f["fact_id"] not in similarity]
+        similarity.update(
+            _missing_similarity(conn, group_id, query_embedding, unscored)
+        )
     _annotate(facts, similarity, set(vector_ids), set(lexical_ids))
 
     log_query_memory(
