@@ -7,6 +7,33 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## 0.5.2
+
+**`score` is present on every fact of every answer.** It was omitted when only
+full text search found a fact, because only the vector channel computes a
+similarity - an implementation detail reaching a field callers read as
+relevance.
+
+A customer sorted by it with nulls last, which is what a nullable relevance
+number invites. Every lexically-found fact went to the back of the list, a
+per-entity character budget truncated it, and the model filled the gap by
+inventing a figure that contradicted data sitting in the store.
+
+Their own calibration says the ordering was backwards and not merely
+arbitrary: over ten questions with every fact judged against every question,
+lexical-only scored R@3 0.640 against vector-only's 0.460. The channel being
+demoted had the better recall.
+
+`query_memory`'s description now also says which field to truncate by. `rank`
+is the fused result of every channel; `score` is one input to it, and
+re-sorting by a single input discards the fusion.
+
+**A shutdown race that aborted the test suite after it passed.** The embedder
+is warmed in a daemon thread, daemon threads are killed abruptly at exit, and
+this one is inside torch when that happens - which aborts the process. CI saw
+771 passed, 5 skipped, then exit code 134. Now joined at exit with a ten
+second bound.
+
 ## 0.5.1
 
 **The vector index has never been used.** pgvector's HNSW index answers

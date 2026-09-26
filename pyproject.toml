@@ -6,7 +6,7 @@
 # (`-m echo_memory.server`) and every existing install reference it, and
 # renaming the module would break live configuration to fix a cosmetic mismatch.
 name = "echo-mem"
-version = "0.5.1"
+version = "0.5.2"
 description = "A long-horizon memory architecture for AI agents"
 readme = "README.md"
 # BUSL-1.1 is the SPDX identifier for the Business Source License 1.1, so
