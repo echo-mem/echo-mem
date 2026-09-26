@@ -57,9 +57,9 @@ def _seed(conn, n: int = 60):
 
 def _fact_text(conn, edge_id: str) -> str:
     (text,) = conn.execute(
-        """SELECT * FROM cypher('echo_memory', $$
-               MATCH ()-[e:FACT]->() WHERE id(e) = %s RETURN e.fact
-           $$) AS (f agtype)""" % edge_id
+        f"""SELECT * FROM cypher('echo_memory', $$
+               MATCH ()-[e:FACT]->() WHERE id(e) = {int(edge_id)} RETURN e.fact
+           $$) AS (f agtype)"""
     ).fetchone()
     return str(text).strip('"')
 
@@ -102,7 +102,7 @@ def test_statistics_are_refused_rather_than_trusted_when_stale(migrated_db):
     back to ts_rank is the honest answer; ranking confidently on stale
     statistics is not."""
     conn = connect(migrated_db)
-    embedder = _seed(conn)
+    _seed(conn)
     bm25.refresh(conn, GROUP)
     assert bm25.usable(conn, GROUP)
 
@@ -114,7 +114,7 @@ def test_statistics_are_refused_rather_than_trusted_when_stale(migrated_db):
             [{"source": "deploy pipeline", "target": f"late stage {i}",
               "relation_type": "about", "fact": f"a later fact number {i}",
               "confidence": "extracted"}],
-            {}, VectorEmbedder({**{f"a later fact number {i}": REFERENCE},
+            {}, VectorEmbedder({f"a later fact number {i}": REFERENCE,
                                 f"late stage {i}": REFERENCE,
                                 "deploy pipeline": REFERENCE}),
             assume_new=True,
