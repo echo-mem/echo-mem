@@ -724,6 +724,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("lexical only", {"lexical_only": True}),
                 ("+ graph hop", {"graph_hops": 1}),
                 ("+ BM25 lexical", {"lexical_bm25": True}),
+                ("+ routed expansion", {"route_expansion": True}),
             ]
 
         results = []
