@@ -21,7 +21,7 @@ from echo_memory.retrieval.query_memory import query_memory
 
 GROUP = "g1"
 NEAR = "the pool was sized 5 and checkout returned 502s"
-FAR = "the office coffee machine was replaced"
+FAR = "LEXQUERY the office coffee machine was replaced"
 
 
 def _embedder():
@@ -33,9 +33,9 @@ def _embedder():
         # The query in the lexical-only test. Deliberately far from both
         # stored facts so the vector channel's floor rejects them and only
         # full text search can match.
-        "coffee machine replaced": unit_vector_at_angle(0.0),
+        "LEXQUERY": REFERENCE,
         NEAR: REFERENCE,
-        FAR: unit_vector_at_angle(-0.75),
+        FAR: unit_vector_at_angle(0.0),
     })
 
 
@@ -84,20 +84,49 @@ def test_score_is_similarity_to_the_query_not_a_fusion_number(migrated_db):
             assert fact["score"] <= best["score"]
 
 
-def test_a_lexical_only_hit_reports_no_score_rather_than_a_fake_one(migrated_db):
-    """The lexical channel computes no similarity, so there is none to
-    report. null says that; a zero would read as "computed, and nothing"."""
+def test_a_lexical_only_fact_still_gets_a_real_score(migrated_db):
+    """The null here cost a customer a correct answer and put a hallucination
+    in its place.
+
+    score was omitted when only full text search found a fact, because only
+    the vector channel computes a similarity. A customer sorted by score with
+    nulls last, so every lexically-found fact went to the back of the list,
+    where a character budget truncated it - and the model filled the gap by
+    inventing a number. The dropped fact was correct and was in the store.
+
+    Their own calibration says the ordering was backwards as well as
+    arbitrary: over ten questions with every fact judged against every
+    question, lexical-only scored R@3 0.640 against vector-only's 0.460. The
+    channel being demoted had the better recall.
+
+    So the number is computed rather than omitted. Which channel retrieved a
+    fact is an implementation detail and has no business reaching a field
+    callers read as relevance.
+    """
     conn = connect(migrated_db)
     embedder = _embedder()
     _seed(conn, embedder)
 
-    result = query_memory(conn, GROUP, "coffee machine replaced", 10, embedder)
-    lexical_only = [
-        f for f in result["facts"]
-        if f.get("matched") == ["lexical"]
-    ]
+    result = query_memory(conn, GROUP, "LEXQUERY", 10, embedder)
+
+    lexical_only = [f for f in result["facts"] if f["matched"] == ["lexical"]]
+    assert lexical_only, "precondition: this query has to produce a lexical-only hit"
     for fact in lexical_only:
-        assert fact["score"] is None
+        assert fact["score"] is not None, fact
+
+
+def test_no_returned_fact_is_missing_a_score(migrated_db):
+    """The general form, so the next channel added cannot reintroduce it.
+    Sorting by a field some rows lack is a trap whatever the reason."""
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder)
+
+    for query in ("LEXQUERY", NEAR):
+        facts = query_memory(conn, GROUP, query, 10, embedder)["facts"]
+        assert facts, query
+        missing = [f for f in facts if f.get("score") is None]
+        assert not missing, f"{query!r} returned facts with no score: {missing}"
 
 
 def test_a_digest_ranks_nothing_so_it_claims_nothing(migrated_db):

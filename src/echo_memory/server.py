@@ -254,11 +254,17 @@ def query_memory(scope: str, query: str | None = None, top_k: int = 10, digest: 
     facts instead, as an opt-in "catch me up" convenience; call it
     explicitly at session start if you want one, it's never automatic.
 
-    Each fact carries rank (1 first), score and matched. score is cosine
-    similarity to your query, comparable across queries, and null when only
-    the lexical channel found the fact. matched names the channels that did:
-    a fact both found is a stronger answer than one only one reached. Use
-    them instead of writing your own relevance filter over the text.
+    Each fact carries rank (1 first), score and matched.
+
+    If you must drop facts to fit a budget, drop by rank. It is the fused
+    result of every channel, which is this server's whole opinion; score is
+    one input to it, and re-sorting by a single input throws the rest away.
+
+    score is cosine similarity to your query, present on every fact and
+    comparable across queries. It is diagnostic, not a correctness test: a
+    fact found by exact keyword match can be the right answer at a low
+    score. matched names the channels that found it, as information - full
+    text search is not the weaker one, it has the better recall here.
 
     A pending_ingest field appears when memory files have been written that
     the graph hasn't heard about yet. Read each listed file and call
