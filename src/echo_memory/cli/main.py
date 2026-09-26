@@ -392,7 +392,10 @@ def _add_project_parsers(sub) -> None:
 
     sub.add_parser(
         "reindex",
-        help="re-embed every fact with the current embedding text (run after an upgrade)",
+        help=(
+            "re-embed every fact with the current embedding text and rebuild "
+            "the lexical ranker's corpus statistics (run after an upgrade)"
+        ),
     )
 
     ev = sub.add_parser(
@@ -779,6 +782,23 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {done}/{total}", file=sys.stderr)
 
         print(render_reindex(reindex(conn, group_ids, LocalEmbedder(), progress)), end="")
+
+        # The lexical ranker's corpus statistics, rebuilt here too.
+        #
+        # A store that predates them has none, and the write path only
+        # rebuilds every few hundred writes - so a quiet store would keep
+        # falling back to ts_rank indefinitely while appearing to have BM25
+        # switched on. Reindex is already the command for "you upgraded, make
+        # the derived data match the code".
+        from echo_memory.retrieval import bm25
+
+        for group_id in group_ids:
+            stats = bm25.refresh(conn, group_id)
+            print(
+                f"lexical statistics for {group_id}: {stats['docs']} facts, "
+                f"average length {stats['avg_doc_length']:.1f}",
+                file=sys.stderr,
+            )
         return 0
 
     if args.command == "eval":

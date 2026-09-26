@@ -51,6 +51,19 @@ STALE_RATIO = float(os.environ.get("ECHO_MEMORY_BM25_STALE_RATIO", "0.2"))
 # discriminate between.
 MIN_DOCS = int(os.environ.get("ECHO_MEMORY_BM25_MIN_DOCS", "50"))
 
+# How many writes to a scope before its statistics are rebuilt.
+#
+# The refresh is a scan of one scope, measured at 13.6ms over 1,042 facts and
+# 82.5ms over 449 on this author's store. Amortised over 500 writes that is
+# well under a millisecond each, which keeps the promise this system is sold
+# on: writing calls no model and touches few rows.
+#
+# Every write would be wrong for the same reason a materialised view is not
+# maintained per row. Never would be wrong too: statistics that are only built
+# by a command nobody runs are statistics no customer ever has, and the
+# fallback would quietly be the whole product.
+REFRESH_EVERY = int(os.environ.get("ECHO_MEMORY_BM25_REFRESH_EVERY", "500"))
+
 _FACT_TEXT = """(f.properties ->> '"fact"'::agtype)"""
 _ACTIVE = """(f.properties ->> '"t_invalid"'::agtype) IS NULL"""
 _SCOPED = """(f.properties ->> '"group_id"'::agtype) = %s"""
@@ -213,3 +226,21 @@ def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[
         (group_id, list(terms), group_id, group_id, limit),
     ).fetchall()
     return [(str(edge_id), float(score)) for edge_id, score in rows]
+
+
+def refresh_if_due(conn, group_id: str, write_count: int) -> bool:
+    """Rebuild the statistics when a scope has taken REFRESH_EVERY writes.
+
+    Called from inside write_episode's transaction, which already holds this
+    scope's advisory lock, so two writers cannot rebuild at once.
+
+    Keyed on the write counter rather than on elapsed time because the thing
+    that invalidates document frequency is facts arriving, not clocks moving.
+    A store nobody writes to has statistics that stay correct.
+
+    Returns whether it rebuilt, for the log and for tests.
+    """
+    if write_count <= 0 or write_count % REFRESH_EVERY != 0:
+        return False
+    refresh(conn, group_id)
+    return True

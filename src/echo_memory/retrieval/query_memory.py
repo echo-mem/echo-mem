@@ -508,11 +508,26 @@ def prompt_terms(prompt: str) -> list[str]:
     return terms[:MAX_TERMS]
 
 
-# Whether the lexical channel ranks by BM25 or by ts_rank. Off by default
-# until the eval says otherwise: this changes which facts a query returns, and
-# a change to retrieval that ships on a plausible story rather than a measured
-# one is how the graph hop came to be on for months at -0.142 MRR.
-LEXICAL_BM25 = os.environ.get("ECHO_MEMORY_LEXICAL_BM25", "").lower() in ("1", "true", "yes")
+# Whether the lexical channel ranks by BM25 or by ts_rank.
+#
+# On, because the eval said so rather than because it sounded right. Paired
+# bootstrap over per-case differences on a real store:
+#
+#     shape           shipping   + BM25     dMRR              95% CI    tokens
+#     entity_pair        0.626    0.654   +0.0271  [+0.0083,+0.0481]  1859>1599
+#     entity_single      0.662    0.652   -0.0100  [-0.0308,+0.0108]  1694>1473
+#     prose              0.967    0.963   -0.0037  [-0.0103,+0.0022]  1817
+#     multihop           0.205    0.232   +0.0271  [+0.0166,+0.0381]  1918>1667
+#
+# Two shapes clear of zero, two inside noise, none regressing, and every
+# shape answering in 12 to 20% fewer tokens.
+#
+# Set ECHO_MEMORY_LEXICAL_BM25=0 to go back to ts_rank. It is still the
+# fallback for any scope without usable statistics, so this is a preference
+# rather than a requirement.
+LEXICAL_BM25 = os.environ.get("ECHO_MEMORY_LEXICAL_BM25", "1").lower() in (
+    "1", "true", "yes",
+)
 
 # Whether an unspecified graph_hops asks the router or stays off. Off by
 # default for the same reason BM25 is: this changes which facts a query

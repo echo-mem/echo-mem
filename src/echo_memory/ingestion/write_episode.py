@@ -18,6 +18,7 @@ from echo_memory.ingestion.resolution import (
     _exact_match,
     resolve_entities,
 )
+from echo_memory.retrieval import bm25
 from echo_memory.retrieval.query_memory import query_memory
 
 MAX_ENTITIES = 50
@@ -553,6 +554,12 @@ def write_episode(
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (f"episode|{group_id}",)
             )
             call_count = _increment_write_episode_count(conn, group_id)
+            # Corpus statistics for the lexical ranker, rebuilt every few
+            # hundred writes rather than per write or never. Inside this
+            # transaction because it is already holding the scope's lock, so
+            # two writers cannot rebuild at once. See bm25.refresh_if_due for
+            # the cost, which is why this is amortised rather than skipped.
+            bm25.refresh_if_due(conn, group_id, call_count)
 
             outcome = resolve_entities(conn, group_id, entities, resolutions, embedder)
 
