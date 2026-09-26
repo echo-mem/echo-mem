@@ -827,6 +827,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("+ graph hop", {"graph_hops": 1}),
                 ("+ BM25 lexical", {"lexical_bm25": True}),
                 ("+ routed expansion", {"route_expansion": True}),
+                ("+ salience", {"use_salience": True}),
             ]
 
         results = []
