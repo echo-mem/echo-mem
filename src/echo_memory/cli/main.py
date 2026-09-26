@@ -46,6 +46,7 @@ from echo_memory.cli.skill import package as package_skill
 from echo_memory.cli.skill import render_skill
 from echo_memory.cli.status import fetch_status, render_status
 from echo_memory.cli.why import render_history
+from echo_memory.eval.external import DATASETS as external_datasets
 from echo_memory.infra.config import ConfigError, load_config
 from echo_memory.infra.db import connect
 from echo_memory.infra.project import detect_project
@@ -421,6 +422,49 @@ def _add_project_parsers(sub) -> None:
              "instead of only the current one; slow, because it rebuilds and "
              "re-queries scratch scopes rather than extrapolating",
     )
+    # The other other evaluation. `eval` scores this store against itself,
+    # which cannot be compared with anybody else's number; this runs a
+    # published benchmark, on the corpus its published numbers were taken on.
+    ext = sub.add_parser(
+        "eval-external",
+        help="run a published benchmark (LoCoMo, LongMemEval) through the real "
+             "write and query path",
+    )
+    ext.add_argument("dataset", choices=sorted(external_datasets))
+    ext.add_argument(
+        "path",
+        help="the dataset file, which you download yourself: neither corpus is "
+             "redistributable here (see docs/BENCHMARKS.md for both URLs). "
+             "tests/fixtures/ holds a small synthetic file in each schema",
+    )
+    ext.add_argument(
+        "--per-type", type=int, default=0, metavar="N",
+        help="LongMemEval only: take the first N instances of each question "
+             "type. The honest way to run a subset, because the file is ordered "
+             "by type and its first 70 instances are all one of them",
+    )
+    ext.add_argument(
+        "--limit", type=int, default=0, metavar="N",
+        help="take the first N instances. Smoke tests only: on LongMemEval a "
+             "prefix is one question type rather than a sample",
+    )
+    ext.add_argument(
+        "--top-k", type=int, default=30, metavar="K",
+        help="facts per query (default: 30, the largest k reported)",
+    )
+    ext.add_argument("--json", metavar="PATH", default="",
+                     help="write the machine-readable report here")
+    ext.add_argument(
+        "--results", metavar="PATH", default="",
+        help="append each question's row as it is scored, so a killed run keeps "
+             "what it measured",
+    )
+    ext.add_argument(
+        "--force", action="store_true",
+        help="run even though this database already holds memory outside the "
+             "benchmark's own scopes",
+    )
+
     bench.add_argument(
         "--group", metavar="ID", default="benchmark:scratch",
         help="scope to write throwaway probe facts into (default: a dedicated "
@@ -802,6 +846,60 @@ def main(argv: list[str] | None = None) -> int:
 
         print(render(results))
         return 0
+
+    if args.command == "eval-external":
+        from echo_memory.eval import external
+        from echo_memory.ingestion.embeddings import LocalEmbedder
+
+        try:
+            external.check_flags(args.dataset, args.per_type)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+        if not Path(args.path).is_file():
+            print(
+                f"error: no such file: {args.path}\n"
+                f"This corpus is not in the repository and is yours to fetch:\n"
+                f"  {external.DATASET_URLS[args.dataset]}\n"
+                f"tests/fixtures/ holds a small synthetic file in the same schema.",
+                file=sys.stderr,
+            )
+            return 2
+
+        conn = connect(config.database_url)
+        prefix = external.PREFIXES[args.dataset]
+        held = external.foreign_facts(conn, prefix)
+        if held and not args.force:
+            print(
+                f"error: this database holds {held:,} fact(s) outside {prefix}: scopes.\n"
+                f"A {args.dataset} run writes real facts through the real write path, so "
+                f"anything\nit adds is indistinguishable from ordinary memory afterwards. "
+                f"Point\nECHO_MEMORY_DATABASE_URL at a scratch database, or pass --force if "
+                f"this is one.",
+                file=sys.stderr,
+            )
+            return 1
+
+        embedder = LocalEmbedder()
+        embedder.embed("warm")  # the first call loads the model; keep it out of the rate
+
+        try:
+            result = external.run(
+                conn, args.dataset, args.path, embedder,
+                limit=args.limit, per_type=args.per_type, top_k=args.top_k,
+                results_path=args.results,
+                progress=lambda line: print(line, file=sys.stderr, flush=True),
+            )
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
+        if args.json:
+            Path(args.json).write_text(json.dumps(external.report(result), indent=2) + "\n")
+            print(f"wrote {args.json}", file=sys.stderr)
+        print(external.render(result), end="")
+        return 0 if result.rows else 1
 
     if args.command == "benchmark":
         from echo_memory.ingestion.embeddings import LocalEmbedder

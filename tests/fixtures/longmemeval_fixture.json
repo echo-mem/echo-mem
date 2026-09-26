@@ -1,0 +1,113 @@
+[
+  {
+    "question_id": "fixture-single-session-user",
+    "question_type": "single-session-user",
+    "question": "Which instrument did I say I was learning?",
+    "answer": "the euphonium",
+    "question_date": "2024/07/01 (Mon) 09:00",
+    "haystack_dates": [
+      "2024/05/02 (Thu) 11:20",
+      "2024/05/09 (Thu) 11:20"
+    ],
+    "haystack_session_ids": [
+      "fixture_s1",
+      "fixture_answer_1"
+    ],
+    "answer_session_ids": [
+      "fixture_answer_1"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "Can you explain how a bicycle dynamo works?"
+        },
+        {
+          "role": "assistant",
+          "content": "It turns the wheel's motion into current with a magnet and a coil."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "I have started learning the euphonium, which is heavier than it looks.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "The euphonium is a fine choice. Brass bands are always short of them."
+        }
+      ]
+    ]
+  },
+  {
+    "question_id": "fixture-temporal-reasoning",
+    "question_type": "temporal-reasoning",
+    "question": "In which month did I move the beehives?",
+    "answer": "March",
+    "question_date": "2024/07/01 (Mon) 09:00",
+    "haystack_dates": [
+      "2024/03/14 (Thu) 08:05",
+      "2024/06/21 (Fri) 18:40"
+    ],
+    "haystack_session_ids": [
+      "fixture_answer_2",
+      "fixture_s2"
+    ],
+    "answer_session_ids": [
+      "fixture_answer_2"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "user",
+          "content": "I moved the beehives to the far hedge this morning.",
+          "has_answer": true
+        },
+        {
+          "role": "assistant",
+          "content": "Early is right. They travel better cold."
+        }
+      ],
+      [
+        {
+          "role": "user",
+          "content": "The plum tree has done nothing this year."
+        },
+        {
+          "role": "assistant",
+          "content": "Plums often skip a year after a heavy crop."
+        }
+      ]
+    ]
+  },
+  {
+    "question_id": "fixture-knowledge-update",
+    "question_type": "knowledge-update",
+    "question": "What is the pallet numbering scheme in the handover?",
+    "answer": "the scheme described in the handover notes",
+    "question_date": "2024/07/01 (Mon) 09:00",
+    "haystack_dates": [
+      "2024/04/04 (Thu) 14:00"
+    ],
+    "haystack_session_ids": [
+      "fixture_answer_3"
+    ],
+    "answer_session_ids": [
+      "fixture_answer_3"
+    ],
+    "haystack_sessions": [
+      [
+        {
+          "role": "assistant",
+          "content": "Point 1 of the handover, which concerns the pallet numbering scheme. Point 2 of the handover, which concerns the pallet numbering scheme. Point 3 of the handover, which concerns the pallet numbering scheme. Point 4 of the handover, which concerns the pallet numbering scheme. Point 5 of the handover, which concerns the pallet numbering scheme. Point 6 of the handover, which concerns the pallet numbering scheme. Point 7 of the handover, which concerns the pallet numbering scheme. Point 8 of the handover, which concerns the pallet numbering scheme. Point 9 of the handover, which concerns the pallet numbering scheme. Point 10 of the handover, which concerns the pallet numbering scheme. Point 11 of the handover, which concerns the pallet numbering scheme. Point 12 of the handover, which concerns the pallet numbering scheme. Point 13 of the handover, which concerns the pallet numbering scheme. Point 14 of the handover, which concerns the pallet numbering scheme. Point 15 of the handover, which concerns the pallet numbering scheme. Point 16 of the handover, which concerns the pallet numbering scheme. Point 17 of the handover, which concerns the pallet numbering scheme. Point 18 of the handover, which concerns the pallet numbering scheme. Point 19 of the handover, which concerns the pallet numbering scheme. Point 20 of the handover, which concerns the pallet numbering scheme. Point 21 of the handover, which concerns the pallet numbering scheme. Point 22 of the handover, which concerns the pallet numbering scheme. Point 23 of the handover, which concerns the pallet numbering scheme. Point 24 of the handover, which concerns the pallet numbering scheme. Point 25 of the handover, which concerns the pallet numbering scheme. Point 26 of the handover, which concerns the pallet numbering scheme. Point 27 of the handover, which concerns the pallet numbering scheme. Point 28 of the handover, which concerns the pallet numbering scheme. Point 29 of the handover, which concerns the pallet numbering scheme. Point 30 of the handover, which concerns the pallet numbering scheme. Point 31 of the handover, which concerns the pallet numbering scheme. Point 32 of the handover, which concerns the pallet numbering scheme. Point 33 of the handover, which concerns the pallet numbering scheme. Point 34 of the handover, which concerns the pallet numbering scheme. Point 35 of the handover, which concerns the pallet numbering scheme. Point 36 of the handover, which concerns the pallet numbering scheme. Point 37 of the handover, which concerns the pallet numbering scheme. Point 38 of the handover, which concerns the pallet numbering scheme. Point 39 of the handover, which concerns the pallet numbering scheme. Point 40 of the handover, which concerns the pallet numbering scheme. Point 41 of the handover, which concerns the pallet numbering scheme. Point 42 of the handover, which concerns the pallet numbering scheme. Point 43 of the handover, which concerns the pallet numbering scheme. Point 44 of the handover, which concerns the pallet numbering scheme. Point 45 of the handover, which concerns the pallet numbering scheme. Point 46 of the handover, which concerns the pallet numbering scheme. Point 47 of the handover, which concerns the pallet numbering scheme. Point 48 of the handover, which concerns the pallet numbering scheme. Point 49 of the handover, which concerns the pallet numbering scheme. Point 50 of the handover, which concerns the pallet numbering scheme. Point 51 of the handover, which concerns the pallet numbering scheme. Point 52 of the handover, which concerns the pallet numbering scheme. Point 53 of the handover, which concerns the pallet numbering scheme. Point 54 of the handover, which concerns the pallet numbering scheme. Point 55 of the handover, which concerns the pallet numbering scheme. Point 56 of the handover, which concerns the pallet numbering scheme. Point 57 of the handover, which concerns the pallet numbering scheme. Point 58 of the handover, which concerns the pallet numbering scheme. Point 59 of the handover, which concerns the pallet numbering scheme. Point 60 of the handover, which concerns the pallet numbering scheme.",
+          "has_answer": true
+        },
+        {
+          "role": "user",
+          "content": "Thanks, I will read it on the train."
+        }
+      ]
+    ]
+  }
+]

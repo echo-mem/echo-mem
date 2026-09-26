@@ -1,0 +1,116 @@
+[
+  {
+    "sample_id": "fixture-conv-1",
+    "conversation": {
+      "speaker_a": "Ada",
+      "speaker_b": "Bo",
+      "session_1_date_time": "3 May 2024",
+      "session_1": [
+        {
+          "speaker": "Ada",
+          "dia_id": "D1:1",
+          "text": "Morning Bo, how did the allotment inspection go?"
+        },
+        {
+          "speaker": "Bo",
+          "dia_id": "D1:2",
+          "text": "Fine in the end. They only cared about the compost bins."
+        },
+        {
+          "speaker": "Ada",
+          "dia_id": "D1:3",
+          "text": "I adopted a three legged tortoise called Mortimer on Tuesday."
+        },
+        {
+          "speaker": "Bo",
+          "dia_id": "D1:4",
+          "text": "A tortoise! Where is he living?"
+        },
+        {
+          "speaker": "Ada",
+          "dia_id": "D1:5",
+          "text": "In the conservatory, under the broken radiator."
+        },
+        {
+          "speaker": "Bo",
+          "dia_id": "D1:6",
+          "text": "Send a photograph when he settles in."
+        }
+      ],
+      "session_2_date_time": "19 June 2024",
+      "session_2": [
+        {
+          "speaker": "Bo",
+          "dia_id": "D2:1",
+          "text": "Did you ever fix the radiator in the conservatory?"
+        },
+        {
+          "speaker": "Ada",
+          "dia_id": "D2:2",
+          "text": "I replaced it with a heat lamp, which Mortimer prefers anyway."
+        },
+        {
+          "speaker": "Bo",
+          "dia_id": "D2:3",
+          "text": "I have started evening classes in marine biology at the polytechnic."
+        },
+        {
+          "speaker": "Ada",
+          "dia_id": "D2:4",
+          "text": "Marine biology suits you. Is it two evenings a week?"
+        },
+        {
+          "speaker": "Bo",
+          "dia_id": "D2:5",
+          "text": "Three, and one of them is a lab on Saturdays."
+        },
+        {
+          "speaker": "Ada",
+          "dia_id": "D2:6",
+          "text": "Then I will stop ringing you on Saturday mornings."
+        }
+      ]
+    },
+    "qa": [
+      {
+        "question": "What animal did Ada adopt?",
+        "answer": "a three legged tortoise called Mortimer",
+        "evidence": [
+          "D1:3"
+        ],
+        "category": 4
+      },
+      {
+        "question": "When did Ada adopt the tortoise?",
+        "answer": "Tuesday, before 3 May 2024",
+        "evidence": [
+          "D1:3"
+        ],
+        "category": 2
+      },
+      {
+        "question": "Why did Ada stop ringing Bo on Saturday mornings?",
+        "answer": "Bo has a marine biology lab on Saturdays",
+        "evidence": [
+          "D2:3",
+          "D2:5"
+        ],
+        "category": 1
+      },
+      {
+        "question": "What is Bo's opinion of tortoise racing?",
+        "evidence": [
+          "D1:4"
+        ],
+        "category": 5,
+        "adversarial_answer": "not mentioned in the conversation"
+      },
+      {
+        "question": "A question citing nothing, which must be skipped rather than scored",
+        "answer": "unscoreable",
+        "evidence": [],
+        "category": 4
+      }
+    ]
+  }
+]

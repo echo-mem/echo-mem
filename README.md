@@ -165,8 +165,8 @@ difference nobody sized is not a result.
 |---|---|---|
 | Context per recall vs injecting everything | **96.7% less**, hit@10 0.872 over 1,190 questions | `echo-memory eval --context` |
 | The same saving across 8x of corpus growth | 75.5% at 32 facts rising to **96.4% at 261**, hit@10 0.900 to 0.946 | `echo-memory eval --context --sweep` |
-| LoCoMo retrieval, 1,982 questions, 5,882 turns | recall@10 **0.601**, hit@10 0.658, MRR 0.460 | `scripts/locomo-bench.py` |
-| LongMemEval retrieval, 90 questions, 15 per type | session@10 **0.940**, turn@10 0.727 | `scripts/longmemeval-bench.py --per-type 15` |
+| LoCoMo retrieval, 1,982 questions, 5,882 turns | recall@10 **0.601**, hit@10 0.658, MRR 0.460, session@10 0.850 | `echo-memory eval-external locomo` |
+| LongMemEval retrieval, 90 questions, 15 per type | session@10 **0.937**, recall@10 0.727, MRR 0.428 | `echo-memory eval-external longmemeval --per-type 15` |
 | Server side model calls per write | **0** | `echo-memory benchmark` |
 | Write, query, digest latency (median) | 15ms, 8ms, 1ms | `echo-memory benchmark` |
 | Entity resolution AUC | 0.666, 95% CI [0.421, 0.881] | `echo-memory calibrate` |
