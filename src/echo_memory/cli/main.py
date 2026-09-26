@@ -812,6 +812,12 @@ def main(argv: list[str] | None = None) -> int:
         from echo_memory.eval import external
         from echo_memory.ingestion.embeddings import LocalEmbedder
 
+        try:
+            external.check_flags(args.dataset, args.per_type)
+        except ValueError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+
         conn = connect(config.database_url)
         prefix = external.PREFIXES[args.dataset]
         held = external.foreign_facts(conn, prefix)

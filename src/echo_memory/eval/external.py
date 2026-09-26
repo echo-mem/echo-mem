@@ -240,19 +240,26 @@ def _locomo_session_keys(conversation: dict) -> list[str]:
     )
 
 
-def load_locomo(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance]:
-    """One instance per conversation, one question per `qa` entry.
+def check_flags(dataset: str, per_type: int) -> None:
+    """Reject a combination that cannot mean anything, before anything costs
+    time. The CLI calls this before loading the embedding model, which is 6
+    seconds, and the loader calls it too so no caller can skip it.
 
-    `per_type` is rejected rather than ignored: every LoCoMo conversation
+    `per_type` on LoCoMo is rejected rather than ignored: every conversation
     carries questions of all five categories, so there is no per-type prefix to
-    take and a flag that silently did nothing would be read as one that worked.
+    take, and a flag that silently did nothing would be read as one that worked.
     """
-    if per_type:
+    if per_type and dataset == "locomo":
         raise ValueError(
             "--per-type is a LongMemEval flag: each LoCoMo conversation already "
             "carries all five question categories, so stratifying by type would "
             "mean dropping questions rather than choosing instances"
         )
+
+
+def load_locomo(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance]:
+    """One instance per conversation, one question per `qa` entry."""
+    check_flags("locomo", per_type)
     for sample in instances_in(path, limit):
         conversation = sample["conversation"]
         turns: list[Turn] = []
