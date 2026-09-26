@@ -1,7 +1,7 @@
 """somewhere to record a fact's text being re-read for a cause it already states
 
-Revision ID: 0025
-Revises: 0024
+Revision ID: 0026
+Revises: 0025
 Create Date: 2026-09-26
 
 Production holds 38,479 edges and 2 causal hints, both written by a smoke test.
@@ -41,8 +41,8 @@ also carries `causal_hint_origin`, which is what makes the pass reversible:
 
 from alembic import op
 
-revision = "0025"
-down_revision = "0024"
+revision = "0026"
+down_revision = "0025"
 branch_labels = None
 depends_on = None
 
