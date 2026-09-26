@@ -382,9 +382,13 @@ Concrete Schema). Real MVCC gives correct concurrent multi-writer behavior nativ
 **Vector search:** **pgvector** (PostgreSQL License), mature, extremely widely adopted
 (including by Honcho), lives in the same database, no separate vector store to sync.
 
-**Lexical search:** Postgres's **native full-text search** (`tsvector`/`ts_rank`,
-GIN-indexed, using `plainto_tsquery`/`websearch_to_tsquery`, never raw `to_tsquery` on
-user input, per the security review), built-in, not a third-party dependency.
+**Lexical search:** Postgres's **native full-text search** (`tsvector`, GIN-indexed,
+using `plainto_tsquery`/`websearch_to_tsquery`, never raw `to_tsquery` on user input, per
+the security review), built-in, not a third-party dependency. Ranking is BM25 as of
+0.5.3, computed in SQL over per-scope corpus statistics rather than installed as an
+extension; `ts_rank` remains the fallback for a scope whose statistics have not been
+built yet, and `ECHO_MEMORY_LEXICAL_BM25=0` returns to it everywhere. The §2 finding
+below is what this resolves.
 
 **Fusion:** Reciprocal Rank Fusion combining pgvector + full-text-search scores only (2
 signals), v1a's *feature* scope is unchanged by the storage decision above. PPR isn't
@@ -722,8 +726,11 @@ start so v1b doesn't need a breaking API change).
   duplicate-node pattern during the v1a trial; see MATHS.local.md §5.
 - **External review of MATHS.local.md (2026-08-21), v1b/v1c findings not yet acted on.**
   §5 (entity resolution) and §8 (AGE rationale) are corrected above; the rest is v1b/v1c
-  scoped and deferred to when those PRs start, not lost: `ts_rank` has no IDF unlike BM25
-  (§2, fixable via `setweight` A/B/D tagging); RRF's PPR seed isn't independent of the
+  scoped and deferred to when those PRs start, not lost: ~~`ts_rank` has no IDF unlike
+  BM25 (§2, fixable via `setweight` A/B/D tagging)~~, acted on in 0.5.3, with BM25
+  computed in SQL rather than `setweight` tagging, because weight tags change term
+  importance and the missing pieces were IDF, saturation and length normalisation;
+  RRF's PPR seed isn't independent of the
   vector ranker unless seeded from entity links, not vector top-K (§3/§4); PPR's actual
   API is `nx.pagerank(G, alpha=.85, personalization=v)`, and it raises
   `PowerIterationFailedConvergence` uncaught (§4); hub nodes dominate every PPR result
