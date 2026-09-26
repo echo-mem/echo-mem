@@ -51,6 +51,35 @@ STALE_RATIO = float(os.environ.get("ECHO_MEMORY_BM25_STALE_RATIO", "0.2"))
 # discriminate between.
 MIN_DOCS = int(os.environ.get("ECHO_MEMORY_BM25_MIN_DOCS", "50"))
 
+# The fewest writes between rebuilds, whatever the proportional tolerance
+# says. Its own constant rather than a second use of MIN_DOCS, which was the
+# first thing tried and made the floor dominate: at MIN_DOCS 50 a scope of 61
+# facts needed 50 writes to drift rather than the 12 its tolerance implies,
+# so every scope under a few hundred facts was governed by the floor and not
+# by the ratio at all.
+#
+# Ten writes of a fifty fact scope is a five millisecond rebuild. The floor
+# exists to stop a tiny scope rebuilding on every write, not to hold back a
+# real one.
+MIN_REBUILD_WRITES = int(os.environ.get("ECHO_MEMORY_BM25_MIN_REBUILD_WRITES", "10"))
+
+# How far a scope may grow past its statistics before they are rebuilt, as a
+# fraction of the size they were built at.
+#
+# Checked on every write, which is affordable because the check is arithmetic
+# on two integers the database already maintains rather than a count of the
+# scope. See _stale.
+#
+# This replaced a fixed rebuild interval, and the reason is worth keeping. A
+# constant interval cannot bound a proportional drift: a scope rebuilt at 500
+# facts goes stale at 600 and was not rebuilt until 1000, so the ranker
+# switched itself off for four fifths of the writes while its setting said it
+# was on. Shrinking the interval narrows that window without closing it.
+#
+# None of its own tests saw this. Running the thing end to end against an
+# empty database did, at 62 facts: refreshed at 49, drift 0.265 against a
+# tolerance of 0.2, BM25 silently off.
+
 _FACT_TEXT = """(f.properties ->> '"fact"'::agtype)"""
 _ACTIVE = """(f.properties ->> '"t_invalid"'::agtype) IS NULL"""
 _SCOPED = """(f.properties ->> '"group_id"'::agtype) = %s"""
@@ -92,18 +121,25 @@ def refresh(conn, group_id: str) -> dict:
         (group_id,),
     ).fetchone()
     doc_count, avg_len = int(row[0]), float(row[1])
+    # The write counter is stamped from group_state rather than passed in, so
+    # a rebuild triggered from anywhere - the write path, reindex, a test -
+    # records the same thing.
     conn.execute(
         """
         INSERT INTO public.lexical_scope
-               (group_id, doc_count, avg_doc_length, refreshed_at, refreshed_docs)
-        VALUES (%s, %s, %s, now(), %s)
+               (group_id, doc_count, avg_doc_length, refreshed_at, refreshed_docs,
+                refreshed_write_count)
+        VALUES (%s, %s, %s, now(), %s,
+                coalesce((SELECT write_episode_count FROM public.group_state
+                           WHERE group_id = %s), 0))
         ON CONFLICT (group_id) DO UPDATE
            SET doc_count = EXCLUDED.doc_count,
                avg_doc_length = EXCLUDED.avg_doc_length,
                refreshed_at = now(),
-               refreshed_docs = EXCLUDED.refreshed_docs
+               refreshed_docs = EXCLUDED.refreshed_docs,
+               refreshed_write_count = EXCLUDED.refreshed_write_count
         """,
-        (group_id, doc_count, avg_len, doc_count),
+        (group_id, doc_count, avg_len, doc_count, group_id),
     )
     _logger.info(
         "bm25_refresh",
@@ -117,25 +153,15 @@ def usable(conn, group_id: str) -> bool:
 
     False is a normal answer and the caller falls back to ts_rank, which is
     what every version of this code did until now. A scope that has never
-    been refreshed, or has grown past STALE_RATIO since it was, gets the old
-    behaviour rather than a wrong one: stale inverse document frequency does
-    not fail loudly, it just quietly ranks by a corpus that no longer exists.
+    been refreshed, is too small to have a corpus, or has grown past
+    STALE_RATIO since its last rebuild gets the old behaviour rather than a
+    wrong one: stale inverse document frequency does not fail loudly, it
+    quietly ranks against a corpus that no longer exists.
     """
-    row = conn.execute(
-        "SELECT doc_count, refreshed_docs FROM public.lexical_scope WHERE group_id = %s",
-        (group_id,),
-    ).fetchone()
-    if row is None:
+    row = _staleness_row(conn, group_id).fetchone()
+    if row is None or row[0] is None or int(row[0]) < MIN_DOCS:
         return False
-    refreshed_docs = int(row[1])
-    if refreshed_docs < MIN_DOCS:
-        return False
-    (live,) = conn.execute(
-        f"""SELECT count(*) FROM {GRAPH}."FACT" f WHERE {_SCOPED} AND {_ACTIVE}""",
-        (group_id,),
-    ).fetchone()
-    drift = abs(int(live) - refreshed_docs) / max(refreshed_docs, 1)
-    return drift <= STALE_RATIO
+    return not _grown_past_tolerance(row)
 
 
 def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[str, float]]:
@@ -213,3 +239,66 @@ def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[
         (group_id, list(terms), group_id, group_id, limit),
     ).fetchall()
     return [(str(edge_id), float(score)) for edge_id, score in rows]
+
+
+def _grown_past_tolerance(row) -> bool:
+    """Whether a scope has outgrown its statistics, from two integers.
+
+    ONE predicate, used by both usable() and refresh_if_due(), and that is
+    the point rather than tidiness. When they were separate conditions they
+    disagreed, and the disagreement was a window in which the statistics were
+    declared untrustworthy but not yet rebuilt - so the ranker fell back to
+    ts_rank while its setting said BM25, silently, for as long as the two
+    thresholds differed. That bug has now been introduced twice in one day,
+    in two different shapes, which is what a shared predicate prevents.
+
+    group_state.write_episode_count is already incremented inside every
+    write's transaction, so growth is arithmetic rather than a scan. Writes
+    over-estimate facts, since a call can carry several or be refused
+    outright, and over-estimating rebuilds slightly early - the harmless
+    direction.
+
+    MIN_REBUILD_WRITES stops a small scope rebuilding on every write, where a
+    proportional tolerance is a couple of facts wide.
+    """
+    if row is None:
+        return True
+    refreshed_docs, refreshed_write_count, live_write_count = row
+    if refreshed_docs is None or refreshed_write_count is None:
+        return True
+    growth = max(0, int(live_write_count) - int(refreshed_write_count))
+    return growth > max(STALE_RATIO * int(refreshed_docs), MIN_REBUILD_WRITES)
+
+
+def _staleness_row(conn, group_id: str):
+    return conn.execute(
+        """SELECT ls.refreshed_docs, ls.refreshed_write_count,
+                  coalesce(gs.write_episode_count, 0)
+             FROM public.lexical_scope ls
+             LEFT JOIN public.group_state gs ON gs.group_id = ls.group_id
+            WHERE ls.group_id = %s""",
+        (group_id,),
+    )
+
+
+def refresh_if_due(conn, group_id: str, write_count: int) -> bool:
+    """Rebuild a scope's statistics when they have stopped describing it.
+
+    Called from inside write_episode's transaction, which already holds this
+    scope's advisory lock, so two writers cannot rebuild at once.
+
+    Checked on every write, because the check is two integers rather than a
+    scan, and rebuilt only when it says stale. So a quiet scope pays nothing
+    and a growing one is never left ranking against a corpus it has outgrown
+    - which is the window a fixed interval could not close.
+
+    A scope below MIN_DOCS is left alone by _stale, which treats statistics
+    built over too small a corpus as never trustworthy. There is nothing
+    there to be rare among.
+    """
+    if write_count < MIN_REBUILD_WRITES:
+        return False
+    if not _grown_past_tolerance(_staleness_row(conn, group_id).fetchone()):
+        return False
+    refresh(conn, group_id)
+    return True
