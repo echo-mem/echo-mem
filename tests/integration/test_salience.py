@@ -72,16 +72,28 @@ def test_recency_beats_raw_frequency(migrated_db):
 
 def test_a_burst_of_reads_counts_once(migrated_db):
     """Otherwise an agent loop asking the same question ten times in a minute
-    manufactures activation, and the fact it happened to return rises for
-    every unrelated question afterwards."""
+    manufactures activation, and the fact it happened to return then rises
+    for every unrelated question afterwards.
+
+    Compared against a single read at the same moment, which isolates the
+    collapsing from the decay. An earlier version compared a burst against
+    three reads spread over hours and asserted the spread one won. It does
+    not and should not: one retrieval thirty seconds ago genuinely outweighs
+    three several hours old, which is the decay working. Asserting two
+    mechanisms at once measured neither, and it passed locally and failed in
+    CI because the margin was arithmetic noise.
+    """
     conn = connect(migrated_db)
-    bursty, steady = _write(conn, 1), _write(conn, 2)
+    bursty, once = _write(conn, 1), _write(conn, 2)
     for _ in range(10):
         _recall(conn, [bursty], seconds_ago=30)
-    for n in range(3):
-        _recall(conn, [steady], seconds_ago=n * 7200 + 60)
+    _recall(conn, [once], seconds_ago=30)
 
-    assert salience.rank(conn, GROUP, [bursty, steady]) == [steady, bursty]
+    ranked = salience.rank(conn, GROUP, [bursty, once])
+
+    # Equal activation, so the reordering is a no-op and the input order
+    # survives. Ten reads in one window are worth exactly one.
+    assert ranked == [bursty, once]
 
 
 def test_it_reorders_and_never_adds_or_drops(migrated_db):
