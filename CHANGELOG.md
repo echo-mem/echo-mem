@@ -9,6 +9,65 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+## 0.5.3
+
+**The lexical channel ranks by BM25.** `ts_rank` counts term occurrences and
+nothing else: no inverse document frequency, so a word in every fact of a scope
+counts as much as one in three; no saturation, so repetition scales linearly;
+no length normalisation, so a long fact is punished for being long. On 324 real
+prompts the rank-3 and rank-4 scores were identical in 59% of them, which meant
+Postgres scan order decided which fact a user saw. Reciprocal rank fusion reads
+rank position and never the score underneath it, so a channel ordered by coin
+flip hands the fusion a coin flip.
+
+Measured before it was switched on, paired bootstrap on a real store:
+entity_pair +0.0271 MRR [+0.0083, +0.0481], multihop +0.0271 [+0.0166, +0.0381],
+the other two shapes inside noise, none regressing, and every shape answering in
+12 to 20% fewer tokens. `ECHO_MEMORY_LEXICAL_BM25=0` returns to `ts_rank`.
+
+**A scope gets its statistics without being told to run anything.** BM25 needs
+corpus statistics, and falls back to `ts_rank` for any scope that has none, so
+switching the default on without this would have read as on while every query
+quietly took the old path. Statistics are rebuilt amortised on write, inside the
+transaction that already holds the scope's advisory lock, and by `reindex`.
+Staleness is two counters compared, not a corpus scan: migration 0027 records
+the write counter the statistics were built at, and one predicate decides both
+whether they are usable and whether they are due. A fixed rebuild interval
+cannot bound a proportional drift tolerance, which is how an earlier version
+switched BM25 off for four fifths of writes.
+
+**`query_memory` takes `as_of`.** Every fact has carried `t_valid` and
+`t_invalid` since the first migration and the read path had only ever asked
+whether a fact is current, so the store paid to keep the whole record of what a
+scope believed and could not answer the first question a post mortem asks. The
+instant is unix seconds, and every channel honours it: vector, lexical, the
+graph hop, the digest. Writing the same (source, target, relation_type) again
+does not edit the old fact, it ends it, so the history is real rather than
+reconstructed.
+
+**`echo-memory infer-causal-hints` types the facts a store already holds.**
+`trace_cause` shipped in 0.5.0 with nothing to walk: facts written before it carry
+no hint, and on this author's production store 38,479 edges carried 2 hints, both
+from a smoke test. The command re-reads the fact text already stored with your own
+model (`ECHO_MEMORY_LLM_API_KEY`, `ECHO_MEMORY_LLM_MODEL`), types the edges whose
+own sentence states the relation, and is a dry run until `--write`. `--clear
+--write` takes it back, exactly the hints it wrote and never one a session
+asserted at write time.
+
+This is extraction done late, not causal discovery, and the difference is
+enforced rather than promised. A sentence with no causal connective is never sent
+to a model, so co-occurrence is refused before it costs anything, and every
+proposal has to quote the words that state the relation: a quote not literally
+present in the fact is dropped, so a model reasoning from the world instead of
+reading the sentence gets nothing stored. Migration 0026 records one verdict per
+fact examined, so a pass over 38,479 facts can be interrupted without paying the
+model again for the sentences that stated nothing.
+
+It does not change what the engine does on a write. Nothing under `ingestion/` or
+`retrieval/` imports the module, it is deliberately not part of
+`infra.config.Config` so the server cannot reach a provider key, and a store that
+never runs the command never causes a model call.
+
 **`echo-memory eval-external` runs LoCoMo and LongMemEval.** `eval` scores this
 store against itself, which cannot be set beside anybody else's number. This
 runs the corpora the published figures are taken on, through the real
@@ -35,6 +94,22 @@ complement is scored without being rewritten.
 `scripts/locomo-bench.py` and `scripts/longmemeval-bench.py` are gone, replaced
 by the subcommand. The numbers are unchanged, and
 [`docs/BENCHMARKS.md`](docs/BENCHMARKS.md) records the run that establishes that.
+
+**Two ideas measured and not shipped, kept with their numbers.** Routing the
+graph hop per query cuts its damage by about 80% and still gains nothing on the
+shape it was built for: multihop comes out at -0.0002 MRR. Salience, ACT-R
+base-level activation over the recall log migration 0021 has been filling since
+September, regresses all four shapes with every interval clear of zero. Both are
+off, behind `ECHO_MEMORY_ROUTE_EXPANSION` and `ECHO_MEMORY_SALIENCE`, and both
+are kept so the next person to have the idea finds the experiment rather than
+repeating it. They fail for the same reason: reciprocal rank fusion weights the
+top of every list equally, so a list ordered by something that is not about this
+query spends a top slot on a fact the query did not ask for.
+
+**`echo-memory eval` scores those two as ablations.** `+ routed expansion` and
+`+ salience` sit beside the existing rows, so the numbers above are something a
+reader can reproduce rather than take on trust.
+
 
 ## 0.5.2
 
