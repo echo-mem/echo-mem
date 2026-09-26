@@ -67,3 +67,7 @@ echo-memory-skill.zip
 .claude-flow/
 .swarm/
 ruvector.db
+
+# Worktrees created for background agents. Each is its own checkout of this
+# repository; committing one nests a git repo inside a git repo.
+.claude/worktrees/

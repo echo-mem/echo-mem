@@ -5,6 +5,7 @@ Runs over stdio by default (mcp.server.mcpserver's MCPServer.run default),
 not a network listener at all, let alone one bound beyond localhost; see
 the design doc's Constraints ("v1 is single-user, local-only")."""
 
+import atexit
 import inspect
 import json
 import threading
@@ -106,6 +107,30 @@ def startup(config: Config | None = None, embedder: Embedder | None = None) -> N
         # a background task turns into confusing output somewhere else.
         _state.warming = threading.Thread(target=_warm, args=(warm,), daemon=True)
         _state.warming.start()
+        # Wait for it at exit, briefly, rather than letting the interpreter
+        # tear down underneath it.
+        #
+        # A daemon thread is killed abruptly at shutdown. This one is inside
+        # torch when that happens, and killing a thread mid C++ produces
+        # "terminate called without an active exception" and SIGABRT - exit
+        # code 134, after every test has already passed. CI saw exactly that:
+        # 771 passed, 5 skipped, then aborted. It is timing dependent, so it
+        # is rare on a machine with the model cached and common on one
+        # downloading it, which is the wrong way round for a release gate.
+        #
+        # Bounded, because the point of loading in the background is that
+        # nothing waits for it. A load still running after this long is one
+        # the process was never going to benefit from anyway.
+        atexit.register(_finish_warming)
+
+
+WARM_SHUTDOWN_GRACE_SECONDS = 10.0
+
+
+def _finish_warming() -> None:
+    warming = getattr(_state, "warming", None)
+    if warming is not None and warming.is_alive():
+        warming.join(timeout=WARM_SHUTDOWN_GRACE_SECONDS)
 
 
 def _warm(warm) -> None:
@@ -119,8 +144,16 @@ def _warm(warm) -> None:
             "embedder_warm",
             extra={"duration_ms": (time.perf_counter() - started) * 1000},
         )
-    except Exception:  # see docstring
-        _logger.warning("embedder_warm_failed", exc_info=True)
+    except Exception:  # noqa: BLE001 - see docstring
+        # Logging can itself fail here, and does: a thread still running while
+        # the interpreter shuts down finds the log stream closed and atexit
+        # refusing new registrations, so reporting the first failure raises a
+        # second one out of a thread with nowhere to put it. The report is
+        # best effort; the swallow is the contract in the docstring.
+        try:
+            _logger.warning("embedder_warm_failed", exc_info=True)
+        except Exception:  # noqa: BLE001, S110 - nowhere left to report to
+            pass
 
 
 def _tool(fn):
