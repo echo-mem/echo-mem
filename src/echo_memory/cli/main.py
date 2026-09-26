@@ -723,6 +723,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("vector only", {"vector_only": True}),
                 ("lexical only", {"lexical_only": True}),
                 ("+ graph hop", {"graph_hops": 1}),
+                ("+ BM25 lexical", {"lexical_bm25": True}),
             ]
 
         results = []

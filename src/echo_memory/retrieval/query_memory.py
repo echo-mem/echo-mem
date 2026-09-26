@@ -6,11 +6,13 @@ for a plain ranked list, not just for PPR's probability-mass case in v1b."""
 
 import json
 import math
+import os
 import re
 import time
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger, log_query_memory
+from echo_memory.retrieval import bm25
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
 from echo_memory.retrieval.fusion import K as RRF_K
 
@@ -451,13 +453,31 @@ def prompt_terms(prompt: str) -> list[str]:
     return terms[:MAX_TERMS]
 
 
-def _lexical_any_candidates(conn, group_id: str, query: str, limit: int) -> list[str]:
+# Whether the lexical channel ranks by BM25 or by ts_rank. Off by default
+# until the eval says otherwise: this changes which facts a query returns, and
+# a change to retrieval that ships on a plausible story rather than a measured
+# one is how the graph hop came to be on for months at -0.142 MRR.
+LEXICAL_BM25 = os.environ.get("ECHO_MEMORY_LEXICAL_BM25", "").lower() in ("1", "true", "yes")
+
+
+def _lexical_any_candidates(
+    conn, group_id: str, query: str, limit: int, use_bm25: bool | None = None
+) -> list[str]:
     """Lexical retrieval that matches ANY salient term, ranked. Used by the
     prompt-time recall path; the main query path keeps AND semantics, which is
     correct for a deliberate query and is what v1a's retrieval was tested on."""
     terms = prompt_terms(query)
     if not terms:
         return []
+
+    # BM25 when the scope has statistics worth ranking with, ts_rank when it
+    # does not. Falling back rather than refusing, because a scope too small
+    # or too freshly grown for corpus statistics still has to answer, and
+    # ts_rank is what it has always answered with.
+    if use_bm25 is None:
+        use_bm25 = LEXICAL_BM25
+    if use_bm25 and bm25.usable(conn, group_id):
+        return [edge_id for edge_id, _ in bm25.candidates(conn, group_id, terms, limit)]
     tsquery, params = _any_term_tsquery(terms)
     rows = conn.execute(
         f"""
@@ -643,7 +663,7 @@ def query_memory(
     conn, group_id: str, query: str | None, top_k: int, embedder,
     digest: bool = False, lexical_only: bool = False,
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
-    rrf_k: int | None = None, graph_hops: int = 0,
+    rrf_k: int | None = None, graph_hops: int = 0, lexical_bm25: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -653,6 +673,12 @@ def query_memory(
     valid active facts instead of ranking against a query string: an opt-in
     "catch me up" convenience for session start, explicitly invoked, never
     auto-triggered (see the CEO plan's scope decision #2).
+
+    lexical_bm25 chooses how the lexical channel ranks: BM25 over per scope
+    corpus statistics, or ts_rank. None means the ECHO_MEMORY_LEXICAL_BM25
+    default. It is a keyword here for the same reason the others are - so the
+    harness can score it against what it replaces, rather than it shipping on
+    a plausible story.
 
     use_mmr, floor, vector_only and rrf_k exist so the eval harness can ablate
     one change at a time and show which actually helped. Keyword only, and
@@ -695,7 +721,9 @@ def query_memory(
         vector_ids, lexical_ids = [], []
     elif lexical_only:
         vector_ids = []
-        lexical_ids = _lexical_any_candidates(conn, group_id, query, LIST_DEPTH)
+        lexical_ids = _lexical_any_candidates(
+            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25
+        )
         ranked_ids = lexical_ids[:top_k]
     else:
         embedding = query_embedding = embedder.embed(query)
@@ -718,7 +746,7 @@ def query_memory(
         # path kept the version that does not work, and the pair looked
         # deliberate.
         lexical_ids = [] if vector_only else _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH
+            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25
         )
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
