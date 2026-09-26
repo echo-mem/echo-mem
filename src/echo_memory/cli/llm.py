@@ -117,11 +117,13 @@ def complete(provider: Provider, system: str, prompt: str, max_tokens: int = 200
         # The status and the provider's own message, because "it failed" sends
         # an operator to the wrong place: an expired key, a model name that does
         # not exist and a rate limit all look identical without it.
-        detail = ""
         try:
             detail = e.read().decode("utf-8")[:500]
-        except Exception:  # noqa: BLE001
-            pass
+        except Exception as read_failure:  # noqa: BLE001
+            # The body is optional context on an error that is already being
+            # raised; losing it must not replace the status code with a
+            # traceback about failing to read it.
+            detail = f"(body unreadable: {read_failure})"
         raise ModelUnavailable(f"{provider.model} returned HTTP {e.code}: {detail}") from e
     except (urllib.error.URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
         raise ModelUnavailable(f"could not reach {provider.endpoint}: {e}") from e
