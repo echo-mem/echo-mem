@@ -77,13 +77,64 @@ class ValidationError(Exception):
     pass
 
 
-def _validate(query: str | None, top_k: int, digest: bool) -> None:
+def _validate(
+    query: str | None, top_k: int, digest: bool, as_of: int | None = None
+) -> None:
     if not digest and (not query or not query.strip()):
         raise ValidationError("query must not be empty")
     if not isinstance(top_k, int) or top_k < 1:
         raise ValidationError(f"top_k must be a positive integer, got {top_k!r}")
     if top_k > MAX_TOP_K:
         raise ValidationError(f"top_k must be at most {MAX_TOP_K}, got {top_k}")
+    # Refused rather than coerced. A caller passing a date string or
+    # milliseconds means something specific and getting a silently different
+    # instant back is worse than being told. bool is rejected explicitly
+    # because it is an int in Python and as_of=True is not a moment.
+    if as_of is not None:
+        if isinstance(as_of, bool) or not isinstance(as_of, int):
+            raise ValidationError(
+                f"as_of must be unix seconds as an integer, got {as_of!r}"
+            )
+        if as_of < 0:
+            raise ValidationError(f"as_of must not be negative, got {as_of}")
+
+
+# Bi-temporal reads.
+#
+# Every fact has carried t_valid and t_invalid since the first migration, and
+# the read path has only ever asked "is it current". So the store pays to keep
+# the whole history of what a scope believed and cannot answer one question
+# about it, which is the first question a post mortem asks: what did we think
+# was true when the decision was made.
+#
+# One predicate. A fact is live at an instant if it had started by then and
+# had not yet been superseded.
+
+
+def live_clause(alias: str, as_of: int | None) -> str:
+    """The time predicate for one table alias.
+
+    Returns the "is it current" form when as_of is None, which is every
+    existing caller, so nothing changes shape for them.
+
+    The instant is interpolated as an integer rather than bound as a
+    parameter, and that needs saying because interpolating into SQL is
+    normally the wrong answer. These queries mix this clause into statements
+    whose other parameters are positional, and psycopg allows positional or
+    named in one statement but not both; threading a new positional through
+    every call site in the right order is the kind of change that goes wrong
+    quietly. int() is a total function onto integers, so nothing that is not
+    a number can reach the statement. The same reasoning and the same
+    coercion are in infra/db.py for ef_search.
+    """
+    if as_of is None:
+        return f"""({alias}.properties ->> '"t_invalid"'::agtype) IS NULL"""
+    moment = int(as_of)
+    return f"""(
+        ({alias}.properties ->> '"t_valid"'::agtype)::bigint <= {moment}
+        AND (({alias}.properties ->> '"t_invalid"'::agtype) IS NULL
+             OR ({alias}.properties ->> '"t_invalid"'::agtype)::bigint > {moment})
+    )"""
 
 
 def _mmr_select(conn, group_id: str, ranked_ids: list[str], top_k: int) -> list[str]:
@@ -292,7 +343,7 @@ VECTOR_CANDIDATE_SQL = f"""
         FROM public.fact_embedding fe
         JOIN {GRAPH}."FACT" f ON f.id = fe.edge_id
         WHERE fe.group_id = %s
-          AND (f.properties ->> '"t_invalid"'::agtype) IS NULL
+          AND {{live}}
         ORDER BY fe.embedding <#> %s::vector
         LIMIT %s
         """
@@ -300,7 +351,7 @@ VECTOR_CANDIDATE_SQL = f"""
 
 def _vector_candidates(
     conn, group_id: str, embedding: list[float], limit: int, floor: float | None = None,
-    scores: dict[str, float] | None = None,
+    scores: dict[str, float] | None = None, as_of: int | None = None,
 ) -> list[str]:
     """Ids, best first. Pass `scores` to also collect the cosine similarity
     this already computed and then threw away - the one number in this system
@@ -317,7 +368,10 @@ def _vector_candidates(
     # against 3.85ms using the index, and the scan is O(n), so ten times the
     # facts is half a second on every query. The determinism it bought is
     # still wanted and is now applied below, where it costs nothing.
-    rows = conn.execute(VECTOR_CANDIDATE_SQL, (embedding, group_id, embedding, limit)).fetchall()
+    rows = conn.execute(
+        VECTOR_CANDIDATE_SQL.format(live=live_clause("f", as_of)),
+        (embedding, group_id, embedding, limit),
+    ).fetchall()
     if floor is None:
         floor = adaptive_cosine_floor(conn, group_id)
     # The tiebreak, moved out of SQL. Sorting by (-score, edge_id) reproduces
@@ -335,7 +389,7 @@ def _vector_candidates(
 
 
 def _graph_candidates(
-    conn, group_id: str, seed_edge_ids: list[str], limit: int
+    conn, group_id: str, seed_edge_ids: list[str], limit: int, as_of: int | None = None
 ) -> list[str]:
     """Facts one hop from the facts a query already found.
 
@@ -380,6 +434,7 @@ def _graph_candidates(
     # fact_group_start_idx and fact_group_end_idx, both (group_id, start_id) and
     # (group_id, end_id), have existed since migration 0013. This is the query
     # they were built for.
+    live_n2 = live_clause("n2", as_of)
     rows = conn.execute(
         f"""WITH seeds AS (
                 SELECT e.id AS seed, e.start_id, e.end_id
@@ -396,7 +451,7 @@ def _graph_candidates(
             JOIN {GRAPH}."FACT" n2
               ON (n2.start_id = ends.node OR n2.end_id = ends.node)
             WHERE (n2.properties ->> '"group_id"'::agtype) = %s
-              AND (n2.properties ->> '"t_invalid"'::agtype) IS NULL""",
+              AND {live_n2}""",
         ([str(i) for i in seed_edge_ids], group_id),
     ).fetchall()
 
@@ -523,7 +578,8 @@ def needs_expansion(conn, group_id: str, query: str) -> bool:
 
 
 def _lexical_any_candidates(
-    conn, group_id: str, query: str, limit: int, use_bm25: bool | None = None
+    conn, group_id: str, query: str, limit: int, use_bm25: bool | None = None,
+    as_of: int | None = None,
 ) -> list[str]:
     """Lexical retrieval that matches ANY salient term, ranked. Used by the
     prompt-time recall path; the main query path keeps AND semantics, which is
@@ -538,9 +594,21 @@ def _lexical_any_candidates(
     # ts_rank is what it has always answered with.
     if use_bm25 is None:
         use_bm25 = LEXICAL_BM25
-    if use_bm25 and bm25.usable(conn, group_id):
+    # Never for an as-of query, and not because it would be awkward to thread
+    # the predicate through. The statistics BM25 ranks with - document
+    # frequency, average length - describe the corpus as it is NOW. Ranking a
+    # past moment by how rare a word became since is not a worse answer to the
+    # question, it is an answer to a different one, and the whole point of an
+    # as-of read is to see what the scope looked like then.
+    #
+    # Historical inverse document frequency would mean keeping a statistics
+    # row per term per instant, which is a different feature with a different
+    # cost. ts_rank has no corpus statistics at all, so it is unaffected by
+    # this and is the honest ranker for a question about the past.
+    if use_bm25 and as_of is None and bm25.usable(conn, group_id):
         return [edge_id for edge_id, _ in bm25.candidates(conn, group_id, terms, limit)]
     tsquery, params = _any_term_tsquery(terms)
+    live_sql = live_clause("f", as_of)
     rows = conn.execute(
         f"""
         SELECT f.id::text,
@@ -548,7 +616,7 @@ def _lexical_any_candidates(
                         {tsquery}) AS score
         FROM {GRAPH}."FACT" f
         WHERE (f.properties ->> '"group_id"'::agtype) = %s
-          AND (f.properties ->> '"t_invalid"'::agtype) IS NULL
+          AND {live_sql}
           AND to_tsvector('english', f.properties ->> '"fact"'::agtype) @@ {tsquery}
         -- Tie broken by id, arbitrary but fixed. ts_rank has no IDF and no
         -- length normalisation, so scores collapse onto a few values and
@@ -569,7 +637,9 @@ def _lexical_any_candidates(
     return [edge_id for edge_id, score in rows if score > TS_RANK_FLOOR]
 
 
-def _digest_candidates(conn, group_id: str, limit: int) -> list[str]:
+def _digest_candidates(
+    conn, group_id: str, limit: int, as_of: int | None = None
+) -> list[str]:
     """No query text to rank against: a digest is "catch me up," not "answer
     this," so it's the most recently valid active facts, chronological, not
     relevance-ranked. See the CEO plan's scope decision #2 (session-start
@@ -578,15 +648,26 @@ def _digest_candidates(conn, group_id: str, limit: int) -> list[str]:
     t_valid is second-granularity, so two facts written within the same
     second tie on it; id(e) DESC breaks the tie deterministically by
     creation order (AGE assigns ids monotonically per label)."""
+    # Cypher rather than SQL, so the clause is written out here instead of
+    # coming from live_clause. Parameterised, because Cypher takes its
+    # arguments as a JSON object and there is no positional collision to
+    # avoid.
+    live = (
+        "e.t_invalid IS NULL" if as_of is None
+        else "e.t_valid <= $as_of AND (e.t_invalid IS NULL OR e.t_invalid > $as_of)"
+    )
+    params = {"gid": group_id, "limit": limit}
+    if as_of is not None:
+        params["as_of"] = int(as_of)
     rows = conn.execute(
         f"""SELECT * FROM cypher('{GRAPH}', $$
             MATCH ()-[e:FACT {{group_id: $gid}}]->()
-            WHERE e.t_invalid IS NULL
+            WHERE {live}
             RETURN id(e)
             ORDER BY e.t_valid DESC, id(e) DESC
             LIMIT $limit
         $$, %s) AS (edge_id agtype)""",
-        (json.dumps({"gid": group_id, "limit": limit}),),
+        (json.dumps(params),),
     ).fetchall()
     return [str(edge_id) for (edge_id,) in rows]
 
@@ -727,6 +808,7 @@ def query_memory(
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
+    as_of: int | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -770,7 +852,7 @@ def query_memory(
     retrieval and bad."""
     start = time.perf_counter()
     try:
-        _validate(query, top_k, digest)
+        _validate(query, top_k, digest, as_of)
     except ValidationError as e:
         log_query_memory(
             _logger, group_id, 0, 0, 0, (time.perf_counter() - start) * 1000, error=str(e)
@@ -780,18 +862,19 @@ def query_memory(
     similarity: dict[str, float] = {}
     query_embedding: list[float] | None = None
     if digest:
-        ranked_ids = _digest_candidates(conn, group_id, top_k)
+        ranked_ids = _digest_candidates(conn, group_id, top_k, as_of=as_of)
         vector_ids, lexical_ids = [], []
     elif lexical_only:
         vector_ids = []
         lexical_ids = _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25
+            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of
         )
         ranked_ids = lexical_ids[:top_k]
     else:
         embedding = query_embedding = embedder.embed(query)
         vector_ids = _vector_candidates(
-            conn, group_id, embedding, LIST_DEPTH, floor=floor, scores=similarity
+            conn, group_id, embedding, LIST_DEPTH, floor=floor, scores=similarity,
+            as_of=as_of,
         )
         # ANY-term, not websearch_to_tsquery's implicit AND.
         #
@@ -809,7 +892,7 @@ def query_memory(
         # path kept the version that does not work, and the pair looked
         # deliberate.
         lexical_ids = [] if vector_only else _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25
+            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of
         )
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
@@ -855,7 +938,9 @@ def query_memory(
             # tell a multi hop question from a single hop one, rather than for
             # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
-            lists.append(_graph_candidates(conn, group_id, seeds, LIST_DEPTH))
+            lists.append(
+                _graph_candidates(conn, group_id, seeds, LIST_DEPTH, as_of=as_of)
+            )
         fused = reciprocal_rank_fusion(lists, k=k) if hops else content
         by_score = sorted(fused, key=fused.get, reverse=True)
         # Diversify before truncating, not after: the point is to choose which
