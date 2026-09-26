@@ -34,7 +34,8 @@ cite the exact turns supporting them.
 
 ```bash
 curl -sLO https://raw.githubusercontent.com/snap-research/locomo/main/data/locomo10.json
-python scripts/locomo-bench.py locomo10.json
+ECHO_MEMORY_DATABASE_URL=postgresql://.../locomo_bench \
+    echo-memory eval-external locomo locomo10.json
 ```
 
 | Category | n | recall@1 | recall@10 | recall@30 | hit@10 | MRR |
@@ -72,7 +73,8 @@ all, 33,261 turns**, and that is what these numbers describe.
 ```bash
 curl -sLo longmemeval_s.json \
   https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s
-python scripts/longmemeval-bench.py longmemeval_s.json --per-type 15
+ECHO_MEMORY_DATABASE_URL=postgresql://.../lme_bench \
+    echo-memory eval-external longmemeval longmemeval_s.json --per-type 15
 ```
 
 Not a prefix, and the distinction is not pedantry. The file is ordered by
@@ -200,9 +202,10 @@ problem.
 
 ## Reproducing any of it
 
-Point every script at a scratch database. They write real facts through the
-real code path, so anything they touch is indistinguishable from ordinary
-memory afterwards.
+Point the two external benchmarks at a scratch database. They write real facts
+through the real code path, so anything they touch is indistinguishable from
+ordinary memory afterwards, and `eval-external` refuses to start when the
+target database holds facts outside its own scopes.
 
 ```bash
 echo-memory eval                   # retrieval quality against your own store
@@ -210,7 +213,18 @@ echo-memory eval --context         # what a recall costs against injecting every
 echo-memory eval --context --sweep # the same, as a curve across corpus size
 echo-memory calibrate              # is entity resolution trustworthy on your data
 echo-memory benchmark              # write, query and digest latency
+echo-memory eval-external locomo      locomo10.json      # published corpus, yours to fetch
+echo-memory eval-external longmemeval longmemeval_s.json --per-type 15
 ```
+
+`--json PATH` writes the machine-readable report, `--results PATH` appends each
+question as it is scored so a killed run keeps what it measured, and a rerun
+skips any scope already holding its full complement of facts. Neither dataset is
+in this repository: both are somebody else's to license, and longmemeval_s is
+278MB. `tests/fixtures/locomo_fixture.json` and
+`tests/fixtures/longmemeval_fixture.json` are synthetic files in the two
+schemas, which is what the test suite runs against and what to point the command
+at first.
 
 The most useful contribution to this repository is a measurement that disagrees
 with one of these.

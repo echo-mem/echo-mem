@@ -107,7 +107,7 @@ though it were measured.
 
 The experiment that settles it is the same corpus twice, scored the same way:
 once with facts the agent chose, once with raw turns. The raw half exists now
-and is reproducible with `scripts/locomo-bench.py`. The extracted half needs a
+and is reproducible with `echo-memory eval-external locomo`. The extracted half needs a
 model key and a stated extraction prompt. Until both halves exist, the position
 above is an argument about where information lives, supported by a latency
 number, a failure rate and a cost shape.
