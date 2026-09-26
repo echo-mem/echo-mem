@@ -101,9 +101,12 @@ def test_statistics_are_refused_rather_than_trusted_when_stale(migrated_db, monk
     document frequencies describing a corpus that no longer exists. Falling
     back to ts_rank is the honest answer; ranking confidently on stale
     statistics is not."""
-    # Pinned out of reach, so the writes below grow the scope without the
-    # write path quietly rebuilding the statistics this test is about.
-    monkeypatch.setattr(bm25, "REFRESH_EVERY", 10**9)
+    # Tolerance pinned out of reach, so the writes below grow the scope
+    # without the write path rebuilding the statistics this test is about.
+    # The write path rebuilds the moment a scope drifts, which is the whole
+    # point of it, so it has to be held off for a test about what usable()
+    # says when nobody rebuilds.
+    monkeypatch.setattr(bm25, "refresh_if_due", lambda *a, **k: False)
     conn = connect(migrated_db)
     _seed(conn)
     bm25.refresh(conn, GROUP)
@@ -186,21 +189,22 @@ def test_statistics_rebuild_themselves_as_a_scope_is_written_to(migrated_db, mon
     otherwise. Every REFRESH_EVERY writes is the compromise, and this is the
     test that it actually fires.
     """
-    # Lowered here rather than through the environment: the real interval is
-    # 500 writes, and a test that takes 500 round trips to make its point is
-    # a test nobody runs.
-    monkeypatch.setattr(bm25, "REFRESH_EVERY", 12)
+    # MIN_DOCS lowered so a scope small enough to write quickly is still big
+    # enough to be worth statistics. Patched on the module rather than through
+    # the environment, after setting one globally for a run un-staled the
+    # scope another test depends on being stale.
+    monkeypatch.setattr(bm25, "MIN_DOCS", 6)
     conn = connect(migrated_db)
     embedder = VectorEmbedder(
-        {f"burst {i}": REFERENCE for i in range(bm25.REFRESH_EVERY + 2)}
+        {f"burst {i}": REFERENCE for i in range(14)}
         | {"the pool": REFERENCE}
-        | {f"burst fact {i}": REFERENCE for i in range(bm25.REFRESH_EVERY + 2)}
+        | {f"burst fact {i}": REFERENCE for i in range(14)}
     )
     assert conn.execute(
         "SELECT count(*) FROM public.lexical_scope WHERE group_id = %s", (GROUP,)
     ).fetchone()[0] == 0, "precondition: nothing has been built yet"
 
-    for i in range(bm25.REFRESH_EVERY):
+    for i in range(12):
         write_episode(
             conn, GROUP, "s1",
             [{"name": f"burst {i}", "type": "t"}, {"name": "the pool", "type": "t"}],
@@ -212,8 +216,44 @@ def test_statistics_rebuild_themselves_as_a_scope_is_written_to(migrated_db, mon
     built = conn.execute(
         "SELECT doc_count FROM public.lexical_scope WHERE group_id = %s", (GROUP,)
     ).fetchone()
-    assert built is not None, f"no rebuild after {bm25.REFRESH_EVERY} writes"
+    assert built is not None, "no rebuild once the scope outgrew its statistics"
     assert built[0] > 0
+
+
+def test_statistics_stay_usable_as_a_scope_keeps_growing(migrated_db, monkeypatch):
+    """The bug this replaced, and the reason the rebuild is tied to staleness
+    rather than to a write count.
+
+    A fixed interval cannot hold a fixed drift tolerance, because the
+    tolerance's denominator grows: a scope rebuilt at 500 facts goes stale at
+    600 and was not rebuilt until 1000, so BM25 was off for four fifths of
+    the writes while the setting said it was on. No unit test saw it. Running
+    the thing end to end on an empty database did, at 62 facts.
+    """
+    monkeypatch.setattr(bm25, "MIN_DOCS", 10)
+    conn = connect(migrated_db)
+    embedder = VectorEmbedder(
+        {f"grow {i}": REFERENCE for i in range(60)}
+        | {f"grow fact {i}": REFERENCE for i in range(60)}
+        | {"the pool": REFERENCE}
+    )
+
+    unusable_at = []
+    for i in range(50):
+        write_episode(
+            conn, GROUP, "s1",
+            [{"name": f"grow {i}", "type": "t"}, {"name": "the pool", "type": "t"}],
+            [{"source": f"grow {i}", "target": "the pool", "relation_type": "about",
+              "fact": f"grow fact {i}", "confidence": "extracted"}],
+            {}, embedder, assume_new=True,
+        )
+        if i >= 20 and not bm25.usable(conn, GROUP):
+            unusable_at.append(i)
+
+    assert not unusable_at, (
+        "BM25 switched itself off while the scope grew, at write "
+        f"{unusable_at[:5]}"
+    )
 
 
 def test_a_rebuild_does_not_fire_on_every_write(migrated_db):
