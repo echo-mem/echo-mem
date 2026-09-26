@@ -208,8 +208,8 @@ above, and what the JSON report records for every run, is:
 
 | File | Bytes | sha256 |
 |---|---:|---|
-| locomo10.json | 2,805,274 | `79fa87e9...ea698ff4` |
-| longmemeval_s | 278,025,796 | `08d8dad4...e117894` |
+| locomo10.json | 2,805,274 | `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4` |
+| longmemeval_s | 278,025,796 | `08d8dad4be43ee2049a22ff5674eb86725d0ce5ff434cde2627e5e8e7e117894` |
 
 The LongMemEval hash is also what the Hub serves as that file's `x-linked-etag`,
 which is what makes it a revision identifier rather than only a checksum.
