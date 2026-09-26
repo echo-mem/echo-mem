@@ -3,7 +3,7 @@
   "name": "io.github.ayushcodes10/echo-mem",
   "title": "Echo Memory",
   "description": "Shared memory for AI agents, as a graph in your own Postgres. Writes never call an LLM.",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "websiteUrl": "https://echo-mem.com",
   "repository": {
     "url": "https://github.com/echo-mem/echo-mem",
@@ -13,7 +13,7 @@
     {
       "registryType": "pypi",
       "identifier": "echo-mem",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "transport": {
         "type": "stdio"
       },
