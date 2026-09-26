@@ -28,7 +28,7 @@ from fake_embedder import REFERENCE, VectorEmbedder, unit_vector_at_angle
 
 from echo_memory.infra.db import connect
 from echo_memory.ingestion.write_episode import write_episode
-from echo_memory.retrieval.query_memory import VECTOR_CANDIDATE_SQL
+from echo_memory.retrieval.query_memory import VECTOR_CANDIDATE_SQL, live_clause
 
 GROUP = "g1"
 
@@ -51,6 +51,17 @@ def _seed(conn):
         {}, embedder, assume_new=True,
     )
     return embedder
+
+
+def _sql() -> str:
+    """The shipped query with its time predicate filled in.
+
+    VECTOR_CANDIDATE_SQL became a template when as-of reads landed: it carries
+    a {live} placeholder the caller substitutes. Executing the raw template
+    sends a literal brace to Postgres, which is a syntax error rather than a
+    wrong answer, and these tests are the only place that runs it by hand.
+    """
+    return VECTOR_CANDIDATE_SQL.format(live=live_clause("f", None))
 
 
 def _plan(conn, sql, params) -> str:
@@ -81,7 +92,7 @@ def test_fact_search_can_use_the_hnsw_index(migrated_db):
     embedder = _seed(conn)
 
     plan = _plan(
-        conn, VECTOR_CANDIDATE_SQL,
+        conn, _sql(),
         (embedder.embed("a fact about the two"), GROUP,
          embedder.embed("a fact about the two"), 50),
     )
@@ -129,7 +140,7 @@ def test_a_second_sort_key_is_what_breaks_it(migrated_db, tiebreak):
     conn = connect(migrated_db)
     embedder = _seed(conn)
     probe = embedder.embed("a fact about the two")
-    broken = VECTOR_CANDIDATE_SQL.replace(
+    broken = _sql().replace(
         "ORDER BY fe.embedding <#> %s::vector",
         f"ORDER BY fe.embedding <#> %s::vector{tiebreak}",
     )
@@ -145,7 +156,7 @@ def test_a_second_sort_key_is_what_breaks_it(migrated_db, tiebreak):
 def test_the_shipped_query_orders_by_distance_and_nothing_else(migrated_db):
     """Cheap, and it fails with a readable message the moment somebody adds a
     sort key back, rather than after they have read a query plan."""
-    order_by = VECTOR_CANDIDATE_SQL.split("ORDER BY", 1)[1].split("LIMIT", 1)[0]
+    order_by = _sql().split("ORDER BY", 1)[1].split("LIMIT", 1)[0]
 
     assert order_by.strip() == "fe.embedding <#> %s::vector", (
         f"ORDER BY has grown a second key, which costs the index: {order_by!r}"
