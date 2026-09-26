@@ -275,7 +275,10 @@ def trace_cause(
 
 
 @_tool
-def query_memory(scope: str, query: str | None = None, top_k: int = 10, digest: bool = False) -> dict:
+def query_memory(
+    scope: str, query: str | None = None, top_k: int = 10,
+    digest: bool = False, as_of: int | None = None,
+) -> dict:
     """Recall prior facts relevant to query, from this agent's own memory
     (scope="solo") or the pool shared across this user's agents
     (scope="shared"). Call this at session start, and any other time
@@ -286,6 +289,11 @@ def query_memory(scope: str, query: str | None = None, top_k: int = 10, digest: 
     digest=True ignores query and returns the most recently written active
     facts instead, as an opt-in "catch me up" convenience; call it
     explicitly at session start if you want one, it's never automatic.
+
+    as_of (optional): unix seconds. Answers with what this scope believed at
+    that moment rather than now, including facts later superseded. Nothing is
+    ever rewritten here, so the history is real: use it for "what did we think
+    was true when this was decided".
 
     Each fact carries rank (1 first), score and matched.
 
@@ -310,7 +318,10 @@ def query_memory(scope: str, query: str | None = None, top_k: int = 10, digest: 
         return {"error": str(e)}
     try:
         with _state.pool.connection() as conn:
-            result = _query_memory(conn, group_id, query, top_k, _state.embedder, digest=digest)
+            result = _query_memory(
+                conn, group_id, query, top_k, _state.embedder,
+                digest=digest, as_of=as_of,
+            )
         # The other read surface. Counted the same way so the ratio in
         # `echo-memory health` covers both, not just the hook.
         if "error" not in result:
