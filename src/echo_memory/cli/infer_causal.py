@@ -487,6 +487,13 @@ def apply(conn, group_id: str, proposals: list[Proposal]) -> dict:
     `causal_hint IS NULL` guard means an edge a caller typed between the scan
     and the write is skipped rather than overwritten, and shows up in the
     difference between what was proposed and what was applied.
+
+    The connection is in autocommit, so a process killed between the SET and the
+    `applied_at` that follows it leaves an edge typed and marked while its scan
+    row still reads unapplied. That state is safe rather than tidy: the next
+    `--write` finds the hint already there, skips the edge instead of writing it
+    twice, and `--clear` works off the marker on the edge rather than off the
+    scan row.
     """
     by_hint: dict[str, list[str]] = {}
     for p in proposals:
@@ -640,8 +647,9 @@ def render_applied(result: dict) -> str:
     lines = [f"Applied {len(result['applied'])} hint(s), each audited."]
     if result["skipped"]:
         lines.append(
-            f"{len(result['skipped'])} skipped: a hint was written by a caller "
-            f"after this was proposed, and a caller's hint is never overwritten."
+            f"{len(result['skipped'])} skipped: the edge already carries a hint, "
+            f"written by a caller since this was proposed or applied by an "
+            f"interrupted run. A hint already there is never overwritten."
         )
     return "\n".join(lines) + "\n"
 
