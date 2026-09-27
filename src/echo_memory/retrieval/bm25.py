@@ -164,7 +164,9 @@ def usable(conn, group_id: str) -> bool:
     return not _grown_past_tolerance(row)
 
 
-def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[str, float]]:
+def candidates(
+    conn, group_id: str, terms: list[str], limit: int, only: list[str] | None = None,
+) -> list[tuple[str, float]]:
     """(edge_id, bm25 score), best first, for facts matching any query term.
 
     Scored only over rows that matched, which is what makes the per-document
@@ -186,6 +188,19 @@ def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[
     """
     if not terms:
         return []
+    # An explicit id restriction, for a read scoped to an entity. The filter
+    # sits inside the matched CTE rather than around the result, so a scoped
+    # read ranks only the facts in scope instead of ranking the whole scope and
+    # discarding most of it.
+    only_sql = "" if only is None else "AND f.id::text = ANY(%s)"
+    # Positional, so the order has to match where each %s lands in the SQL
+    # below: scope's group_id, the terms, weighted's group_id, matched's
+    # group_id, then this filter (it sits INSIDE matched, after that
+    # group_id), then the limit.
+    params: list = [group_id, list(terms), group_id, group_id]
+    if only is not None:
+        params.append([str(e) for e in only])
+    params.append(limit)
     rows = conn.execute(
         f"""
         WITH scope AS (
@@ -222,6 +237,7 @@ def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[
                    LATERAL unnest(to_tsvector('english', {_FACT_TEXT})) AS t
              WHERE {_SCOPED} AND {_ACTIVE}
                AND t.lexeme IN (SELECT lexeme FROM weighted)
+               {only_sql}
         )
         SELECT m.id::text,
                sum(w.idf * (m.tf * ({K1} + 1))
@@ -236,7 +252,7 @@ def candidates(conn, group_id: str, terms: list[str], limit: int) -> list[tuple[
          ORDER BY score DESC, m.id
          LIMIT %s
         """,
-        (group_id, list(terms), group_id, group_id, limit),
+        params,
     ).fetchall()
     return [(str(edge_id), float(score)) for edge_id, score in rows]
 
