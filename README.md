@@ -57,6 +57,27 @@ echo-memory install --global
 > hosted product. The import package and the CLI are both `echo_memory` / `echo-memory`;
 > only the distribution name differs.
 
+## Upgrading
+
+```bash
+pipx upgrade echo-mem
+echo-memory init-db                # apply any new migrations
+echo-memory reindex                # rebuild what the new code derives
+```
+
+Both steps, in that order, and neither is optional on a store that predates the version
+you just installed.
+
+**Skipping `init-db` fails loudly.** A read against a schema older than the code raises an
+undefined column, which is the good case: it stops rather than answering from something it
+half understands.
+
+**Skipping `reindex` fails silently, which is worse.** Derived data that the new code reads
+differently is still the old data, and nothing errors. Concretely, on an upgrade to 0.5.3
+the lexical corpus statistics are treated as stale until rebuilt, so BM25 stays off and
+your queries keep ranking by `ts_rank` while the setting reports as on. `reindex` rebuilds
+the embeddings and those statistics together. `echo-memory health` tells you afterwards.
+
 ## Usage
 
 ```bash
@@ -76,6 +97,8 @@ echo-memory infer-causal-hints     # type the facts whose own sentence states a 
 echo-memory eval                   # retrieval quality against your own store
 echo-memory eval --context         # what a recall costs against injecting everything
 echo-memory eval --context --sweep # the same, as a curve across corpus size
+echo-memory eval-external locomo <path>       # LoCoMo, the corpus the published figures use
+echo-memory eval-external longmemeval <path>  # LongMemEval, the same
 echo-memory calibrate              # is entity resolution trustworthy on your data
 echo-memory benchmark              # write, query and digest latency
 ```
@@ -85,7 +108,7 @@ echo-memory benchmark              # write, query and digest latency
 | Tool | What it does |
 |---|---|
 | `write_episode` | Store entities and the facts connecting them. No model call. |
-| `query_memory` | Hybrid vector and full text retrieval, fused by reciprocal rank. |
+| `query_memory` | Hybrid vector and full text retrieval, fused by reciprocal rank. Full text ranks by BM25. Takes `as_of` to read the store as it stood at an instant. |
 | `trace_cause` | Causal chains through the entities a subject matches, not a ranked list. |
 | `record_recall_save` | Mark that a recalled fact saved re explaining something. Refuses a fact no read returned. |
 | `get_audit_log` | Every change to memory, with a plain language reason. |
@@ -104,6 +127,41 @@ still edged back to the facts it came from. None of it exists yet: there is no t
 no summarisation, and retrieval today walks every active fact in the scope. It is
 described in [`docs/designs/`](docs/designs/) and listed below as v1c, and this paragraph
 used to claim it in the present tense.
+
+**A ranked answer that says why each fact is in it.** Every returned fact carries
+`score`, its cosine similarity to the query, `rank`, its position, and `matched`, the
+channels that found it. `score` is deliberately not the fusion number: reciprocal rank
+values are sums of 1/(k+rank) and mean nothing from one query to the next, while a
+similarity means the same thing every time, which is what a caller thresholding on it
+needs. It is computed for every fact returned, including the ones only full text search
+found, because which channel retrieved a fact is an implementation detail and has no
+business reaching a field callers read as relevance.
+
+**The full text channel ranks by BM25.** Postgres's `ts_rank` counts term occurrences and
+nothing else: no inverse document frequency, so a word in every fact of a scope counts as
+much as one in three; no saturation, so repetition scales linearly; no length
+normalisation, so a long fact is punished for being long. On 324 real prompts the rank 3
+and rank 4 scores were identical in 59% of them, and reciprocal rank fusion reads rank
+position and never the score underneath it, so a channel ordered by scan order handed the
+fusion a coin flip.
+
+BM25 is computed in SQL rather than installed, so no extension is added to your database.
+Corpus statistics are rebuilt amortised on write inside the transaction that already holds
+the scope's lock, and by `echo-memory reindex`; a scope that has none falls back to
+`ts_rank` rather than ranking on statistics it does not have. `ECHO_MEMORY_LEXICAL_BM25=0`
+returns to `ts_rank` everywhere.
+
+**The history the store has always kept is readable.** Every fact has carried `t_valid`
+and `t_invalid` since the first migration, and the read path had only ever asked whether a
+fact is current, so the store paid to keep the whole record of what a scope believed and
+could not answer the first question a post mortem asks. `query_memory` takes `as_of` in
+unix seconds and every channel honours it: vector, full text, the graph hop, the digest.
+
+Supersession is what makes that more than a curiosity. Writing the same source, target and
+relation again does not edit the old fact, it ends it: the old edge takes a `t_invalid` and
+stays queryable. Nothing is ever rewritten, so the history is real rather than
+reconstructed, which is the property the memory reconsolidation literature gives up and
+the reason this project refuses that idea.
 
 **Provenance on every fact.** Who wrote it, which tool, which project, when, and which
 reads returned it. A superseded fact is never deleted. It stops being drawn and stays
@@ -167,6 +225,7 @@ difference nobody sized is not a result.
 | The same saving across 8x of corpus growth | 75.5% at 32 facts rising to **96.4% at 261**, hit@10 0.900 to 0.946 | `echo-memory eval --context --sweep` |
 | LoCoMo retrieval, 1,982 questions, 5,882 turns | recall@10 **0.601**, hit@10 0.658, MRR 0.460, session@10 0.850 | `echo-memory eval-external locomo` |
 | LongMemEval retrieval, 90 questions, 15 per type | session@10 **0.937**, recall@10 0.727, MRR 0.428 | `echo-memory eval-external longmemeval --per-type 15` |
+| Lexical BM25 against `ts_rank` | **+0.0271** MRR on entity_pair [+0.0083, +0.0481] and on multihop [+0.0166, +0.0381], the other two shapes inside noise, none worse | `echo-memory eval --ablate`, the `without BM25` row with its sign reversed |
 | Server side model calls per write | **0** | `echo-memory benchmark` |
 | Write, query, digest latency (median) | 15ms, 8ms, 1ms | `echo-memory benchmark` |
 | Entity resolution AUC | 0.666, 95% CI [0.421, 0.881] | `echo-memory calibrate` |
@@ -276,7 +335,8 @@ not a thing to withhold from the person whose data it is.
 organisation wide shared graph, with no forced migration later. The novel work is the
 memory structure and the read/write algorithm on top of it, not a new database engine.
 
-**Retrieval** Hybrid vector and full text search fused by reciprocal rank in v1a.
+**Retrieval** Hybrid vector and full text search fused by reciprocal rank in v1a, with
+the full text side ranked by BM25 computed in SQL over per scope corpus statistics.
 Personalised PageRank via `networkx` lands in v1b for multi hop associative retrieval.
 
 **Interface** [Model Context Protocol](https://modelcontextprotocol.io), so any compliant
