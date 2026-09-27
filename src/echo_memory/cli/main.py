@@ -825,7 +825,14 @@ def main(argv: list[str] | None = None) -> int:
                 ("vector only", {"vector_only": True}),
                 ("lexical only", {"lexical_only": True}),
                 ("+ graph hop", {"graph_hops": 1}),
-                ("+ BM25 lexical", {"lexical_bm25": True}),
+                # Subtractive, not additive, because BM25 is the default since
+                # 0.5.3. An ablation reads a difference against shipping, so
+                # "+ BM25" against a shipping baseline that already has BM25
+                # measured one configuration against itself and reported
+                # +0.0000 with a zero width interval on every shape - a row
+                # that looks like "no effect" and is really "no experiment".
+                # The others stay additive because they are still off.
+                ("without BM25", {"lexical_bm25": False}),
                 ("+ routed expansion", {"route_expansion": True}),
                 ("+ salience", {"use_salience": True}),
             ]
