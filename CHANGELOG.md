@@ -9,6 +9,29 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**`query_memory` takes `about`, one or two entity names.** Returns only the facts
+recorded against them: one name gives the edges incident to that node, two give the
+edges between them in either direction, which is "both names in the same fact"
+without going near the fact text.
+
+The first customer to want this had no way to ask, so they retrieved by resemblance
+and filtered on the fact text at four call sites, word boundary matching names to drop
+facts that were real, well ranked and about somebody else. Better ranking does not fix
+that and it is not meant to: a query about one team returns a semantically close fact
+about another team because the wrong fact genuinely does resemble the question.
+Identity is not similarity, and a fact is an edge between two nodes, so which entity a
+fact is about is structural and exact.
+
+Matching is exact and case insensitive, never a substring, because a short name is a
+substring of longer unrelated words. A name nothing is recorded under returns no facts
+rather than the nearest thing, and so does a pair with no fact joining them. Two
+refusals rather than a quietly wrong answer: more than two names raises, because an
+edge has two endpoints and a fact about three entities is not a narrow question but an
+inexpressible one, and `about` with `digest` raises, because the digest query does not
+carry the filter and would return other entities' facts while the caller believed the
+answer was scoped. The graph hop is filtered too, since it is the one channel that
+expands outward and would otherwise put the wrong entity back in.
+
 ## 0.5.3
 
 **The lexical channel ranks by BM25.** `ts_rank` counts term occurrences and
