@@ -379,6 +379,27 @@ VECTOR_CANDIDATE_SQL = f"""
         """
 
 
+VECTOR_ONLY_CLAUSE = "AND fe.edge_id::text = ANY(%s)"
+
+
+def vector_candidate_sql(as_of: int | None = None, only: bool = False) -> str:
+    """The shipped vector query, rendered.
+
+    One function knows which placeholders this template has, because a
+    template filled in by two callers who each have to remember the full set
+    is a trap that has now sprung twice. When `{live}` was added for as-of
+    reads, the index test kept executing the raw template and sent a literal
+    brace to Postgres; when `{only}` was added for entity scoping, that same
+    test raised KeyError because it still filled in only the placeholder it
+    knew about. Both times the test carried a comment warning about exactly
+    the thing that broke it, which is what tells you the comment was not the
+    fix.
+    """
+    return VECTOR_CANDIDATE_SQL.format(
+        live=live_clause("f", as_of), only=VECTOR_ONLY_CLAUSE if only else "",
+    )
+
+
 def _vector_candidates(
     conn, group_id: str, embedding: list[float], limit: int, floor: float | None = None,
     scores: dict[str, float] | None = None, as_of: int | None = None,
@@ -402,14 +423,12 @@ def _vector_candidates(
     # A filtered index scan is safe here because hnsw.iterative_scan is set to
     # strict_order in infra/db.py: without it the scan stops at the first
     # candidate batch and silently returns fewer rows than the LIMIT asked for.
-    only_sql = "" if only is None else "AND fe.edge_id::text = ANY(%s)"
     params: list = [embedding, group_id]
     if only is not None:
         params.append([str(e) for e in only])
     params += [embedding, limit]
     rows = conn.execute(
-        VECTOR_CANDIDATE_SQL.format(live=live_clause("f", as_of), only=only_sql),
-        params,
+        vector_candidate_sql(as_of=as_of, only=only is not None), params,
     ).fetchall()
     if floor is None:
         floor = adaptive_cosine_floor(conn, group_id)
