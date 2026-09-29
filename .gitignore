@@ -68,6 +68,14 @@ echo-memory-skill.zip
 .swarm/
 ruvector.db
 
+# Same tool, same failure, found later: ruflo writes its adopted policy and the
+# hash of it into .claude/ rather than .claude-flow/, so the rule above did not
+# cover them and `git add -A` swept both into an unrelated commit on 2026-09-29.
+# They are a benchmark result and a content hash for one machine's local tuning,
+# which is not something another checkout should inherit.
+.claude/proven-config.json
+.claude/.proven-config-version
+
 # Worktrees created for background agents. Each is its own checkout of this
 # repository; committing one nests a git repo inside a git repo.
 .claude/worktrees/
