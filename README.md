@@ -108,7 +108,7 @@ echo-memory benchmark              # write, query and digest latency
 | Tool | What it does |
 |---|---|
 | `write_episode` | Store entities and the facts connecting them. No model call. |
-| `query_memory` | Hybrid vector and full text retrieval, fused by reciprocal rank. Full text ranks by BM25. Takes `as_of` to read the store as it stood at an instant. |
+| `query_memory` | Hybrid vector and full text retrieval, fused by reciprocal rank. Full text ranks by BM25. Takes `as_of` to read the store as it stood at an instant, and `about` to return the facts recorded against one or two named entities. |
 | `trace_cause` | Causal chains through the entities a subject matches, not a ranked list. |
 | `record_recall_save` | Mark that a recalled fact saved re explaining something. Refuses a fact no read returned. |
 | `get_audit_log` | Every change to memory, with a plain language reason. |
@@ -150,6 +150,24 @@ Corpus statistics are rebuilt amortised on write inside the transaction that alr
 the scope's lock, and by `echo-memory reindex`; a scope that has none falls back to
 `ts_rank` rather than ranking on statistics it does not have. `ECHO_MEMORY_LEXICAL_BM25=0`
 returns to `ts_rank` everywhere.
+
+**Facts about an entity, which resemblance cannot express.** `query_memory` takes
+`about`, one or two entity names, and returns only the facts recorded against them. One
+name gives the edges incident to that node; two give the edges between them in either
+direction, which is "both names in the same fact" without going near the fact text.
+
+This is not a ranking improvement and it is not a substitute for one. A query about one
+team returns a semantically close fact about a different team because the wrong fact
+genuinely does resemble the question, and no amount of better ranking removes it.
+Identity is not similarity, and a fact is an edge between two nodes, so asking which
+entity a fact is about is structural and exact.
+
+Name matching is exact and case insensitive, never a substring, because a short name is a
+substring of longer unrelated words. A name nothing is recorded under returns no facts
+rather than the nearest thing, and so does a pair with no fact joining them: that is real
+absence and it means nobody recorded this, not here is something adjacent. More than two
+names is refused rather than answered empty, because an edge has two endpoints and a fact
+about three entities is a question this model cannot express.
 
 **The history the store has always kept is readable.** Every fact has carried `t_valid`
 and `t_invalid` since the first migration, and the read path had only ever asked whether a

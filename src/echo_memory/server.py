@@ -278,40 +278,42 @@ def trace_cause(
 def query_memory(
     scope: str, query: str | None = None, top_k: int = 10,
     digest: bool = False, as_of: int | None = None,
+    about: list[str] | None = None,
 ) -> dict:
     """Recall prior facts relevant to query, from this agent's own memory
     (scope="solo") or the pool shared across this user's agents
-    (scope="shared"). Call this at session start, and any other time
-    recalling prior context would save the user from re-explaining
-    something - check here before asking them to repeat themselves or
-    guessing at context you don't have.
+    (scope="shared"). Call this at session start, and any other time recalling
+    prior context would save the user from re-explaining something.
 
     digest=True ignores query and returns the most recently written active
-    facts instead, as an opt-in "catch me up" convenience; call it
-    explicitly at session start if you want one, it's never automatic.
+    facts, an opt-in "catch me up"; never automatic.
 
     as_of (optional): unix seconds. Answers with what this scope believed at
-    that moment rather than now, including facts later superseded. Nothing is
-    ever rewritten here, so the history is real: use it for "what did we think
-    was true when this was decided".
+    that moment, including facts later superseded. Nothing here is ever
+    rewritten, so use it for "what did we think was true when this was
+    decided".
 
-    Each fact carries rank (1 first), score and matched.
+    about (optional): one or two entity names. Returns only facts that ARE
+    about them, not facts resembling your query. One name gives that entity's
+    facts, two gives the facts between them, either direction: about=["Kohli"]
+    or about=["Kohli", "Bumrah"]. At most two names, matched exactly and
+    case-insensitively, never partially. A name nothing is recorded under
+    returns no facts rather than the nearest thing, and so does a pair with no
+    fact joining them: real absence, not something adjacent. Use it when you
+    know whose fact you want, because resemblance cannot tell one entity from a
+    similar one.
 
-    If you must drop facts to fit a budget, drop by rank. It is the fused
-    result of every channel, which is this server's whole opinion; score is
-    one input to it, and re-sorting by a single input throws the rest away.
+    Each fact carries rank (1 first), score and matched. If you must drop facts
+    to fit a budget, drop by rank: it is the fused result of every channel, and
+    re-sorting by score throws that away. score is cosine similarity to your
+    query, comparable across queries, diagnostic not a correctness test:
+    a keyword match can be right at a low score. matched names the
+    channels that found it; full text search is not the weaker one.
 
-    score is cosine similarity to your query, present on every fact and
-    comparable across queries. It is diagnostic, not a correctness test: a
-    fact found by exact keyword match can be the right answer at a low
-    score. matched names the channels that found it, as information - full
-    text search is not the weaker one, it has the better recall here.
-
-    A pending_ingest field appears when memory files have been written that
-    the graph hasn't heard about yet. Read each listed file and call
-    write_episode with the entities and facts it states, then mark it done
-    with `echo-memory pending --done <path>`. The queue exists because
-    extraction needs a model and this server never calls one."""
+    pending_ingest appears when memory files exist that the graph hasn't heard
+    about. Read each listed file, call write_episode with what it states, then
+    `echo-memory pending --done <path>`. The queue exists because extraction
+    needs a model and this server never calls one."""
     try:
         group_id = _state.config.group_id(scope)
     except ConfigError as e:
@@ -320,7 +322,7 @@ def query_memory(
         with _state.pool.connection() as conn:
             result = _query_memory(
                 conn, group_id, query, top_k, _state.embedder,
-                digest=digest, as_of=as_of,
+                digest=digest, as_of=as_of, about=about,
             )
         # The other read surface. Counted the same way so the ratio in
         # `echo-memory health` covers both, not just the hook.

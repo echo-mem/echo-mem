@@ -28,7 +28,7 @@ from fake_embedder import REFERENCE, VectorEmbedder, unit_vector_at_angle
 
 from echo_memory.infra.db import connect
 from echo_memory.ingestion.write_episode import write_episode
-from echo_memory.retrieval.query_memory import VECTOR_CANDIDATE_SQL, live_clause
+from echo_memory.retrieval.query_memory import vector_candidate_sql
 
 GROUP = "g1"
 
@@ -54,14 +54,14 @@ def _seed(conn):
 
 
 def _sql() -> str:
-    """The shipped query with its time predicate filled in.
+    """The shipped query, rendered by the shipped renderer.
 
-    VECTOR_CANDIDATE_SQL became a template when as-of reads landed: it carries
-    a {live} placeholder the caller substitutes. Executing the raw template
-    sends a literal brace to Postgres, which is a syntax error rather than a
-    wrong answer, and these tests are the only place that runs it by hand.
+    This used to fill in the template itself, and broke twice for the same
+    reason: a placeholder was added in production and this copy did not know
+    about it. Calling the renderer means a new placeholder cannot silently
+    leave the test executing something the server never sends.
     """
-    return VECTOR_CANDIDATE_SQL.format(live=live_clause("f", None))
+    return vector_candidate_sql()
 
 
 def _plan(conn, sql, params) -> str:

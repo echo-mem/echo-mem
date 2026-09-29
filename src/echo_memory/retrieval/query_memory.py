@@ -78,7 +78,8 @@ class ValidationError(Exception):
 
 
 def _validate(
-    query: str | None, top_k: int, digest: bool, as_of: int | None = None
+    query: str | None, top_k: int, digest: bool, as_of: int | None = None,
+    about: list[str] | None = None,
 ) -> None:
     if not digest and (not query or not query.strip()):
         raise ValidationError("query must not be empty")
@@ -97,6 +98,34 @@ def _validate(
             )
         if as_of < 0:
             raise ValidationError(f"as_of must not be negative, got {as_of}")
+    if about is not None:
+        if isinstance(about, str) or not isinstance(about, (list, tuple)):
+            raise ValidationError(
+                f"about must be a list of entity names, got {about!r}"
+            )
+        if not about:
+            raise ValidationError("about must name at least one entity")
+        if len(about) > MAX_ABOUT:
+            # Refused, not truncated. A fact is an edge and an edge has two
+            # endpoints, so "about these three entities" is not a narrow
+            # question, it is one this model cannot express. Answering it with
+            # an empty list would read as "nothing recorded".
+            raise ValidationError(
+                f"about takes at most {MAX_ABOUT} entities, because a fact joins "
+                f"two of them, got {len(about)}"
+            )
+        for name in about:
+            if not isinstance(name, str) or not name.strip():
+                raise ValidationError(
+                    f"about entity names must be non-empty strings, got {name!r}"
+                )
+        if digest:
+            # Refused rather than ignored. A digest is built by a Cypher query
+            # that does not carry this filter, so accepting it would return
+            # facts about other entities while the caller believed it was
+            # scoped - which is exactly the wrong-entity answer this parameter
+            # exists to prevent.
+            raise ValidationError("about and digest cannot be combined")
 
 
 # Bi-temporal reads.
@@ -344,14 +373,37 @@ VECTOR_CANDIDATE_SQL = f"""
         JOIN {GRAPH}."FACT" f ON f.id = fe.edge_id
         WHERE fe.group_id = %s
           AND {{live}}
+          {{only}}
         ORDER BY fe.embedding <#> %s::vector
         LIMIT %s
         """
 
 
+VECTOR_ONLY_CLAUSE = "AND fe.edge_id::text = ANY(%s)"
+
+
+def vector_candidate_sql(as_of: int | None = None, only: bool = False) -> str:
+    """The shipped vector query, rendered.
+
+    One function knows which placeholders this template has, because a
+    template filled in by two callers who each have to remember the full set
+    is a trap that has now sprung twice. When `{live}` was added for as-of
+    reads, the index test kept executing the raw template and sent a literal
+    brace to Postgres; when `{only}` was added for entity scoping, that same
+    test raised KeyError because it still filled in only the placeholder it
+    knew about. Both times the test carried a comment warning about exactly
+    the thing that broke it, which is what tells you the comment was not the
+    fix.
+    """
+    return VECTOR_CANDIDATE_SQL.format(
+        live=live_clause("f", as_of), only=VECTOR_ONLY_CLAUSE if only else "",
+    )
+
+
 def _vector_candidates(
     conn, group_id: str, embedding: list[float], limit: int, floor: float | None = None,
     scores: dict[str, float] | None = None, as_of: int | None = None,
+    only: list[str] | None = None,
 ) -> list[str]:
     """Ids, best first. Pass `scores` to also collect the cosine similarity
     this already computed and then threw away - the one number in this system
@@ -368,9 +420,15 @@ def _vector_candidates(
     # against 3.85ms using the index, and the scan is O(n), so ten times the
     # facts is half a second on every query. The determinism it bought is
     # still wanted and is now applied below, where it costs nothing.
+    # A filtered index scan is safe here because hnsw.iterative_scan is set to
+    # strict_order in infra/db.py: without it the scan stops at the first
+    # candidate batch and silently returns fewer rows than the LIMIT asked for.
+    params: list = [embedding, group_id]
+    if only is not None:
+        params.append([str(e) for e in only])
+    params += [embedding, limit]
     rows = conn.execute(
-        VECTOR_CANDIDATE_SQL.format(live=live_clause("f", as_of)),
-        (embedding, group_id, embedding, limit),
+        vector_candidate_sql(as_of=as_of, only=only is not None), params,
     ).fetchall()
     if floor is None:
         floor = adaptive_cosine_floor(conn, group_id)
@@ -596,9 +654,87 @@ def needs_expansion(conn, group_id: str, query: str) -> bool:
     return int(connected) == 0
 
 
+# An edge has two endpoints, so a fact is about at most two entities. Asking
+# for three is not a narrow query with no answer, it is a question this data
+# model cannot express, and answering it with an empty list would look like
+# "nothing recorded" instead of "you asked for something impossible".
+MAX_ABOUT = 2
+
+
+def _about_edge_ids(
+    conn, group_id: str, about: list[str], as_of: int | None = None
+) -> list[str]:
+    """The facts that ARE about these entities, structurally.
+
+    One name is the edges incident to that node. Two names is the edges whose
+    two endpoints are those two nodes, in either direction, which is the same
+    thing as "both names in the same fact" without going near the fact text.
+
+    This exists because a caller who wanted it had no way to ask. The first
+    customer to need "facts about this player" retrieved by resemblance and
+    then filtered on the fact TEXT at four call sites, word-boundary matching
+    names to drop facts that were real and well ranked and about somebody
+    else. Resemblance cannot express identity: a query for a team returns a
+    semantically close fact about a different team, and no amount of better
+    ranking removes it, because the wrong fact genuinely does resemble the
+    question.
+
+    Exact, case-insensitive name matching, NOT substring and not embedding
+    similarity. Substring is the bug being fixed here, since a short name is a
+    substring of longer unrelated words. Embedding similarity would make the
+    scoping its own retrieval problem with its own threshold to calibrate, and
+    this system already has one threshold whose interval includes chance.
+
+    Returns [] when a name resolves to no node, and the caller turns that into
+    an empty answer rather than a nearest guess. That is the contract the
+    customer asked for, in their words because an adjacent but wrong entity
+    fact is "the same failure mode as hallucination, just laundered through a
+    real fact instead of an invented one".
+    """
+    per_name: list[list[str]] = []
+    for name in about:
+        rows = conn.execute(
+            f"""SELECT n.id::text
+                  FROM {GRAPH}."Node" n
+                 WHERE (n.properties ->> '"group_id"'::agtype) = %s
+                   AND lower(n.properties ->> '"name"'::agtype) = lower(%s)""",
+            (group_id, name),
+        ).fetchall()
+        ids = [str(r[0]) for r in rows]
+        if not ids:
+            # One unresolvable name empties the whole answer, for both shapes:
+            # a single name nobody has heard of has no facts, and a pair is a
+            # claim about both ends.
+            return []
+        per_name.append(ids)
+
+    live = live_clause("e", as_of)
+    if len(per_name) == 1:
+        rows = conn.execute(
+            f"""SELECT e.id::text
+                  FROM {GRAPH}."FACT" e
+                 WHERE (e.properties ->> '"group_id"'::agtype) = %s
+                   AND {live}
+                   AND (e.start_id::text = ANY(%s) OR e.end_id::text = ANY(%s))""",
+            (group_id, per_name[0], per_name[0]),
+        ).fetchall()
+    else:
+        first, second = per_name[0], per_name[1]
+        rows = conn.execute(
+            f"""SELECT e.id::text
+                  FROM {GRAPH}."FACT" e
+                 WHERE (e.properties ->> '"group_id"'::agtype) = %s
+                   AND {live}
+                   AND ((e.start_id::text = ANY(%s) AND e.end_id::text = ANY(%s))
+                     OR (e.start_id::text = ANY(%s) AND e.end_id::text = ANY(%s)))""",
+            (group_id, first, second, second, first),
+        ).fetchall()
+    return [str(r[0]) for r in rows]
+
+
 def _lexical_any_candidates(
     conn, group_id: str, query: str, limit: int, use_bm25: bool | None = None,
-    as_of: int | None = None,
+    as_of: int | None = None, only: list[str] | None = None,
 ) -> list[str]:
     """Lexical retrieval that matches ANY salient term, ranked. Used by the
     prompt-time recall path; the main query path keeps AND semantics, which is
@@ -625,9 +761,14 @@ def _lexical_any_candidates(
     # cost. ts_rank has no corpus statistics at all, so it is unaffected by
     # this and is the honest ranker for a question about the past.
     if use_bm25 and as_of is None and bm25.usable(conn, group_id):
-        return [edge_id for edge_id, _ in bm25.candidates(conn, group_id, terms, limit)]
+        return [
+            edge_id
+            for edge_id, _ in bm25.candidates(conn, group_id, terms, limit, only=only)
+        ]
     tsquery, params = _any_term_tsquery(terms)
     live_sql = live_clause("f", as_of)
+    only_sql = "" if only is None else "AND f.id::text = ANY(%s)"
+    tail: list = [] if only is None else [[str(e) for e in only]]
     rows = conn.execute(
         f"""
         SELECT f.id::text,
@@ -637,6 +778,7 @@ def _lexical_any_candidates(
         WHERE (f.properties ->> '"group_id"'::agtype) = %s
           AND {live_sql}
           AND to_tsvector('english', f.properties ->> '"fact"'::agtype) @@ {tsquery}
+          {only_sql}
         -- Tie broken by id, arbitrary but fixed. ts_rank has no IDF and no
         -- length normalisation, so scores collapse onto a few values and
         -- exact ties at the cut are the common case, not the exception: on
@@ -651,7 +793,7 @@ def _lexical_any_candidates(
         ORDER BY score DESC, f.id
         LIMIT %s
         """,
-        (*params, group_id, *params, limit),
+        (*params, group_id, *params, *tail, limit),
     ).fetchall()
     return [edge_id for edge_id, score in rows if score > TS_RANK_FLOOR]
 
@@ -828,6 +970,7 @@ def query_memory(
     rrf_k: int | None = None, graph_hops: int | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
+    about: list[str] | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -871,12 +1014,23 @@ def query_memory(
     retrieval and bad."""
     start = time.perf_counter()
     try:
-        _validate(query, top_k, digest, as_of)
+        _validate(query, top_k, digest, as_of, about)
     except ValidationError as e:
         log_query_memory(
             _logger, group_id, 0, 0, 0, (time.perf_counter() - start) * 1000, error=str(e)
         )
         return {"error": str(e)}
+
+    # Resolved before any channel runs, so an unresolvable entity costs one
+    # indexed lookup rather than an embedding call and two ranked queries.
+    only: list[str] | None = None
+    if about is not None:
+        only = _about_edge_ids(conn, group_id, list(about), as_of=as_of)
+        if not only:
+            log_query_memory(
+                _logger, group_id, 0, 0, 0, (time.perf_counter() - start) * 1000
+            )
+            return {"facts": [], "about": list(about), "scoped": True}
 
     similarity: dict[str, float] = {}
     query_embedding: list[float] | None = None
@@ -886,14 +1040,15 @@ def query_memory(
     elif lexical_only:
         vector_ids = []
         lexical_ids = _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of
+            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of,
+            only=only,
         )
         ranked_ids = lexical_ids[:top_k]
     else:
         embedding = query_embedding = embedder.embed(query)
         vector_ids = _vector_candidates(
             conn, group_id, embedding, LIST_DEPTH, floor=floor, scores=similarity,
-            as_of=as_of,
+            as_of=as_of, only=only,
         )
         # ANY-term, not websearch_to_tsquery's implicit AND.
         #
@@ -911,7 +1066,8 @@ def query_memory(
         # path kept the version that does not work, and the pair looked
         # deliberate.
         lexical_ids = [] if vector_only else _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of
+            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of,
+            only=only,
         )
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
@@ -957,9 +1113,20 @@ def query_memory(
             # tell a multi hop question from a single hop one, rather than for
             # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
-            lists.append(
-                _graph_candidates(conn, group_id, seeds, LIST_DEPTH, as_of=as_of)
+            neighbours = _graph_candidates(
+                conn, group_id, seeds, LIST_DEPTH, as_of=as_of
             )
+            # Filtered here rather than in the traversal SQL. The hop walks
+            # OUTWARD from what the content channels found, so unfiltered it
+            # would put facts about other entities back into a scoped answer,
+            # which is the whole failure this parameter removes. Restricting
+            # the walk's own query instead would also stop it crossing the
+            # scoped entity to reach a second fact about it, and this way is
+            # the same result for a set that is already at most LIST_DEPTH.
+            if only is not None:
+                allowed = set(only)
+                neighbours = [e for e in neighbours if e in allowed]
+            lists.append(neighbours)
         # Salience last, over the candidates the content channels found, so
         # it can reorder an answer but never add to one. It is a prior on
         # facts, not a signal about this query.
