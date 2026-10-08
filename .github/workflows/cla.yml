@@ -14,19 +14,25 @@ on:
   pull_request_target:
     types: [opened, closed, synchronize]
 
+# Read only at the top, and the writes declared on the one job that needs
+# them. The CLA action really does write: it commits signatures to a branch and
+# comments on the pull request. What it should not do is hand those rights to
+# any job added to this file later without anybody deciding to.
 permissions:
-  actions: write
-  contents: write
-  pull-requests: write
-  statuses: write
+  contents: read
 
 jobs:
   cla:
     runs-on: ubuntu-latest
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+      statuses: write
     steps:
       - name: Check or request CLA signature
         if: (github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA') || github.event_name == 'pull_request_target'
-        uses: contributor-assistant/github-action@v2.6.1
+        uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
