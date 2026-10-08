@@ -1,0 +1,29 @@
+# Dependency updates, opened as pull requests rather than applied.
+#
+# github-actions is listed first and matters most here: every action is pinned
+# to a commit SHA, which is what stops a tag being repointed under us, and a SHA
+# pin that nobody ever moves is a dependency frozen at whatever it was the day
+# it was pinned. Dependabot is what keeps the pin current, so the two go
+# together and neither works alone.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      # No prefix with a colon: the repository writes commit subjects as
+      # sentences, and "chore(deps):" is not one.
+      prefix: Update
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: Update
+    # Grouped, because fifteen separate pull requests for one week of patch
+    # releases is a queue nobody reads, and an unread queue is the same as no
+    # updates at all.
+    groups:
+      python-dependencies:
+        patterns: ["*"]

@@ -1,0 +1,47 @@
+# Static analysis, on every push to main and every pull request.
+#
+# ruff runs in ci.yml and is a linter, not a security scanner: it will not find
+# an injection or a path traversal, and OpenSSF Scorecard's SAST check scored 0
+# while it was the only thing running. This is the one that looks for those.
+#
+# python-only, because that is what this repository is. The default query suite
+# plus security-extended, so it reports the lower confidence findings too; this
+# is a small codebase and the false positive cost is a few minutes of reading.
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, because a query pack improves without the code changing and a
+    # repository that only scans on commit stops being scanned the week nobody
+    # commits.
+    - cron: "27 4 * * 1"
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      # The two this needs and nothing else. security-events is where findings
+      # go; actions: read lets the scan see workflow files.
+      security-events: write
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Initialise CodeQL
+        uses: github/codeql-action/init@9f759ee644a3e7c15c1390abf49868036c00067b # v3
+        with:
+          languages: python
+          queries: security-extended
+
+      - name: Analyse
+        uses: github/codeql-action/analyze@9f759ee644a3e7c15c1390abf49868036c00067b # v3
+        with:
+          category: "/language:python"
