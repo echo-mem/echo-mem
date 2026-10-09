@@ -25,7 +25,7 @@ dependencies = [
     "alembic>=1.13,<2",
     "sqlalchemy>=2,<3",
     "mcp>=2.0,<3",
-    "sentence-transformers>=3,<4",
+    "sentence-transformers>=3,<7",
 ]
 
 [project.scripts]
@@ -33,10 +33,10 @@ echo-memory = "echo_memory.cli.main:main"
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=8,<9",
+    "pytest>=8,<10",
     "ruff>=0.6,<1",
     "build>=1,<2",
-    "twine>=5,<7",
+    "twine>=5,<8",
 ]
 
 [build-system]
