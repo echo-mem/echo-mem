@@ -9,6 +9,8 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+## 0.5.4
+
 **`query_memory` takes `about`, one or two entity names.** Returns only the facts
 recorded against them: one name gives the edges incident to that node, two give the
 edges between them in either direction, which is "both names in the same fact"
@@ -31,6 +33,28 @@ inexpressible one, and `about` with `digest` raises, because the digest query do
 carry the filter and would return other entities' facts while the caller believed the
 answer was scoped. The graph hop is filtered too, since it is the one channel that
 expands outward and would otherwise put the wrong entity back in.
+
+**Releases carry their own build provenance.** Every release is built and published by
+GitHub Actions through PyPI Trusted Publishing, which already issued a Sigstore
+attestation on upload; the workflow now also attests the files itself and attaches the
+distributions to the GitHub release, so the evidence is where somebody auditing a
+release will look rather than only on PyPI. The five earlier releases were backfilled
+with their published artifacts and provenance.
+
+Every GitHub Action is pinned to a commit SHA rather than a tag, and the Postgres base
+image in `docker/postgres.Dockerfile` is pinned to its OCI index digest, which keeps
+the multi-arch property the comment above it depends on: production is arm64 and a
+single architecture pin would have broken it. CodeQL runs on every push, pull request
+and weekly. Dependabot keeps the pins current, because a pin nobody moves is a
+dependency frozen at whatever it was the day it was pinned.
+
+**`docs/COMPLIANCE.md` and `scripts/licence-inventory.py`.** What a buyer's security
+review asks for, answered with things they recompute rather than take on trust. The
+script walks the runtime dependency closure rather than listing what happens to be
+installed: 61 distributions ship, none under strong copyleft, four under weak or file
+level terms. It also says plainly that the OpenSSF Best Practices Badge is not
+obtainable for a BSL project, rather than leaving that to be discovered during a
+procurement review.
 
 ## 0.5.3
 
