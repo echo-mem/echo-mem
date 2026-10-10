@@ -119,8 +119,25 @@ jobs:
       # audited, because an auditor looking at the Releases page should not have
       # to know that the evidence lives on PyPI.
       - uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        id: attest
         with:
           subject-path: "dist/*"
+
+      # The bundle the step above already produced, published alongside the
+      # distributions. It is a Sigstore bundle carrying an in-toto statement
+      # over both subjects, signed with this workflow's identity and logged to
+      # Rekor; without this it exists only in GitHub's attestations API, where
+      # a release page does not show it and a scanner reading release assets
+      # cannot find it.
+      #
+      # multiple.intoto.jsonl is the name slsa-github-generator uses for
+      # provenance covering more than one subject, so a reader reaching for
+      # standard tooling finds the file where the convention says it is. This
+      # is a second real artifact in a documented format, NOT the publish
+      # attestation renamed: those are PEP 740 files from the PyPI upload and
+      # they stay as they are.
+      - name: Publish the in-toto bundle with the release
+        run: cp "${{ steps.attest.outputs.bundle-path }}" dist/multiple.intoto.jsonl
 
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
 
