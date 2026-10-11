@@ -8,12 +8,49 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import psycopg
 import pytest
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 DATABASE_URL = os.environ.get("ECHO_MEMORY_DATABASE_URL")
+
+
+def _refuse_a_live_database(url: str | None) -> None:
+    """Refuse to migrate anything but a disposable test database.
+
+    `migrated_db` runs `alembic downgrade base` after every test, which drops
+    the graph. Pointed at a real database that is only one digit away, it
+    destroys it silently: there is no error, because dropping a schema the
+    fixture built is exactly what the fixture is for.
+
+    That is not hypothetical. docker-compose.yml keeps `db-test` on 5434
+    separate from `db` on 5433 and says why, and this suite still got run
+    against 5433 - the database a registered MCP server writes to - and
+    emptied a live graph of 148 facts. No dump, no undo. The comment was
+    right and reading it was not enough, so the check belongs in code where
+    it fails before the first DROP rather than in a comment.
+
+    A test database is one whose name ends in _test, or the db-test service
+    on port 5434. Anything else is treated as someone's real data. There is
+    deliberately no override flag: an escape hatch that gets exported once in
+    a shell profile puts the hazard straight back.
+    """
+    if not url:
+        return
+    parsed = urlsplit(url)
+    name = parsed.path.lstrip("/")
+    if name.endswith("_test") or parsed.port == 5434:
+        return
+    raise pytest.UsageError(
+        f"refusing to run the integration suite against {name!r} on port "
+        f"{parsed.port}: the migrated_db fixture runs `alembic downgrade "
+        f"base` after every test and would drop it. Use the disposable "
+        f"db-test database (docker compose --profile test up -d, port 5434) "
+        f"or a database whose name ends in _test. "
+        f"ECHO_MEMORY_DATABASE_URL={url!r}"
+    )
 
 
 def _reachable(url: str | None) -> bool:
@@ -27,6 +64,7 @@ def _reachable(url: str | None) -> bool:
 
 
 def pytest_collection_modifyitems(items):
+    _refuse_a_live_database(DATABASE_URL)
     if _reachable(DATABASE_URL):
         return
     n = sum(1 for item in items if "tests/integration" in str(item.fspath))
