@@ -17,7 +17,7 @@ jobs:
   lint-and-test:
     runs-on: ubuntu-latest
     env:
-      ECHO_MEMORY_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/echo_memory
+      ECHO_MEMORY_DATABASE_URL: postgresql://postgres:postgres@localhost:5433/echo_memory_test
       ECHO_MEMORY_USER_ID: ci
       ECHO_MEMORY_AGENT_ID: ci
       # Refuse a green run that silently skipped every integration test.
@@ -56,7 +56,7 @@ jobs:
       - name: Start database
         run: |
           docker run -d --name echo-mem-db \
-            -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=echo_memory \
+            -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=echo_memory_test \
             -p 5433:5432 echo-mem-db:ci
           for i in $(seq 1 30); do
             docker exec echo-mem-db pg_isready -U postgres && break

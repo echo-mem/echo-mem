@@ -258,7 +258,14 @@ CI runs it too now (see `.github/workflows/ci.yml`), against its own throwaway d
 registered as a real MCP server (e.g. via `claude mcp add`) pointing at `db`'s database.
 Running the suite against a database a real client is also using will downgrade that
 schema to nothing mid-test-run, from underneath whatever's actually using it - this
-happened once, don't repeat it.
+happened once, and then happened again and emptied a live graph of 148 facts, because
+a warning in a file is not a check.
+
+So it is a check now. `tests/integration/conftest.py` refuses to collect at all
+unless the database name ends in `_test` or it is the `db-test` service on port 5434,
+and there is no override flag, because an escape hatch exported once in a shell
+profile puts the hazard straight back. CI names its throwaway database
+`echo_memory_test` for the same reason.
 
 ```bash
 docker compose --profile test up -d db-test   # separate container, separate volume, port 5434
