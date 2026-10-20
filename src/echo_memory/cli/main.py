@@ -16,6 +16,7 @@ from echo_memory.audit.get_audit_log import get_fact_history
 from echo_memory.cli import (
     adopt,
     calibrate,
+    forget,
     health,
     infer_causal,
     initdb,
@@ -57,7 +58,9 @@ from echo_memory.trial import check, observations
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="echo-memory")
     parser.add_argument(
-        "--scope", choices=["solo", "shared"], default="solo",
+        "--scope",
+        choices=["solo", "shared"],
+        default="solo",
         help="memory scope to operate on (default: solo)",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -74,7 +77,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--watch", action="store_true", help="refresh live in the terminal instead of printing once"
     )
     graph_mode.add_argument(
-        "--html", type=Path, metavar="PATH",
+        "--html",
+        type=Path,
+        metavar="PATH",
         help="write a self-contained interactive HTML snapshot to PATH instead of printing to the terminal",
     )
     graph_parser.add_argument(
@@ -98,12 +103,15 @@ def _add_project_parsers(sub) -> None:
         "--out", type=Path, metavar="PATH", help="write a self-contained HTML snapshot here"
     )
     dash.add_argument(
-        "--serve", action="store_true",
+        "--serve",
+        action="store_true",
         help="serve it on localhost instead, regenerating on every reload so it stays live",
     )
     dash.add_argument("--port", type=int, default=8787, help="port for --serve (default: 8787)")
     dash.add_argument(
-        "--open", action="store_true", dest="open_browser",
+        "--open",
+        action="store_true",
+        dest="open_browser",
         help="open the page in your browser once it is ready",
     )
 
@@ -111,13 +119,16 @@ def _add_project_parsers(sub) -> None:
         "reattribute", help="set the project on facts written before projects were recorded"
     )
     reattr.add_argument(
-        "--list", action="store_true", dest="list_sessions",
+        "--list",
+        action="store_true",
+        dest="list_sessions",
         help="show every session that has written to this scope and its current project",
     )
     reattr.add_argument("--session", metavar="ID", help="session whose facts to reattribute")
     reattr.add_argument("--project", metavar="NAME", help="project to attribute them to")
     reattr.add_argument(
-        "--agent", action="store_true",
+        "--agent",
+        action="store_true",
         help=(
             "work on authorship instead of project: recover the agent_id of facts "
             "whose session evidences one. Never guesses - a session with no "
@@ -130,11 +141,13 @@ def _add_project_parsers(sub) -> None:
         help="use the hosted service instead of running a database yourself",
     )
     conn_parser.add_argument(
-        "api_key", nargs="?",
+        "api_key",
+        nargs="?",
         help="a key from https://api.echo-mem.com (shown once, when created)",
     )
     conn_parser.add_argument(
-        "--endpoint", metavar="URL",
+        "--endpoint",
+        metavar="URL",
         help=f"a different deployment (default: {connect_cmd.DEFAULT_ENDPOINT})",
     )
 
@@ -143,9 +156,11 @@ def _add_project_parsers(sub) -> None:
         help="start the database, apply the schema, and say what to do next",
     )
     qs.add_argument(
-        "--port", type=int, metavar="N",
+        "--port",
+        type=int,
+        metavar="N",
         help=f"host port for the database (default: {quickstart.PORT}, "
-             "or the next free one above it)",
+        "or the next free one above it)",
     )
 
     # The other evaluation. Its questions are written before anything is
@@ -161,63 +176,74 @@ def _add_project_parsers(sub) -> None:
     j_new.add_argument("text", help="the question, in the words somebody would ask it")
     j_new.add_argument("--subject", metavar="NAME", help="what it is about, for your own sorting")
 
-    judge_sub.add_parser(
-        "list", help="questions recorded, and which have been opened for judging"
-    )
+    judge_sub.add_parser("list", help="questions recorded, and which have been opened for judging")
     judge_sub.add_parser(
         "open",
         help="retrieve under every configuration and open judging; do this after the "
-             "questions are written, never before",
+        "questions are written, never before",
     )
     j_pool = judge_sub.add_parser(
         "pool", help="judge the shuffled union of what every configuration returned"
     )
     j_pool.add_argument("--question", type=int, metavar="ID", help="just this one")
-    j_pool.add_argument("--as", dest="judged_by", metavar="NAME",
-                        help="judge as somebody else; only their own labels are skipped")
+    j_pool.add_argument(
+        "--as",
+        dest="judged_by",
+        metavar="NAME",
+        help="judge as somebody else; only their own labels are skipped",
+    )
     j_exp = judge_sub.add_parser(
         "export", help="write the whole judging pass to a file to mark in an editor"
     )
     j_exp.add_argument("--out", metavar="FILE", help="write here instead of stdout")
     j_exp.add_argument("--question", type=int, metavar="ID", help="just this one")
-    j_exp.add_argument("--as", dest="judged_by", metavar="NAME",
-                       help="export what this judge has not labelled yet; omit for a "
-                            "fresh judge, who gets the whole pool")
+    j_exp.add_argument(
+        "--as",
+        dest="judged_by",
+        metavar="NAME",
+        help="export what this judge has not labelled yet; omit for a "
+        "fresh judge, who gets the whole pool",
+    )
 
     j_imp = judge_sub.add_parser("import", help="read a marked file back")
     j_imp.add_argument("file", help="the file, with y or n between the brackets")
-    j_imp.add_argument("--as", dest="judged_by", metavar="NAME",
-                       help="attribute these labels to this judge")
+    j_imp.add_argument(
+        "--as", dest="judged_by", metavar="NAME", help="attribute these labels to this judge"
+    )
 
     j_score = judge_sub.add_parser(
         "score", help="per-configuration metrics over one judge's labels"
     )
     j_score.add_argument(
-        "--per-question", action="store_true",
+        "--per-question",
+        action="store_true",
         help="also show each question's reciprocal rank, so a reader can see "
-             "whether an advantage is consistent or carried by two cases",
+        "whether an advantage is consistent or carried by two cases",
     )
     j_score.add_argument(
-        "--by", dest="judged_by", metavar="NAME",
+        "--by",
+        dest="judged_by",
+        metavar="NAME",
         help="whose labels to score against; required once more than one judge "
-             "has labelled, because their labels are separate measurements",
+        "has labelled, because their labels are separate measurements",
     )
 
     j_cmp = judge_sub.add_parser(
         "compare",
         help="delta MRR between two configurations with a paired bootstrap interval, "
-             "so a lead too small for ten questions to resolve reads as one",
+        "so a lead too small for ten questions to resolve reads as one",
     )
     j_cmp.add_argument("a", help="the baseline configuration, e.g. shipping")
     j_cmp.add_argument("b", help="the one being compared against it")
-    j_cmp.add_argument("--by", dest="judged_by", metavar="NAME",
-                       help="whose labels to compare under")
+    j_cmp.add_argument(
+        "--by", dest="judged_by", metavar="NAME", help="whose labels to compare under"
+    )
 
     judge_sub.add_parser("judges", help="who has labelled this scope, and how much")
     j_agree = judge_sub.add_parser(
         "agreement",
         help="how far two judges agree on the pairs they both labelled, as "
-             "Cohen's kappa - raw agreement flatters when almost nothing is relevant",
+        "Cohen's kappa - raw agreement flatters when almost nothing is relevant",
     )
     j_agree.add_argument("a", help="one judge")
     j_agree.add_argument("b", help="the other")
@@ -227,17 +253,20 @@ def _add_project_parsers(sub) -> None:
         help="what this store's own judgements say about the resolution thresholds",
     )
     cal.add_argument(
-        "--sample-below", type=int, metavar="N",
+        "--sample-below",
+        type=int,
+        metavar="N",
         help="also draw N random pairs from BELOW the review bar, the only way to "
-             "learn what the bar is missing",
+        "learn what the bar is missing",
     )
 
-    mg = sub.add_parser(
-        "merge", help="fold one node into another, once confirmed to be one entity"
-    )
+    mg = sub.add_parser("merge", help="fold one node into another, once confirmed to be one entity")
     mg.add_argument("--into", metavar="ID", required=True, help="the node that survives")
     mg.add_argument(
-        "--from", metavar="ID", required=True, dest="from",
+        "--from",
+        metavar="ID",
+        required=True,
+        dest="from",
         help="the node folded in and deleted",
     )
     mg.add_argument("--session-id", metavar="ID", help="session to record in the audit log")
@@ -247,31 +276,67 @@ def _add_project_parsers(sub) -> None:
         help="take back an alias a node absorbed from a different entity",
     )
     un.add_argument(
-        "--list", action="store_true", dest="list_aliases",
+        "--list",
+        action="store_true",
+        dest="list_aliases",
         help="show every node answering to another node's name",
     )
     un.add_argument("--node", metavar="ID", help="the node holding the wrong alias")
     un.add_argument("--alias", metavar="NAME", help="the alias to take back")
     un.add_argument("--session-id", metavar="ID", help="session to record in the audit log")
 
+    fg = sub.add_parser(
+        "forget",
+        help="erase facts outright, for a data subject's deletion request",
+    )
+    # Dry run by default, so the only flag that deletes is --confirm. There is
+    # no undo and the plan is cheap, so showing it first is free.
+    fg.add_argument("--fact", metavar="ID", help="one fact, and every other version of its triple")
+    fg.add_argument(
+        "--entity",
+        metavar="NAME",
+        help="an entity, its aliases, and every fact touching it",
+    )
+    fg.add_argument(
+        "--whole-scope",
+        action="store_true",
+        dest="whole_scope",
+        help="everything in this scope. Not --scope, which already selects which scope",
+    )
+    fg.add_argument(
+        "--search",
+        metavar="TERM",
+        help="facts whose text mentions TERM, listed for a human to confirm. "
+        "A name inside a fact about other entities is not reachable "
+        "structurally, and a text match is not a subject, so this never erases",
+    )
+    fg.add_argument(
+        "--confirm",
+        action="store_true",
+        help="actually erase. Without it, nothing is removed",
+    )
+    fg.add_argument("--reason", metavar="TEXT", help="recorded on the erasure, for the audit trail")
+    fg.add_argument("--ref", metavar="TEXT", help="the ticket this answers, never its contents")
+    fg.add_argument("--by", metavar="WHO", help="who requested it (default: cli)")
+
     notice = sub.add_parser(
         "notice", help="queue a memory file for ingestion (called by the capture hook)"
     )
     notice.add_argument("path", type=Path, help="the memory file that changed")
     notice.add_argument(
-        "--project", metavar="NAME",
+        "--project",
+        metavar="NAME",
         help="project it belongs to (default: detected from the file's own path or cwd)",
     )
 
     pending = sub.add_parser("pending", help="memory files noticed but not yet in the graph")
     pending.add_argument("--project", metavar="NAME", help="only this project")
+    pending.add_argument("--done", nargs="+", metavar="PATH", help="mark these paths as ingested")
     pending.add_argument(
-        "--done", nargs="+", metavar="PATH", help="mark these paths as ingested"
-    )
-    pending.add_argument(
-        "--session", metavar="ID",
+        "--session",
+        metavar="ID",
         help="the session closing them; the Stop gate puts this on the line it "
-             "prints, so a closure can be credited to the firing that asked for it",
+        "prints, so a closure can be credited to the firing that asked for it",
     )
 
     hooks_parser = sub.add_parser(
@@ -282,7 +347,9 @@ def _add_project_parsers(sub) -> None:
         "--dry-run", action="store_true", help="show what would be registered, change nothing"
     )
     hooks_parser.add_argument(
-        "--settings", type=Path, default=None,
+        "--settings",
+        type=Path,
+        default=None,
         help="settings file to write (default: ~/.claude/settings.json)",
     )
 
@@ -303,7 +370,8 @@ def _add_project_parsers(sub) -> None:
         "--hook-json", action="store_true", help="emit Stop hook JSON instead of plain text"
     )
     stop.add_argument(
-        "--session-id", default=None,
+        "--session-id",
+        default=None,
         help="the calling session, so the gate holds it open at most once",
     )
 
@@ -315,48 +383,54 @@ def _add_project_parsers(sub) -> None:
         ),
     )
     infer.add_argument(
-        "--write", action="store_true",
+        "--write",
+        action="store_true",
         help="apply the hints. Without this nothing is written and the proposals are printed",
     )
     infer.add_argument(
-        "--clear", action="store_true",
+        "--clear",
+        action="store_true",
         help=(
             "remove the hints this command applied, leaving hints a caller "
             "wrote at write time untouched. Needs --write to take effect"
         ),
     )
     infer.add_argument(
-        "--rescan", action="store_true",
+        "--rescan",
+        action="store_true",
         help="forget which facts have been examined, so their text is read again",
     )
     infer.add_argument(
-        "--limit", type=int, default=infer_causal.DEFAULT_LIMIT,
+        "--limit",
+        type=int,
+        default=infer_causal.DEFAULT_LIMIT,
         help=f"facts to read this run (default: {infer_causal.DEFAULT_LIMIT})",
     )
     infer.add_argument(
-        "--batch-size", type=int, default=infer_causal.DEFAULT_BATCH,
+        "--batch-size",
+        type=int,
+        default=infer_causal.DEFAULT_BATCH,
         help=f"facts per model call (default: {infer_causal.DEFAULT_BATCH})",
     )
 
-    rec = sub.add_parser(
-        "recall", help="facts matching a prompt, for the UserPromptSubmit hook"
-    )
+    rec = sub.add_parser("recall", help="facts matching a prompt, for the UserPromptSubmit hook")
     rec.add_argument("prompt", nargs="?", default="", help="prompt text (default: stdin)")
     rec.add_argument(
-        "--hook-json", action="store_true",
+        "--hook-json",
+        action="store_true",
         help="emit UserPromptSubmit hook JSON instead of plain text",
     )
     rec.add_argument("--top-k", type=int, default=recall_cmd.DEFAULT_TOP_K)
     rec.add_argument(
-        "--session-id", default=None,
+        "--session-id",
+        default=None,
         help="the calling session, so a read can be tied to the write it produced",
     )
 
-    ana = sub.add_parser(
-        "analyse", help="first-run comprehension pass for an existing project"
-    )
+    ana = sub.add_parser("analyse", help="first-run comprehension pass for an existing project")
     ana.add_argument(
-        "--done", action="store_true",
+        "--done",
+        action="store_true",
         help="record that the pass has run, so the session briefing stops asking",
     )
     ana.add_argument("--project", metavar="NAME", help="override the detected project")
@@ -369,19 +443,16 @@ def _add_project_parsers(sub) -> None:
         help="what memory knows about this project, for the SessionStart hook",
     )
     brief.add_argument(
-        "--hook-json", action="store_true",
+        "--hook-json",
+        action="store_true",
         help="emit Claude Code's SessionStart hook JSON instead of plain text",
     )
-    brief.add_argument(
-        "--project", metavar="NAME", help="override the detected project"
-    )
+    brief.add_argument("--project", metavar="NAME", help="override the detected project")
 
     bench = sub.add_parser(
         "benchmark", help="cost and latency baseline for a real ingest + query cycle"
     )
-    bench.add_argument(
-        "--rounds", type=int, default=5, help="cycles to measure (default: 5)"
-    )
+    bench.add_argument("--rounds", type=int, default=5, help="cycles to measure (default: 5)")
 
     edit = sub.add_parser(
         "notice-edit",
@@ -402,28 +473,34 @@ def _add_project_parsers(sub) -> None:
         "eval", help="retrieval quality against this store, for comparing configurations"
     )
     ev.add_argument(
-        "--limit", type=int, default=None,
+        "--limit",
+        type=int,
+        default=None,
         help="cases to score (default: every fact joining two distinct entities)",
     )
     ev.add_argument(
-        "--ablate", action="store_true",
+        "--ablate",
+        action="store_true",
         help="also score the configurations each retrieval change was chosen against",
     )
     ev.add_argument(
-        "--shape", choices=["all", "entity_pair", "entity_single", "prose", "multihop"],
+        "--shape",
+        choices=["all", "entity_pair", "entity_single", "prose", "multihop"],
         default="all",
         help="query shape (default: all four; one shape alone can invert a conclusion)",
     )
     ev.add_argument(
-        "--context", action="store_true",
+        "--context",
+        action="store_true",
         help="report what a recall costs in tokens against injecting the whole "
-             "scope, with the hit rate beside it",
+        "scope, with the hit rate beside it",
     )
     ev.add_argument(
-        "--sweep", action="store_true",
+        "--sweep",
+        action="store_true",
         help="with --context, measure the saving at several corpus sizes "
-             "instead of only the current one; slow, because it rebuilds and "
-             "re-queries scratch scopes rather than extrapolating",
+        "instead of only the current one; slow, because it rebuilds and "
+        "re-queries scratch scopes rather than extrapolating",
     )
     # The other other evaluation. `eval` scores this store against itself,
     # which cannot be compared with anybody else's number; this runs a
@@ -431,85 +508,107 @@ def _add_project_parsers(sub) -> None:
     ext = sub.add_parser(
         "eval-external",
         help="run a published benchmark (LoCoMo, LongMemEval) through the real "
-             "write and query path",
+        "write and query path",
     )
     ext.add_argument("dataset", choices=sorted(external_datasets))
     ext.add_argument(
         "path",
         help="the dataset file, which you download yourself: neither corpus is "
-             "redistributable here (see docs/BENCHMARKS.md for both URLs). "
-             "tests/fixtures/ holds a small synthetic file in each schema",
+        "redistributable here (see docs/BENCHMARKS.md for both URLs). "
+        "tests/fixtures/ holds a small synthetic file in each schema",
     )
     ext.add_argument(
-        "--per-type", type=int, default=0, metavar="N",
+        "--per-type",
+        type=int,
+        default=0,
+        metavar="N",
         help="LongMemEval only: take the first N instances of each question "
-             "type. The honest way to run a subset, because the file is ordered "
-             "by type and its first 70 instances are all one of them",
+        "type. The honest way to run a subset, because the file is ordered "
+        "by type and its first 70 instances are all one of them",
     )
     ext.add_argument(
-        "--limit", type=int, default=0, metavar="N",
+        "--limit",
+        type=int,
+        default=0,
+        metavar="N",
         help="take the first N instances. Smoke tests only: on LongMemEval a "
-             "prefix is one question type rather than a sample",
+        "prefix is one question type rather than a sample",
     )
     ext.add_argument(
-        "--top-k", type=int, default=30, metavar="K",
+        "--top-k",
+        type=int,
+        default=30,
+        metavar="K",
         help="facts per query (default: 30, the largest k reported)",
     )
-    ext.add_argument("--json", metavar="PATH", default="",
-                     help="write the machine-readable report here")
     ext.add_argument(
-        "--results", metavar="PATH", default="",
-        help="append each question's row as it is scored, so a killed run keeps "
-             "what it measured",
+        "--json", metavar="PATH", default="", help="write the machine-readable report here"
     )
     ext.add_argument(
-        "--force", action="store_true",
+        "--results",
+        metavar="PATH",
+        default="",
+        help="append each question's row as it is scored, so a killed run keeps what it measured",
+    )
+    ext.add_argument(
+        "--force",
+        action="store_true",
         help="run even though this database already holds memory outside the "
-             "benchmark's own scopes",
+        "benchmark's own scopes",
     )
 
     bench.add_argument(
-        "--group", metavar="ID", default="benchmark:scratch",
+        "--group",
+        metavar="ID",
+        default="benchmark:scratch",
         help="scope to write throwaway probe facts into (default: a dedicated "
-             "benchmark group, never your real memory)",
+        "benchmark group, never your real memory)",
     )
     bench.add_argument(
-        "--seed-facts", type=int, metavar="N", default=None,
+        "--seed-facts",
+        type=int,
+        metavar="N",
+        default=None,
         help="fill the scope to N facts before measuring, so read latency "
-             "describes a store someone might have (default: 250; 0 measures "
-             "whatever is already there)",
+        "describes a store someone might have (default: 250; 0 measures "
+        "whatever is already there)",
     )
 
-    boot = sub.add_parser(
-        "bootstrap", help="import the work that already exists on this machine"
-    )
+    boot = sub.add_parser("bootstrap", help="import the work that already exists on this machine")
     boot.add_argument(
         "--force", action="store_true", help="sweep again even if discovery has already run"
     )
-    boot.add_argument("--dry-run", action="store_true", help="list what would be queued, queue nothing")
     boot.add_argument(
-        "--only", action="append", choices=list(bootstrap_mod.SOURCES), metavar="SOURCE",
+        "--dry-run", action="store_true", help="list what would be queued, queue nothing"
+    )
+    boot.add_argument(
+        "--only",
+        action="append",
+        choices=list(bootstrap_mod.SOURCES),
+        metavar="SOURCE",
         help=f"limit to one source; repeatable ({', '.join(bootstrap_mod.SOURCES)})",
     )
 
     health_parser = sub.add_parser(
         "health", help="whether this graph is in good shape, and what to do about it"
     )
-    health_parser.add_argument(
-        "--json", action="store_true", help="machine-readable output"
-    )
+    health_parser.add_argument("--json", action="store_true", help="machine-readable output")
 
     skill_parser = sub.add_parser(
         "skill",
         help="print the usage instructions, for a client that has no config file",
     )
     skill_parser.add_argument(
-        "--for", dest="client", choices=["claude-desktop", "generic"],
+        "--for",
+        dest="client",
+        choices=["claude-desktop", "generic"],
         default="claude-desktop",
         help="who the instructions are addressed to (default: claude-desktop)",
     )
     skill_parser.add_argument(
-        "--package", metavar="PATH", type=Path,
+        "--package",
+        metavar="PATH",
+        type=Path,
         help="write an uploadable skill zip here instead of printing the text",
     )
 
@@ -517,11 +616,13 @@ def _add_project_parsers(sub) -> None:
         "adopt", help="wire every MCP client on this machine to one memory"
     )
     adopt_parser.add_argument(
-        "--apply", action="store_true",
+        "--apply",
+        action="store_true",
         help="actually write the config files (default: show what would change)",
     )
     adopt_parser.add_argument(
-        "--force", action="store_true",
+        "--force",
+        action="store_true",
         help="repoint a client registered against a different database",
     )
 
@@ -529,7 +630,8 @@ def _add_project_parsers(sub) -> None:
         "init-db", help="create or upgrade the schema (works from a pip install)"
     )
     initdb_parser.add_argument(
-        "--check", action="store_true",
+        "--check",
+        action="store_true",
         help="report the schema version instead of changing anything",
     )
 
@@ -537,24 +639,34 @@ def _add_project_parsers(sub) -> None:
         "install", help="wire Echo Memory into one project instead of every project"
     )
     inst.add_argument(
-        "--global", action="store_true", dest="user_global",
+        "--global",
+        action="store_true",
+        dest="user_global",
         help="install the skill once for every project, in ~/.claude/skills, "
-             "instead of into one repo",
+        "instead of into one repo",
     )
     inst.add_argument(
-        "--no-bootstrap", action="store_true",
+        "--no-bootstrap",
+        action="store_true",
         help="skip the first-run sweep for work that already exists on this machine",
     )
     inst.add_argument(
-        "root", nargs="?", type=Path, default=Path("."),
+        "root",
+        nargs="?",
+        type=Path,
+        default=Path("."),
         help="project directory (default: the current one)",
     )
     inst.add_argument(
-        "--for", dest="targets", choices=["claude", "cursor", "codex", "all"], default="claude",
+        "--for",
+        dest="targets",
+        choices=["claude", "cursor", "codex", "all"],
+        default="claude",
         help="which tool to set up (default: claude)",
     )
     inst.add_argument(
-        "--project", metavar="NAME",
+        "--project",
+        metavar="NAME",
         help="project name to attribute facts to (default: the directory's own name)",
     )
 
@@ -569,30 +681,37 @@ def _add_trial_parser(sub) -> None:
 
     start = trial.add_parser("start", help="start the trial clock (the 3-week cap)")
     start.add_argument(
-        "--on", type=date.fromisoformat, metavar="YYYY-MM-DD",
+        "--on",
+        type=date.fromisoformat,
+        metavar="YYYY-MM-DD",
         help="start date, if the trial really began before you got round to recording it",
     )
     start.add_argument(
-        "--restart", metavar="WHY",
-        help="close the open run and begin a new one, recording why the old "
-             "one stopped counting",
+        "--restart",
+        metavar="WHY",
+        help="close the open run and begin a new one, recording why the old one stopped counting",
     )
     start.add_argument(
-        "--cap-days", type=int, default=observations.DEFAULT_CAP_DAYS,
+        "--cap-days",
+        type=int,
+        default=observations.DEFAULT_CAP_DAYS,
         help=f"hard cap in days (default: {observations.DEFAULT_CAP_DAYS})",
     )
 
-    save = trial.add_parser(
-        "save", help="log a recalled fact that saved re-explaining something"
-    )
+    save = trial.add_parser("save", help="log a recalled fact that saved re-explaining something")
     save.add_argument("note", help="what it saved re-explaining")
     save.add_argument(
-        "--from", dest="written_by", required=True, metavar="TOOL",
+        "--from",
+        dest="written_by",
+        required=True,
+        metavar="TOOL",
         help="the tool that originally recorded the fact (criterion 6 counts an instance "
-             "only when this differs from --into)",
+        "only when this differs from --into)",
     )
     save.add_argument(
-        "--into", dest="recalled_by", metavar="TOOL",
+        "--into",
+        dest="recalled_by",
+        metavar="TOOL",
         help="the tool that recalled it (default: this CLI's ECHO_MEMORY_AGENT_ID)",
     )
 
@@ -601,12 +720,16 @@ def _add_trial_parser(sub) -> None:
     dup.add_argument("node_b")
     dup.add_argument("note", help="why they're the same entity")
 
-    not_dup = trial.add_parser("not-dup", help="dismiss a similar-looking pair as genuinely distinct")
+    not_dup = trial.add_parser(
+        "not-dup", help="dismiss a similar-looking pair as genuinely distinct"
+    )
     not_dup.add_argument("node_a")
     not_dup.add_argument("node_b")
     not_dup.add_argument("note", nargs="?", default="reviewed, distinct entities")
 
-    bad_merge = trial.add_parser("bad-merge", help="record an entity resolution that merged two distinct entities")
+    bad_merge = trial.add_parser(
+        "bad-merge", help="record an entity resolution that merged two distinct entities"
+    )
     bad_merge.add_argument("audit_entry_id", type=int, help="as shown by `echo-memory trial check`")
     bad_merge.add_argument("note", help="which two entities were wrongly merged")
 
@@ -623,13 +746,17 @@ def _add_trial_parser(sub) -> None:
 
     check_parser = trial.add_parser("check", help="criterion 6 status and what's awaiting review")
     check_parser.add_argument(
-        "--all", action="store_true", dest="include_exact",
+        "--all",
+        action="store_true",
+        dest="include_exact",
         help="also review exact-name entity resolutions, excluded by default as near-always correct",
     )
     check_parser.add_argument(
-        "--all-projects", action="store_true", dest="all_projects",
+        "--all-projects",
+        action="store_true",
+        dest="all_projects",
         help="also review node pairs spanning unrelated projects, suppressed by default "
-             "because two codebases sharing vocabulary is not a split entity",
+        "because two codebases sharing vocabulary is not a split entity",
     )
 
     trial.add_parser("log", help="every trial observation recorded so far")
@@ -643,6 +770,7 @@ _PROJECT_COMMANDS = {
     "reattribute": reattribute_cmd.run,
     "unmerge": unmerge.run,
     "calibrate": calibrate.run,
+    "forget": forget.run,
     "merge": merge.run,
     "notice": queue_cmd.run_notice,
     "pending": queue_cmd.run_pending,
@@ -683,9 +811,16 @@ def main(argv: list[str] | None = None) -> int:
         bin_path = str(Path(sys.argv[0]).resolve())
         if args.dry_run:
             entries = hooks_cmd.plan(config, scripts_dir, bin_path)
-            print(hooks_cmd.render(
-                {"path": str(args.settings or hooks_cmd.SETTINGS),
-                 "events": [e["event"] for e in entries]}, dry_run=True), end="")
+            print(
+                hooks_cmd.render(
+                    {
+                        "path": str(args.settings or hooks_cmd.SETTINGS),
+                        "events": [e["event"] for e in entries],
+                    },
+                    dry_run=True,
+                ),
+                end="",
+            )
             return 0
         try:
             result = hooks_cmd.apply(config, scripts_dir, bin_path, args.settings)
@@ -835,6 +970,7 @@ def main(argv: list[str] | None = None) -> int:
                 ("without BM25", {"lexical_bm25": False}),
                 ("+ routed expansion", {"route_expansion": True}),
                 ("+ salience", {"use_salience": True}),
+                ("+ cross-encoder rerank", {"use_rerank": True}),
             ]
 
         results = []
@@ -914,8 +1050,13 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             result = external.run(
-                conn, args.dataset, args.path, embedder,
-                limit=args.limit, per_type=args.per_type, top_k=args.top_k,
+                conn,
+                args.dataset,
+                args.path,
+                embedder,
+                limit=args.limit,
+                per_type=args.per_type,
+                top_k=args.top_k,
                 results_path=args.results,
                 progress=lambda line: print(line, file=sys.stderr, flush=True),
             )
@@ -939,9 +1080,12 @@ def main(argv: list[str] | None = None) -> int:
         from echo_memory.cli.benchmark import DEFAULT_SEED_FACTS
 
         seed = DEFAULT_SEED_FACTS if args.seed_facts is None else args.seed_facts
-        print(render_benchmark(
-            run_benchmark(conn, args.group, LocalEmbedder(), args.rounds, seed_facts=seed)),
-              end="")
+        print(
+            render_benchmark(
+                run_benchmark(conn, args.group, LocalEmbedder(), args.rounds, seed_facts=seed)
+            ),
+            end="",
+        )
         return 0
 
     if args.command == "bootstrap":
@@ -976,9 +1120,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "adopt":
-        results = (
-            adopt.apply(config, force=args.force) if args.apply else adopt.plan(config)
-        )
+        results = adopt.apply(config, force=args.force) if args.apply else adopt.plan(config)
         print(
             adopt.render(results, applied=args.apply, manual=adopt.manual_steps(config)),
             end="",
@@ -1009,9 +1151,7 @@ def main(argv: list[str] | None = None) -> int:
                 "per-client:\n  claude mcp add --scope user echo-memory -- echo-memory serve"
             )
             return 0
-        targets = (
-            ("claude", "cursor", "codex") if args.targets == "all" else (args.targets,)
-        )
+        targets = ("claude", "cursor", "codex") if args.targets == "all" else (args.targets,)
         root = args.root.resolve()
         if not root.is_dir():
             print(f"error: not a directory: {root}", file=sys.stderr)
@@ -1046,10 +1186,7 @@ def main(argv: list[str] | None = None) -> int:
             data = fetch_dashboard(conn, config)
             args.html.write_text(render_dashboard(data))
             n_facts = sum(len(sc["facts"]) for sc in data["scopes"].values())
-            print(
-                f"Wrote {args.html} ({n_facts} facts across "
-                f"{len(data['projects'])} projects)."
-            )
+            print(f"Wrote {args.html} ({n_facts} facts across {len(data['projects'])} projects).")
             print(
                 "Note: --html now renders the full dashboard, so it covers every scope "
                 "rather than just --scope, and includes superseded facts as history. "
@@ -1080,8 +1217,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "export":
         result = export_group(conn, group_id, args.out)
         print(
-            f"Exported {result['n_nodes']} nodes, {result['n_facts']} facts "
-            f"to {result['out_dir']}"
+            f"Exported {result['n_nodes']} nodes, {result['n_facts']} facts to {result['out_dir']}"
         )
         return 0
 
