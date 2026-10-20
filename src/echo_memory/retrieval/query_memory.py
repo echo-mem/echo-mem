@@ -13,7 +13,7 @@ import time
 from echo_memory import erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger, log_query_memory
-from echo_memory.retrieval import bm25, rerank, salience
+from echo_memory.retrieval import bm25, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
 from echo_memory.retrieval.fusion import K as RRF_K
 
@@ -1036,7 +1036,6 @@ def query_memory(
     as_of: int | None = None,
     use_salience: bool | None = None,
     about: list[str] | None = None,
-    use_rerank: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -1235,17 +1234,6 @@ def query_memory(
         unscored = [f["fact_id"] for f in facts if f["fact_id"] not in similarity]
         similarity.update(_missing_similarity(conn, group_id, query_embedding, unscored))
     _annotate(facts, similarity, set(vector_ids), set(lexical_ids))
-
-    # Reranked AFTER the fields are attached and before the result is returned,
-    # so the cross encoder reorders an answer that is already complete rather
-    # than becoming a fourth thing that has to compute them. `rank` is
-    # reassigned below; `score` is not touched, because a caller thresholds on
-    # it as cosine similarity and a cross encoder logit is a different scale.
-    reranking = rerank.USE_RERANK if use_rerank is None else use_rerank
-    if reranking and query and not digest and len(facts) > 1:
-        facts = rerank.order(query, facts)
-        for i, fact in enumerate(facts, start=1):
-            fact["rank"] = i
 
     log_query_memory(
         _logger,

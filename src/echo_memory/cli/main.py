@@ -975,7 +975,6 @@ def main(argv: list[str] | None = None) -> int:
                 ("without BM25", {"lexical_bm25": False}),
                 ("+ routed expansion", {"route_expansion": True}),
                 ("+ salience", {"use_salience": True}),
-                ("+ cross-encoder rerank", {"use_rerank": True}),
             ]
 
         results = []
