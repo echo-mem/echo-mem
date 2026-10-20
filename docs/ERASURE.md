@@ -1,14 +1,18 @@
 # Erasure
 
-Design for `echo-memory forget`. Not implemented yet; this document is the
-decision record that has to exist first, because erasure is the one operation
-that deliberately breaks the bi-temporal guarantee the rest of the store is
-built on.
+Design record for `echo-memory forget`, written before the code and corrected
+against it. Erasure is the one operation that deliberately breaks the
+bi-temporal guarantee the rest of the store is built on, so the reasoning
+belongs somewhere a reader can argue with it.
 
-Written 2026-10-20. Implementation language is Python, in
-`src/echo_memory/erasure.py`, with migration `0028_erasure_events`. The cloud
-console calls the same module rather than reimplementing it; see
-"Never an MCP tool" for why the surface is deliberately narrow.
+Written 2026-10-20 and shipped the same day: `src/echo_memory/erasure.py`,
+migration `0028_erasure_events`, `tests/integration/test_erasure.py`. The
+hosted side is `echo-cloud erase`, in echo-mem-cloud, which calls this module
+rather than reimplementing it.
+
+Where the implementation disagreed with the plan, this document has been
+updated to say what was built and why, rather than left as a record of what
+was expected. Those places are marked.
 
 ## Why this is needed
 
@@ -52,9 +56,13 @@ fact is gone.
 ```
 echo-memory forget --fact <edge_id>      exact, complete
 echo-memory forget --entity <name>       complete for structural membership
-echo-memory forget --scope <group_id>    complete
+echo-memory forget --whole-scope         complete
 echo-memory forget --search <term>       candidates only, never automatic
 ```
+
+`--whole-scope` is not `--scope`, which is already a global flag selecting
+which scope to act in. A command where `--scope` means two things is a command
+that erases the wrong graph one day.
 
 `--entity` removes the node, its aliases, every edge incident to it in every
 version, and every derived row above. That is complete for anything the graph
@@ -89,13 +97,17 @@ remain leaves a supersession chain with a hole, which reads as corruption and
 tells a reader exactly where something was removed. `--fact` on any version
 erases every version of that triple in that scope.
 
-**3. Rebuild lexical statistics, do not decrement them.** Correct decrementing
+**3. Drop lexical statistics, do not decrement them.** Correct decrementing
 requires re-tokenising the text that is about to be destroyed, getting the
 arithmetic right, and deleting any `lexical_term` row that reaches zero, or the
-lexeme lingers as evidence. Instead, mark the scope stale and let
-`bm25.refresh` rebuild from the surviving corpus. The measured cost is seconds
-even on a 33,184 fact scope, and it cannot produce an orphan lexeme or an
-off-by-one.
+lexeme lingers as evidence of an erased fact's vocabulary.
+
+*Changed in implementation:* the plan was to mark the scope stale and let
+`bm25.refresh` rebuild. Deleting the scope's `lexical_term` and
+`lexical_scope` rows outright is strictly better and simpler, because a null
+reads as stale to both readers anyway, so the next write rebuilds from the
+survivors. The intermediate state has no statistics rather than wrong ones,
+and there is no window in which an orphan lexeme exists.
 
 **4. Strip ids from arrays, keep the rows.** `read_event.returned_fact_ids`,
 `eval_run.returned`, `audit_entry.affected_edge_ids` and
@@ -125,44 +137,73 @@ theoretical at current volumes: the busiest observed month is 2,185 against a
 and deliberately does not gate the refund, because a reason enum that decides
 money is a reason enum people lie to.
 
-**6. Never an MCP tool.** `forget` is reachable from the CLI and from an
-authenticated console action, and from nowhere else.
+**6. Never an MCP tool, and not self serve either.** `forget` is reachable
+from `echo-memory forget` and `echo-cloud erase`, and from nowhere else. A
+test reads the tools the server actually publishes, so registering one later
+fails loudly rather than quietly.
 
 Exposing it over MCP would put irreversible deletion of a customer's whole
-graph one prompt injection away from any agent holding a key. In the cloud it
-additionally requires the account's own authenticated session rather than an
-API key, because API keys live in agent configs and leak by design: a key is
-built to be handed to a tool, a session is not.
+graph one prompt injection away from any agent holding a key.
 
-## Order of operations
+*Narrower than planned:* there is no console action either. A self serve,
+irreversible delete with no cooling off period is a support incident with a
+legal deadline attached, and both GDPR and the DPDP Act allow 30 days to act
+on a request rather than demanding it happen inside one click. A console path
+should create a request an operator completes, not perform the deletion.
 
-Erasure mixes Cypher against AGE with ordinary SQL, and a script that mixes
-them has no transaction at all. So this cannot be one atomic unit, and the
-order has to make every crash state safe and every step idempotent.
+The standing rule that anything an agent does as part of a loop must be
+reachable over MCP does not conflict with this: erasure answers a person's
+legal request and is never a step in an agent's loop.
+
+## It is one transaction, not an ordered sequence
+
+This section said the opposite until the belief behind it was measured.
+
+The plan was an ordered, resumable sequence whose every crash state was safe,
+because the project records that a script mixing Cypher with ordinary SQL has
+no transaction at all. That belief is mis-attributed. `infra.db.connect`
+returns an autocommit connection, so nothing is in a transaction unless
+something opens one, Cypher or not. Measured on 2026-10-20: inside an explicit
+`with conn.transaction():`, both a direct `DELETE FROM echo_memory."FACT"` and
+a Cypher `DELETE` followed by a raise roll back cleanly.
+
+So erasure is atomic and the resumption machinery does not exist. The order
+below is still the order the code runs in, because dependency order is worth
+keeping readable, but no step depends on the previous one having committed.
 
 ```
-1. INSERT erasure_event (status = 'started')      intent survives any later crash
-2. DELETE fact_embedding    WHERE edge_id = ANY   derived content first
-3. DELETE node_embedding    WHERE node_id = ANY
-4. DELETE causal_hint_scan  WHERE edge_id = ANY
-5. DELETE eval_judgement    WHERE edge_id = ANY
-6. UPDATE arrays            array_remove(...)     keep events, drop pointers
-7. UPDATE trial_observation SET note = NULL
-8. DELETE audit_entry       WHERE affected...     history text last of the SQL
-9. DELETE the AGE edges, then any orphaned nodes  content itself
-10. Mark the scope's lexical statistics stale
-11. VACUUM the affected tables
-12. UPDATE erasure_event (status = 'completed')
+1. derived content:  fact_embedding, node_embedding, causal_hint_scan,
+                     eval_judgement
+2. pointers:         array_remove from eval_run, read_event, audit_entry
+3. audit text:       before_fact, after_fact, resolution_detail nulled;
+                     summary replaced; rows kept
+4. the content:      the AGE edges, then the nodes orphaned by them
+5. statistics:       the scope's lexical_term and lexical_scope rows
+6. the record:       erasure_event, status 'completed'
 ```
 
-Every step is a `DELETE ... WHERE` or an idempotent `UPDATE`, so a resume
-re-runs the whole sequence safely. A crash between any two steps leaves more
-erased than before, never less, and never leaves a fact whose provenance was
-deleted while the fact survived.
+`VACUUM` runs after the transaction commits, because it cannot run inside one.
+A failure there leaves the data logically erased and physically recoverable
+from the raw files, so it is reported rather than swallowed.
 
-Read back after each step rather than trusting it. An AGE delete followed by a
-raise has been observed not to roll back, leaving embeddings pointing at edges
-that no longer existed.
+`erasure_event.status` survives the simplification. A row is still written
+'completed' inside the transaction rather than 'started' first, and the column
+stays because a future multi-group erasure, which the cloud now does, is
+several transactions and can genuinely stop halfway.
+
+### Two things the schema decided, not the design
+
+**audit_entry rows are redacted, never deleted.**
+`trial_observation.audit_entry_id` is a `NO ACTION` foreign key, so deleting a
+referenced row errors; and `summary` is `NOT NULL`, so it takes a fixed string
+rather than a null. The row survives as evidence a mutation happened, with its
+text gone and its ids stripped. This is better than the delete this document
+originally specified: the count of mutations stays true.
+
+**`eval_judgement.edge_id` is `text` where the others are `graphid`.** That is
+the mismatch that reads as false for every row rather than raising, which is
+how 191 of 191 embeddings were once deleted. Each query casts for the column
+it is actually addressing.
 
 ## What survives: `erasure_event`
 
