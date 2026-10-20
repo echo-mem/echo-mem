@@ -9,6 +9,49 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+## 0.5.5
+
+**`echo-memory forget` erases facts outright.** GDPR Article 17 and India's DPDP
+Act both require a data subject's personal data to be deleted on request, and the
+store had no way to do it: supersession sets `t_invalid` and keeps the fact, which
+is right for memory and insufficient for law.
+
+Erase one fact, one entity with everything touching it, or a whole scope. Dry run
+by default, so the only flag that deletes is `--confirm`.
+
+**It removes the text from the seven places it lives**, not just the edge: the fact
+and every superseded version of it, the entity node and its aliases, the audit log's
+before, after, summary and detail text, any causal quote, the per scope term
+statistics, and both embedding tables. The last two are the ones that would be
+missed. `lexical_term` holds the actual lexemes, so an erased fact stays queryable
+by its vocabulary; and embedding inversion recovers a meaningful fraction of the
+source text from a vector, so deleting the row while keeping the vector is
+obfuscation rather than erasure.
+
+**One limit, stated rather than hidden.** A person named inside the text of a fact
+whose two endpoints are other entities is not reachable structurally. Finding those
+needs a text scan, and a scan must not act alone, because a false positive destroys
+a fact nobody asked about and there is no undo. `--search` lists candidates and
+exits; a human confirms. Structural erasure is guaranteed, textual mention erasure
+is best effort with review.
+
+**`query_memory` says when an `as_of` answer is thinner than the past it
+describes.** A query about a past moment is a claim about what was believed then,
+and an erasure since makes that claim incomplete. Responses now carry
+`excluded_by_erasure` with the count and the dates when the window spans a recorded
+erasure. The field is absent otherwise, so nothing changes for existing callers.
+Returning a smaller past silently would turn the one property a reader is meant to
+rely on into one they cannot.
+
+**Not reachable over MCP, deliberately,** and a test reads the published tool list
+so adding it later fails loudly. Irreversible deletion of a whole scope, one prompt
+injection away from any agent holding a key, is not a trade worth making.
+
+Migration 0028 adds `erasure_event`, which records that an erasure happened without
+recording what it was: counts, a scope, a verb, who asked and a ticket reference,
+and no fact text or entity name anywhere. A compliance record listing the names of
+people who asked to be forgotten is the thing they asked to not exist.
+
 ## 0.5.4
 
 **`query_memory` takes `about`, one or two entity names.** Returns only the facts
