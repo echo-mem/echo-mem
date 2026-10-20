@@ -261,11 +261,25 @@ bi-temporality is that a reader can rely on it.
 
 Erasure is immediate for the live database and bounded for backups.
 
-`~/Desktop/mypc/backups/echo-memory/` holds dumps. A dump taken before an
-erasure still contains the erased data, and nothing in the erasure touches it.
-Declare a 30 day backup retention in the DPA and state that erasure completes
-for backups within it. This is standard and accepted; silently keeping dumps
-forever is not.
+A backup taken before an erasure still contains the erased data, and nothing
+in the erasure touches it, so the backup retention window IS the erasure
+window for anything already captured.
+
+*Corrected against reality on 2026-10-20.* This section first said to declare
+a 30 day retention in the DPA. Two things were wrong with that. The hosted
+service already had automated backups nobody had written down here, daily EBS
+snapshots at 03:00 UTC under AWS Data Lifecycle Manager policy
+`policy-02434d5aa408efb13`; and its retention was 14, not 30, so the figure
+about to go into a customer agreement had been invented rather than read.
+
+It is now **7**, reduced deliberately. A shorter window is worse for recovery
+and better for erasure, and erasure is the obligation. Check the policy rather
+than this sentence before repeating the number to anybody.
+
+Local dumps under `~/Desktop/mypc/backups/echo-memory/` are a separate matter:
+they are taken by hand, they expire when somebody deletes them, and they are
+outside any policy. An erasure does not reach them. Delete them when they stop
+being useful, and do not count them as part of the declared window.
 
 The sharper hazard is restore. Restoring a dump taken before an erasure
 resurrects the erased data, with no error and nothing to notice. So:
