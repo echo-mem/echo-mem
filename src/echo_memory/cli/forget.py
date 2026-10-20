@@ -37,6 +37,29 @@ def _preview(conn, group_id: str, edge_ids: list[str]) -> list[str]:
 def run(args, config, conn) -> int:
     group_id = config.group_id(args.scope)
 
+    if args.log:
+        rows = erasure.history(conn, group_id)
+        if not rows:
+            print(f"No erasure has been recorded for {group_id}.")
+            return 0
+        print(f"{len(rows)} erasure(s) recorded for {group_id}:\n")
+        for r in rows:
+            when = (r["completed_at"] or r["requested_at"]).date().isoformat()
+            mark = "" if r["status"] == "completed" else f"  [{r['status'].upper()}]"
+            print(
+                f"  {r['id']:>4}  {when}  {r['verb']:<6} "
+                f"{r['n_edges']} fact(s), {r['n_nodes']} entit(y/ies), "
+                f"{r['n_audit_rows']} audit row(s) redacted{mark}"
+            )
+            detail = [x for x in (r["reason"], r["request_ref"], r["requested_by"]) if x]
+            if detail:
+                print(f"        {' | '.join(detail)}")
+        print(
+            "\nA backup taken before any of these still contains what it "
+            "erased. Replay them after any restore."
+        )
+        return 0
+
     if args.search:
         found = erasure.candidates(conn, group_id, args.search)
         if not found:

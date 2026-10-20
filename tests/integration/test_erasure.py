@@ -431,3 +431,52 @@ def test_no_tool_published_over_mcp_can_erase():
     assert not (published & forbidden), (
         f"erasure must not be reachable over MCP: {sorted(published & forbidden)}"
     )
+
+
+def test_an_as_of_answer_says_what_erasure_removed(migrated_db):
+    """The honesty cost of erasure, paid out loud.
+
+    A query about a past moment is a claim about what was believed then, and
+    an erasure since makes that claim incomplete. Returning a thinner past
+    silently would turn the one property a reader is meant to rely on into one
+    they cannot.
+    """
+    import time as _time
+
+    from echo_memory.retrieval.query_memory import query_memory
+
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder)
+    before_erasure = int(_time.time())
+
+    erasure.erase(conn, GROUP, erasure.plan(conn, GROUP, entity=SUBJECT), requested_by="test")
+
+    # Asking about the present is not a claim about the past, so it says nothing.
+    now = query_memory(conn, GROUP, UNRELATED, 10, embedder)
+    assert "excluded_by_erasure" not in now
+
+    past = query_memory(conn, GROUP, UNRELATED, 10, embedder, as_of=before_erasure)
+    excluded = past["excluded_by_erasure"]
+    assert excluded["n_facts"] == 1
+    assert "excludes 1 fact(s) erased on" in excluded["note"]
+    assert len(excluded["erasures"]) == 1
+
+
+def test_an_erasure_before_the_as_of_moment_is_not_reported(migrated_db):
+    """It removed facts that were already gone by then, so it changes nothing
+    about what was believed at that moment."""
+    import time as _time
+
+    from echo_memory.retrieval.query_memory import query_memory
+
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder)
+    erasure.erase(conn, GROUP, erasure.plan(conn, GROUP, entity=SUBJECT), requested_by="test")
+    _time.sleep(1.1)
+    after_erasure = int(_time.time())
+
+    past = query_memory(conn, GROUP, UNRELATED, 10, embedder, as_of=after_erasure)
+
+    assert "excluded_by_erasure" not in past

@@ -449,21 +449,83 @@ def vacuum(conn, group_id: str) -> None:
         conn.execute(f"VACUUM {table}")
 
 
-def erasures_in(conn, group_id: str, since=None, until=None) -> list[dict]:
-    """Completed erasures in this scope, for as_of to report.
+def excluded_after(conn, group_id: str, as_of: int | None) -> dict | None:
+    """What an as_of answer is missing because it was erased, or None.
 
-    A query over a window spanning an erasure returns less than it would have,
-    with no trace of why. Saying so with a count and a date is what keeps time
-    travel honest while the data goes; silently returning a thinner past turns
-    the store's most defensible property into one nobody can rely on.
+    An erasure that completed AFTER the as_of moment removed facts that
+    existed at that moment, so those are the ones that make the answer
+    thinner. An erasure before it removed facts that were already gone by
+    then and changes nothing about what was believed.
+
+    This is the honesty cost of erasure, paid out loud. A query over a window
+    spanning an erasure returns less than it would have, with no trace of why;
+    silently returning a thinner past turns the store's most defensible
+    property into one nobody can rely on. The whole reason to have
+    bi-temporality is that a reader can trust it.
+
+    Only completed erasures count. A row left 'started' removed an unknown
+    amount and must not be reported as a clean number.
     """
+    if as_of is None:
+        return None
     rows = conn.execute(
         """SELECT completed_at, n_edges
              FROM public.erasure_event
-            WHERE group_id = %s AND status = 'completed'
-              AND (%s::timestamptz IS NULL OR completed_at >= %s)
-              AND (%s::timestamptz IS NULL OR completed_at <= %s)
+            WHERE group_id = %s
+              AND status = 'completed'
+              AND completed_at > to_timestamp(%s)
             ORDER BY completed_at""",
-        (group_id, since, since, until, until),
+        (group_id, as_of),
     ).fetchall()
-    return [{"at": r[0], "n_edges": r[1]} for r in rows]
+    if not rows:
+        return None
+    total = sum(r[1] for r in rows)
+    when = ", ".join(r[0].date().isoformat() for r in rows)
+    return {
+        "n_facts": total,
+        "erasures": [{"at": r[0].isoformat(), "n_facts": r[1]} for r in rows],
+        "note": (
+            f"This answer excludes {total} fact(s) erased on {when}, after the "
+            f"as_of moment. They existed then and have since been deleted on "
+            f"request, so this is not the whole of what was believed."
+        ),
+    }
+
+
+def history(conn, group_id: str) -> list[dict]:
+    """Every erasure recorded for this scope, newest first.
+
+    The operator surface for two things. One, answering "has anything been
+    erased here" without reading the table by hand. Two, the restore runbook:
+    a dump taken before an erasure still contains the erased data and
+    restoring it brings the data back, so after any restore these have to be
+    replayed. Nobody derives that at 2am, so it has to be readable.
+
+    Includes rows left 'started', which are crashed erasures that removed an
+    unknown amount, because those are exactly the ones an operator needs to
+    see rather than the ones to hide.
+    """
+    rows = conn.execute(
+        """SELECT id, status, completed_at, requested_at, verb,
+                  n_edges, n_nodes, n_audit_rows, reason, requested_by, request_ref
+             FROM public.erasure_event
+            WHERE group_id = %s
+            ORDER BY requested_at DESC""",
+        (group_id,),
+    ).fetchall()
+    return [
+        {
+            "id": r[0],
+            "status": r[1],
+            "completed_at": r[2],
+            "requested_at": r[3],
+            "verb": r[4],
+            "n_edges": r[5],
+            "n_nodes": r[6],
+            "n_audit_rows": r[7],
+            "reason": r[8],
+            "requested_by": r[9],
+            "request_ref": r[10],
+        }
+        for r in rows
+    ]

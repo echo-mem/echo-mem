@@ -318,6 +318,11 @@ def _add_project_parsers(sub) -> None:
     fg.add_argument("--reason", metavar="TEXT", help="recorded on the erasure, for the audit trail")
     fg.add_argument("--ref", metavar="TEXT", help="the ticket this answers, never its contents")
     fg.add_argument("--by", metavar="WHO", help="who requested it (default: cli)")
+    fg.add_argument(
+        "--log",
+        action="store_true",
+        help="every erasure recorded for this scope. What a restore has to replay",
+    )
 
     notice = sub.add_parser(
         "notice", help="queue a memory file for ingestion (called by the capture hook)"

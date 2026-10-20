@@ -10,9 +10,10 @@ import os
 import re
 import time
 
+from echo_memory import erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger, log_query_memory
-from echo_memory.retrieval import bm25, salience
+from echo_memory.retrieval import bm25, rerank, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
 from echo_memory.retrieval.fusion import K as RRF_K
 
@@ -65,6 +66,7 @@ def reset_floor_cache() -> None:
     """Forget every measured floor. For tests that rebuild a scope in place."""
     _FLOOR_CACHE.clear()
 
+
 # The sample now yields unordered pairs, so a store of FLOOR_MIN_FACTS facts
 # gives n(n-1)/2 of them, not n**2. Comparing against the squared count would
 # have demanded roughly twice the facts the constant names.
@@ -78,7 +80,10 @@ class ValidationError(Exception):
 
 
 def _validate(
-    query: str | None, top_k: int, digest: bool, as_of: int | None = None,
+    query: str | None,
+    top_k: int,
+    digest: bool,
+    as_of: int | None = None,
     about: list[str] | None = None,
 ) -> None:
     if not digest and (not query or not query.strip()):
@@ -93,16 +98,12 @@ def _validate(
     # because it is an int in Python and as_of=True is not a moment.
     if as_of is not None:
         if isinstance(as_of, bool) or not isinstance(as_of, int):
-            raise ValidationError(
-                f"as_of must be unix seconds as an integer, got {as_of!r}"
-            )
+            raise ValidationError(f"as_of must be unix seconds as an integer, got {as_of!r}")
         if as_of < 0:
             raise ValidationError(f"as_of must not be negative, got {as_of}")
     if about is not None:
         if isinstance(about, str) or not isinstance(about, (list, tuple)):
-            raise ValidationError(
-                f"about must be a list of entity names, got {about!r}"
-            )
+            raise ValidationError(f"about must be a list of entity names, got {about!r}")
         if not about:
             raise ValidationError("about must name at least one entity")
         if len(about) > MAX_ABOUT:
@@ -116,9 +117,7 @@ def _validate(
             )
         for name in about:
             if not isinstance(name, str) or not name.strip():
-                raise ValidationError(
-                    f"about entity names must be non-empty strings, got {name!r}"
-                )
+                raise ValidationError(f"about entity names must be non-empty strings, got {name!r}")
         if digest:
             # Refused rather than ignored. A digest is built by a Cypher query
             # that does not carry this filter, so accepting it would return
@@ -218,8 +217,7 @@ def _mmr_select(conn, group_id: str, ranked_ids: list[str], top_k: int) -> list[
 
     # pgvector hands back a Vector, not a list, and it is not iterable.
     vectors = {
-        edge_id: (vec.to_list() if hasattr(vec, "to_list") else list(vec))
-        for edge_id, vec in rows
+        edge_id: (vec.to_list() if hasattr(vec, "to_list") else list(vec)) for edge_id, vec in rows
     }
     if len(vectors) < len(ranked_ids):
         # Some candidate has no embedding; ranking it against the others would
@@ -241,9 +239,7 @@ def _mmr_select(conn, group_id: str, ranked_ids: list[str], top_k: int) -> list[
     while remaining and len(selected) < top_k:
         best, best_score = None, None
         for candidate in remaining:
-            redundancy = max(
-                cosine(vectors[candidate], vectors[chosen]) for chosen in selected
-            )
+            redundancy = max(cosine(vectors[candidate], vectors[chosen]) for chosen in selected)
             score = MMR_LAMBDA * relevance[candidate] - (1 - MMR_LAMBDA) * redundancy
             if best_score is None or score > best_score:
                 best, best_score = candidate, score
@@ -396,13 +392,19 @@ def vector_candidate_sql(as_of: int | None = None, only: bool = False) -> str:
     fix.
     """
     return VECTOR_CANDIDATE_SQL.format(
-        live=live_clause("f", as_of), only=VECTOR_ONLY_CLAUSE if only else "",
+        live=live_clause("f", as_of),
+        only=VECTOR_ONLY_CLAUSE if only else "",
     )
 
 
 def _vector_candidates(
-    conn, group_id: str, embedding: list[float], limit: int, floor: float | None = None,
-    scores: dict[str, float] | None = None, as_of: int | None = None,
+    conn,
+    group_id: str,
+    embedding: list[float],
+    limit: int,
+    floor: float | None = None,
+    scores: dict[str, float] | None = None,
+    as_of: int | None = None,
     only: list[str] | None = None,
 ) -> list[str]:
     """Ids, best first. Pass `scores` to also collect the cosine similarity
@@ -428,7 +430,8 @@ def _vector_candidates(
         params.append([str(e) for e in only])
     params += [embedding, limit]
     rows = conn.execute(
-        vector_candidate_sql(as_of=as_of, only=only is not None), params,
+        vector_candidate_sql(as_of=as_of, only=only is not None),
+        params,
     ).fetchall()
     if floor is None:
         floor = adaptive_cosine_floor(conn, group_id)
@@ -443,7 +446,6 @@ def _vector_candidates(
     if scores is not None:
         scores.update(dict(ranked))
     return [edge_id for edge_id, _ in ranked]
-
 
 
 def _graph_candidates(
@@ -522,9 +524,7 @@ def _graph_candidates(
         rank = order.get(str(seed), len(order))
         if neighbour not in found or rank < found[neighbour]:
             found[neighbour] = rank
-    return [
-        e for e, _ in sorted(found.items(), key=lambda kv: (kv[1], int(kv[0])))
-    ][:limit]
+    return [e for e, _ in sorted(found.items(), key=lambda kv: (kv[1], int(kv[0])))][:limit]
 
 
 def _any_term_tsquery(terms: list[str]) -> tuple[str, list[str]]:
@@ -549,7 +549,55 @@ def _any_term_tsquery(terms: list[str]) -> tuple[str, list[str]]:
 # Words too common to carry signal, on top of Postgres's own stopwords. A
 # prompt is full of them and each one drags in unrelated facts.
 _NOISE_TERMS = frozenset(
-    ["the", "a", "an", "is", "are", "was", "were", "be", "do", "does", "did", "can", "could", "should", "would", "will", "what", "why", "how", "when", "where", "who", "which", "this", "that", "these", "those", "and", "or", "not", "for", "from", "with", "about", "into", "you", "your", "we", "our", "it", "its", "me", "my", "please", "help", "need", "want"]
+    [
+        "the",
+        "a",
+        "an",
+        "is",
+        "are",
+        "was",
+        "were",
+        "be",
+        "do",
+        "does",
+        "did",
+        "can",
+        "could",
+        "should",
+        "would",
+        "will",
+        "what",
+        "why",
+        "how",
+        "when",
+        "where",
+        "who",
+        "which",
+        "this",
+        "that",
+        "these",
+        "those",
+        "and",
+        "or",
+        "not",
+        "for",
+        "from",
+        "with",
+        "about",
+        "into",
+        "you",
+        "your",
+        "we",
+        "our",
+        "it",
+        "its",
+        "me",
+        "my",
+        "please",
+        "help",
+        "need",
+        "want",
+    ]
 )
 MAX_TERMS = 12
 
@@ -584,7 +632,9 @@ def prompt_terms(prompt: str) -> list[str]:
 # fallback for any scope without usable statistics, so this is a preference
 # rather than a requirement.
 LEXICAL_BM25 = os.environ.get("ECHO_MEMORY_LEXICAL_BM25", "1").lower() in (
-    "1", "true", "yes",
+    "1",
+    "true",
+    "yes",
 )
 
 # Whether how often a fact has been recalled enters the ranking. Off until
@@ -596,7 +646,9 @@ USE_SALIENCE = os.environ.get("ECHO_MEMORY_SALIENCE", "").lower() in ("1", "true
 # returns, and the hop it turns on is the one measured at -0.142 MRR when it
 # was on for everybody.
 ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
-    "1", "true", "yes",
+    "1",
+    "true",
+    "yes",
 )
 
 
@@ -661,9 +713,7 @@ def needs_expansion(conn, group_id: str, query: str) -> bool:
 MAX_ABOUT = 2
 
 
-def _about_edge_ids(
-    conn, group_id: str, about: list[str], as_of: int | None = None
-) -> list[str]:
+def _about_edge_ids(conn, group_id: str, about: list[str], as_of: int | None = None) -> list[str]:
     """The facts that ARE about these entities, structurally.
 
     One name is the edges incident to that node. Two names is the edges whose
@@ -733,8 +783,13 @@ def _about_edge_ids(
 
 
 def _lexical_any_candidates(
-    conn, group_id: str, query: str, limit: int, use_bm25: bool | None = None,
-    as_of: int | None = None, only: list[str] | None = None,
+    conn,
+    group_id: str,
+    query: str,
+    limit: int,
+    use_bm25: bool | None = None,
+    as_of: int | None = None,
+    only: list[str] | None = None,
 ) -> list[str]:
     """Lexical retrieval that matches ANY salient term, ranked. Used by the
     prompt-time recall path; the main query path keeps AND semantics, which is
@@ -761,10 +816,7 @@ def _lexical_any_candidates(
     # cost. ts_rank has no corpus statistics at all, so it is unaffected by
     # this and is the honest ranker for a question about the past.
     if use_bm25 and as_of is None and bm25.usable(conn, group_id):
-        return [
-            edge_id
-            for edge_id, _ in bm25.candidates(conn, group_id, terms, limit, only=only)
-        ]
+        return [edge_id for edge_id, _ in bm25.candidates(conn, group_id, terms, limit, only=only)]
     tsquery, params = _any_term_tsquery(terms)
     live_sql = live_clause("f", as_of)
     only_sql = "" if only is None else "AND f.id::text = ANY(%s)"
@@ -798,9 +850,7 @@ def _lexical_any_candidates(
     return [edge_id for edge_id, score in rows if score > TS_RANK_FLOOR]
 
 
-def _digest_candidates(
-    conn, group_id: str, limit: int, as_of: int | None = None
-) -> list[str]:
+def _digest_candidates(conn, group_id: str, limit: int, as_of: int | None = None) -> list[str]:
     """No query text to rank against: a digest is "catch me up," not "answer
     this," so it's the most recently valid active facts, chronological, not
     relevance-ranked. See the CEO plan's scope decision #2 (session-start
@@ -814,7 +864,8 @@ def _digest_candidates(
     # arguments as a JSON object and there is no positional collision to
     # avoid.
     live = (
-        "e.t_invalid IS NULL" if as_of is None
+        "e.t_invalid IS NULL"
+        if as_of is None
         else "e.t_valid <= $as_of AND (e.t_invalid IS NULL OR e.t_invalid > $as_of)"
     )
     params = {"gid": group_id, "limit": limit}
@@ -911,8 +962,10 @@ def _missing_similarity(
 
 
 def _annotate(
-    facts: list[dict], similarity: dict[str, float],
-    vector_ids: set[str], lexical_ids: set[str],
+    facts: list[dict],
+    similarity: dict[str, float],
+    vector_ids: set[str],
+    lexical_ids: set[str],
 ) -> None:
     """Say why each fact is in the answer, in place.
 
@@ -952,7 +1005,8 @@ def _annotate(
     for position, fact in enumerate(facts, start=1):
         edge_id = fact["fact_id"]
         matched = [
-            name for name, ids in (("vector", vector_ids), ("lexical", lexical_ids))
+            name
+            for name, ids in (("vector", vector_ids), ("lexical", lexical_ids))
             if edge_id in ids
         ]
         if not matched:
@@ -964,13 +1018,25 @@ def _annotate(
 
 
 def query_memory(
-    conn, group_id: str, query: str | None, top_k: int, embedder,
-    digest: bool = False, lexical_only: bool = False,
-    *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
-    rrf_k: int | None = None, graph_hops: int | None = None,
-    lexical_bm25: bool | None = None, route_expansion: bool | None = None,
-    as_of: int | None = None, use_salience: bool | None = None,
+    conn,
+    group_id: str,
+    query: str | None,
+    top_k: int,
+    embedder,
+    digest: bool = False,
+    lexical_only: bool = False,
+    *,
+    use_mmr: bool = False,
+    floor: float | None = None,
+    vector_only: bool = False,
+    rrf_k: int | None = None,
+    graph_hops: int | None = None,
+    lexical_bm25: bool | None = None,
+    route_expansion: bool | None = None,
+    as_of: int | None = None,
+    use_salience: bool | None = None,
     about: list[str] | None = None,
+    use_rerank: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -1027,9 +1093,7 @@ def query_memory(
     if about is not None:
         only = _about_edge_ids(conn, group_id, list(about), as_of=as_of)
         if not only:
-            log_query_memory(
-                _logger, group_id, 0, 0, 0, (time.perf_counter() - start) * 1000
-            )
+            log_query_memory(_logger, group_id, 0, 0, 0, (time.perf_counter() - start) * 1000)
             return {"facts": [], "about": list(about), "scoped": True}
 
     similarity: dict[str, float] = {}
@@ -1040,15 +1104,26 @@ def query_memory(
     elif lexical_only:
         vector_ids = []
         lexical_ids = _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of,
+            conn,
+            group_id,
+            query,
+            LIST_DEPTH,
+            use_bm25=lexical_bm25,
+            as_of=as_of,
             only=only,
         )
         ranked_ids = lexical_ids[:top_k]
     else:
         embedding = query_embedding = embedder.embed(query)
         vector_ids = _vector_candidates(
-            conn, group_id, embedding, LIST_DEPTH, floor=floor, scores=similarity,
-            as_of=as_of, only=only,
+            conn,
+            group_id,
+            embedding,
+            LIST_DEPTH,
+            floor=floor,
+            scores=similarity,
+            as_of=as_of,
+            only=only,
         )
         # ANY-term, not websearch_to_tsquery's implicit AND.
         #
@@ -1065,9 +1140,18 @@ def query_memory(
         # where the same behaviour had been found and worked around. The tool
         # path kept the version that does not work, and the pair looked
         # deliberate.
-        lexical_ids = [] if vector_only else _lexical_any_candidates(
-            conn, group_id, query, LIST_DEPTH, use_bm25=lexical_bm25, as_of=as_of,
-            only=only,
+        lexical_ids = (
+            []
+            if vector_only
+            else _lexical_any_candidates(
+                conn,
+                group_id,
+                query,
+                LIST_DEPTH,
+                use_bm25=lexical_bm25,
+                as_of=as_of,
+                only=only,
+            )
         )
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
@@ -1113,9 +1197,7 @@ def query_memory(
             # tell a multi hop question from a single hop one, rather than for
             # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
-            neighbours = _graph_candidates(
-                conn, group_id, seeds, LIST_DEPTH, as_of=as_of
-            )
+            neighbours = _graph_candidates(conn, group_id, seeds, LIST_DEPTH, as_of=as_of)
             # Filtered here rather than in the traversal SQL. The hop walks
             # OUTWARD from what the content channels found, so unfiltered it
             # would put facts about other entities back into a scoped answer,
@@ -1140,7 +1222,8 @@ def query_memory(
         # top_k, and slicing first throws away the candidates MMR would swap in.
         ranked_ids = (
             _mmr_select(conn, group_id, by_score[:LIST_DEPTH], top_k)
-            if use_mmr else by_score[:top_k]
+            if use_mmr
+            else by_score[:top_k]
         )
 
     facts_by_id = _fetch_facts(conn, ranked_ids)
@@ -1150,10 +1233,19 @@ def query_memory(
     # be similar to.
     if query_embedding is not None:
         unscored = [f["fact_id"] for f in facts if f["fact_id"] not in similarity]
-        similarity.update(
-            _missing_similarity(conn, group_id, query_embedding, unscored)
-        )
+        similarity.update(_missing_similarity(conn, group_id, query_embedding, unscored))
     _annotate(facts, similarity, set(vector_ids), set(lexical_ids))
+
+    # Reranked AFTER the fields are attached and before the result is returned,
+    # so the cross encoder reorders an answer that is already complete rather
+    # than becoming a fourth thing that has to compute them. `rank` is
+    # reassigned below; `score` is not touched, because a caller thresholds on
+    # it as cosine similarity and a cross encoder logit is a different scale.
+    reranking = rerank.USE_RERANK if use_rerank is None else use_rerank
+    if reranking and query and not digest and len(facts) > 1:
+        facts = rerank.order(query, facts)
+        for i, fact in enumerate(facts, start=1):
+            fact["rank"] = i
 
     log_query_memory(
         _logger,
@@ -1163,4 +1255,15 @@ def query_memory(
         len(facts),
         (time.perf_counter() - start) * 1000,
     )
-    return {"facts": facts}
+    result = {"facts": facts}
+
+    # An as_of answer is a claim about what was believed at a past moment, and
+    # erasure makes that claim incomplete without saying so. Reported rather
+    # than hidden: the whole reason to have bi-temporality is that a reader can
+    # trust it, and a silently thinner past is worse than a smaller one that
+    # admits it. Absent when nothing was erased, so the common response shape
+    # does not change.
+    excluded = erasure.excluded_after(conn, group_id, as_of)
+    if excluded is not None:
+        result["excluded_by_erasure"] = excluded
+    return result
