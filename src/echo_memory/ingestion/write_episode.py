@@ -120,8 +120,23 @@ def _not_stored(result: dict) -> dict:
     """
     created = result.get("edges_created") or []
     superseded = result.get("superseded") or []
+    restated = result.get("restated") or []
+    deferred = result.get("ambiguous_entities") or []
+
     if created or superseded:
         result["stored"] = True
+        # A partially deferred episode used to report success and nothing
+        # else. Nine of ten facts dropped looked exactly like ten of ten
+        # written, which is how 680 LoCoMo turns became 336 facts with the
+        # ingest reporting success throughout. If anything was held back, say
+        # so on the success path too.
+        if deferred:
+            result["partial"] = True
+            result["partial_detail"] = (
+                f"{len(created) + len(superseded)} fact(s) stored; the rest were "
+                f"held on ambiguous entities. Pass entity_resolutions and "
+                f"re-send to store them."
+            )
         return result
 
     result["stored"] = False
@@ -137,10 +152,21 @@ def _not_stored(result: dict) -> dict:
             "Pass entity_resolutions to say which existing node each mention "
             "is, or {\"resolved_to\": \"new\"} if it is a new one."
         )
-    else:
+    elif restated:
         result["not_stored"] = "unchanged"
         result["not_stored_detail"] = (
-            "every fact in this episode already exists, unaltered."
+            f"{len(restated)} fact(s) already exist word for word, so nothing "
+            f"changed. This is a success, not a failure: re-sending will not "
+            f"store them either."
+        )
+    else:
+        # Reached by an episode that declared entities and asserted no facts.
+        # It is not "unchanged" - nodes may well have been created - and
+        # saying so was wrong in the one case it could fire.
+        result["not_stored"] = "no_facts"
+        result["not_stored_detail"] = (
+            "this episode asserted no facts. Any new entities in it were "
+            "registered, and a fact naming them will attach to those nodes."
         )
     return result
 
@@ -239,9 +265,14 @@ def _append_alias(conn, node_id: str, alias: str) -> None:
 
 def _find_active_edge(
     conn, group_id: str, source_id: str, target_id: str, relation_type: str
-) -> tuple[str, str] | None:
-    """Returns (edge_id, fact_text) so a supersession's audit entry can
-    record before_fact, not just its id.
+) -> tuple[str, str, str, str | None] | None:
+    """Returns (edge_id, fact_text, confidence, causal_hint).
+
+    fact_text so a supersession's audit entry can record before_fact rather
+    than only an id; the other two so `_restates` can tell a genuine rewrite
+    from an identical one. Those three are the whole content of an edge: the
+    identity key is (group_id, source, target, relation_type) and everything
+    else about a fact lives in these.
 
     Read off the edge table rather than through Cypher, for the same reason
     _adjacent is. `MATCH (a)-[e:FACT]->(b) WHERE id(a) = $sid AND id(b) = $tid`
@@ -253,7 +284,10 @@ def _find_active_edge(
     is the index this query wanted all along.
     """
     row = conn.execute(
-        f"""SELECT id::text, properties ->> '"fact"'::agtype
+        f"""SELECT id::text,
+                   properties ->> '"fact"'::agtype,
+                   properties ->> '"confidence"'::agtype,
+                   properties ->> '"causal_hint"'::agtype
             FROM {GRAPH}."FACT"
             WHERE (properties ->> '"group_id"'::agtype) = %s
               AND start_id = %s::text::graphid
@@ -265,7 +299,39 @@ def _find_active_edge(
     ).fetchone()
     if row is None:
         return None
-    return str(row[0]), row[1]
+    return str(row[0]), row[1], row[2], row[3]
+
+
+def _restates(existing: tuple[str, str, str, str | None], fact: dict) -> bool:
+    """Whether this fact says exactly what the active edge already says.
+
+    Edge identity is (source, target, relation_type) and never the text, and
+    _create_edge used to run unconditionally, so writing the same episode
+    twice created a second edge, ended the first, and emitted a supersession
+    whose before_fact equalled its after_fact. Every call reported stored.
+
+    That is not a theoretical tidiness problem. It is the mechanism behind a
+    customer edge carrying 47 versions of one sentence, and behind 543 writes
+    producing 112 facts while they were billed per write for restating what
+    the store already held. Reproduced 2026-10-21: three identical writes gave
+    three versions, one distinct text, and before == after on both audit rows.
+
+    It also made `not_stored: "unchanged"` unreachable for any episode holding
+    a ready fact, so the branch whose message says everything already exists
+    could only fire where that message was false.
+
+    All three content fields are compared, not just the text. The identity key
+    fixes the first three properties of an edge; `fact`, `confidence` and
+    `causal_hint` are the rest of it, so a fact retyped from inferred to
+    extracted, or given a causal hint it lacked, is a real change and must
+    supersede. Only an exact restatement is a no-op.
+    """
+    _, old_fact, old_confidence, old_hint = existing
+    return (
+        old_fact == fact["fact"]
+        and old_confidence == fact["confidence"]
+        and old_hint == fact.get("causal_hint")
+    )
 
 
 def _invalidate_edge(conn, edge_id: str, t_invalid: int) -> None:
@@ -525,6 +591,11 @@ def write_episode(
     # Reporting it costs nothing and is higher-frequency than anything a
     # dedicated contradiction detector would find.
     superseded: list[dict] = []
+    # Facts that already existed word for word. Counted rather than silently
+    # skipped: "I stored nothing because you already told me" and "I stored
+    # nothing and will not say why" are different answers, and only one of
+    # them lets a caller stop retrying.
+    restated: list[str] = []
     onboarding_sample: dict | None = None
 
     try:
@@ -651,6 +722,13 @@ def write_episode(
                     conn, group_id, source_id, target_id, fact["relation_type"]
                 )
 
+                # An exact restatement is a no-op, not a supersession. See
+                # _restates: without this the store accumulates versions of one
+                # sentence and the caller is billed for each.
+                if existing_edge is not None and _restates(existing_edge, fact):
+                    restated.append(existing_edge[0])
+                    continue
+
                 new_edge_id = _create_edge(
                     conn, group_id, source_id, target_id, fact, session_id, episode_id, now,
                     embedder, project, agent_id,
@@ -658,7 +736,7 @@ def write_episode(
                 edges_created.append(new_edge_id)
 
                 if existing_edge is not None:
-                    old_edge_id, old_fact_text = existing_edge
+                    old_edge_id, old_fact_text = existing_edge[0], existing_edge[1]
                     _invalidate_edge(conn, old_edge_id, now)
                     superseded.append({
                         "fact_id": old_edge_id,
@@ -707,6 +785,7 @@ def write_episode(
     result = {
         "edges_created": edges_created,
         "superseded": superseded,
+        "restated": restated,
         "ambiguous_entities": [
             {
                 "mention": a.mention,
