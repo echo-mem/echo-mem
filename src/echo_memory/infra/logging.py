@@ -72,9 +72,19 @@ def log_write_episode(
     n_ambiguous: int,
     duration_ms: float,
     error: str | None = None,
+    stored: bool | None = None,
+    not_stored: str | None = None,
 ) -> None:
     """Counts and timing only, never the actual entity/fact text: that's
-    user memory content, not operational telemetry."""
+    user memory content, not operational telemetry.
+
+    `stored` and `not_stored` are here because every other field answered
+    "did a write happen" and none answered "did an attempted write fail".
+    A deferred episode logged n_edges_created 0, n_ambiguous 3 and error
+    null, at INFO, which is indistinguishable from a successful write unless
+    the reader knows to reason about n_ambiguous. The two incidents this
+    project has been burned by were both invisible in this line.
+    """
     logger.info(
         "write_episode",
         extra={
@@ -87,6 +97,8 @@ def log_write_episode(
                 "n_ambiguous": n_ambiguous,
                 "duration_ms": round(duration_ms, 1),
                 "error": error,
+                "stored": stored,
+                "not_stored": not_stored,
             }
         },
     )

@@ -589,6 +589,7 @@ def write_episode(
         log_write_episode(
             _logger, group_id, session_id, len(entities), len(facts), 0, 0,
             (time.perf_counter() - start) * 1000, error=str(e),
+            stored=False, not_stored="refused",
         )
         return _refused(str(e))
 
@@ -792,13 +793,10 @@ def write_episode(
         log_write_episode(
             _logger, group_id, session_id, len(entities), len(facts), 0, 0,
             (time.perf_counter() - start) * 1000, error=str(e),
+            stored=False, not_stored="refused",
         )
         return _refused(str(e))
 
-    log_write_episode(
-        _logger, group_id, session_id, len(entities), len(facts),
-        len(edges_created), len(outcome.ambiguous), (time.perf_counter() - start) * 1000,
-    )
     result = {
         "edges_created": edges_created,
         "superseded": superseded,
@@ -817,6 +815,14 @@ def write_episode(
     if onboarding_sample is not None:
         result["onboarding_sample"] = onboarding_sample
     _not_stored(result)
+
+    # Logged after _not_stored, not before, because the whole point of the
+    # two new fields is the verdict and that is where it is decided.
+    log_write_episode(
+        _logger, group_id, session_id, len(entities), len(facts),
+        len(edges_created), len(outcome.ambiguous), (time.perf_counter() - start) * 1000,
+        stored=result.get("stored"), not_stored=result.get("not_stored"),
+    )
 
     # Computed after the transaction commits, and never inside it: this is
     # advice about the next episode, and a failure to produce it must not cost
