@@ -410,11 +410,15 @@ the target this architecture is built toward.
 
 ## Hosted
 
-Running it yourself is free under the Business Source License for any non production use,
-and free in production for organisations under 50 people and under $5M revenue, with no
-account and no feature held
-back. [app.echo-mem.com](https://app.echo-mem.com) runs the database for you at $99 a
-month if you would rather not.
+[app.echo-mem.com](https://app.echo-mem.com) runs the database for you: **$149 a month**
+for 1,500,000 units, where a unit is one fact written or one fact returned. It is paid
+from the first key, because hosting is the thing it charges for, and it runs the same
+published package you would install yourself.
+
+Running it yourself is free for development, testing and evaluation at any size, and free
+in production for organisations under 50 people and under $5M revenue, with no account and
+no feature held back. Above either threshold, production use needs an agreement:
+[talk to us](mailto:hello@echo-mem.com).
 
 <details>
 <summary>Contributing</summary>
