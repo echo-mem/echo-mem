@@ -177,10 +177,34 @@ could not answer the first question a post mortem asks. `query_memory` takes `as
 unix seconds and every channel honours it: vector, full text, the graph hop, the digest.
 
 Supersession is what makes that more than a curiosity. Writing the same source, target and
-relation again does not edit the old fact, it ends it: the old edge takes a `t_invalid` and
-stays queryable. Nothing is ever rewritten, so the history is real rather than
-reconstructed, which is the property the memory reconsolidation literature gives up and
-the reason this project refuses that idea.
+relation again with a **changed** claim does not edit the old fact, it ends it: the old
+edge takes a `t_invalid` and stays queryable. Nothing is ever rewritten, so the history is
+real rather than reconstructed, which is the property the memory reconsolidation
+literature gives up and the reason this project refuses that idea.
+
+Restating an **unchanged** claim is not a change and no longer counts as one. If the fact
+text, the confidence and the causal hint all match the edge already there, the write is
+skipped and reported under `restated`. It used to create a second edge, end the first, and
+emit a supersession whose `before_fact` equalled its `after_fact`. That is the mechanism
+behind one customer edge carrying 47 versions of a single sentence, and behind 543 writes
+producing 112 facts while every one of them was billed. It also makes a retry safe: with
+no idempotency key, a caller retrying a write that had actually landed used to burn a
+version on it.
+
+**Every write answers whether it stored anything.** `write_episode` can end with an empty
+`edges_created` four different ways, and from the caller's side they used to be
+indistinguishable without knowing which other key to inspect. Each one now reports
+`stored: false` and names itself in `not_stored`: `refused` (validation rejected it),
+`deferred` (an entity mention was close enough to an existing node to be worth asking
+about and not close enough to merge), `unchanged` (every fact already existed word for
+word) and `no_facts` (the episode asserted none). A refusal carries the same keys as a
+success, so one check works on every path, and `retryable` separates a database blip worth
+retrying from a validation error that will fail forever. A write that stored some of its
+facts and held the rest says `partial`.
+
+The deferral is the one that cost real data, because it looks most like success: a well
+formed response, no error, `isError` false, and nothing written. A customer loading 26,633
+facts read that as 26,633 successes and stored 1,650.
 
 **Provenance on every fact.** Who wrote it, which tool, which project, when, and which
 reads returned it. A superseded fact is never deleted. It stops being drawn and stays
@@ -226,8 +250,9 @@ Zep/Graphiti, the closest architectural match, whose own description of ingestio
 The obvious reply is that cheap writes are cheap because they do less, and that reply is
 correct on the mechanism. [`docs/WRITE-COST.md`](docs/WRITE-COST.md) answers it properly,
 including the two measured costs of the choice: the Stop gate fired seven times and
-produced one fact, and a write touching an ambiguous entity is deferred while the call
-returns as though it succeeded.
+produced one fact, and a write touching an ambiguous entity is deferred rather than
+stored. The deferral is still the cost; what has changed is that the call now says so
+instead of returning as though it had succeeded.
 
 **Any MCP client.** A coding assistant, a chatbot, an ops agent, or something built in
 house. Coding agents are where this is proven, not what it is limited to.

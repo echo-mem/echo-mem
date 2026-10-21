@@ -640,11 +640,23 @@ write_episode(
   entity_resolutions?: [{mention: string, resolved_to: id | "new", rationale?: string}]
 ) -> {
   edges_created: [id],
+  superseded: [id],
+  restated: [id],                 # already there, word for word, so not written again
   ambiguous_entities: [{mention: string, candidates: [{node_id: id, name: string, similarity: float}]}],
+  stored: bool,                   # the one field a bulk writer branches on
+  not_stored?: "refused" | "deferred" | "unchanged" | "no_facts" | "unavailable",
+  not_stored_detail?: string,
+  retryable?: bool,               # true only for "unavailable"
+  partial?: bool,                 # some facts stored, the rest held
+  partial_detail?: string,
   onboarding_sample?: [{fact_id, fact, confidence, causal_hint, provenance}]
 } | {error: string}
 
-query_memory(scope: "solo" | "shared", query?, top_k: int = 10, max 100, digest: bool = false) -> {facts: [{fact_id, fact, confidence, causal_hint, provenance}]} | {error: string}
+An error carries the same answer keys, so `edges_created` and `stored` are readable on
+every path and a caller does not have to know which key belongs to which outcome.
+
+query_memory(scope: "solo" | "shared", query?, top_k: int = 10, max 100, digest: bool = false,
+             about?: [string] (1 or 2), as_of?: int (unix seconds)) -> {facts: [{fact_id, fact, confidence, causal_hint, provenance, score, rank, matched}]} | {error: string}
 get_audit_log(scope: "solo" | "shared", since?: ISO8601 timestamp) -> {entries: [audit_entry]} | {error: string}
 ```
 
