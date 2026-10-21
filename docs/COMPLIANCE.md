@@ -88,6 +88,12 @@ format the convention names, rather than to rename the first one into a format
 it is not: a verifier reaching for standard tooling has to find what the
 filename promises.
 
+The bundle is copied into `dist/` **after** the PyPI upload and before
+`gh release create`. `gh-action-pypi-publish` sends everything in its packages
+directory through twine, which refuses a file whose extension is not a
+distribution format, so staging it earlier fails the upload. Only the GitHub
+Release needs the file, and that step is last.
+
 Every GitHub Action used is pinned to a **commit SHA**, not a tag, so an action
 owner cannot repoint a version under us. Dependabot keeps those pins current.
 
