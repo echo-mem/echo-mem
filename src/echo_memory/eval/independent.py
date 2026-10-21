@@ -5,8 +5,8 @@ labels free, and it is why every number it produces describes the generated
 task rather than retrieval. Two review rounds established the stronger version
 of that limitation: a biased task can change WHICH CONFIGURATION WINS, not only
 the level of both, so the harness cannot settle what should ship. The recorded
-sign reversal - dropping the lexical channel measured +0.120 MRR under one
-query shape and -0.088 under another - is an instance.
+sign reversal - dropping the lexical channel measured +0.112 MRR under one
+query shape and -0.082 under another - is an instance.
 
 This is the other half. The independence that matters is from the gold-answer
 construction and from the tuning, and it is enforced by order and by shape:

@@ -20,8 +20,26 @@ memory arriving when somebody remembers to ask.
 
 **Silence when there is nothing to say.** This injects into every prompt the
 user types. A hook that always speaks becomes noise the model learns to skim,
-which is how the session briefing lost to three competing hooks. Below a
-relevance floor it emits nothing at all."""
+which is how the session briefing lost to three competing hooks. A prompt too
+short to retrieve against is skipped, and a prompt that matches nothing emits
+nothing.
+
+**There is no relevance floor on this path, and this docstring claimed there
+was one until 2026-10-21.** The claim was not idle: it is the stated reason
+the hook is safe to fire on every prompt. What actually happens is that the
+lexical channel keeps whatever scored above zero - `TS_RANK_FLOOR` is 0.0 and
+BM25 applies no floor at all - so a weak match is injected exactly like a
+strong one. Only the vector channel is floored, and this path is
+`lexical_only=True` because the hook is a fresh process per prompt and the
+embedder costs 6.2s cold.
+
+Left unfixed rather than patched, deliberately. A floor here changes which
+facts reach the model on every prompt, and the bar for that in this codebase
+is a measurement whose interval clears zero, not a plausible constant. The
+lexical scores are ts_rank and BM25 values, which are not comparable to the
+cosine quantile the vector floor is calibrated from, so the number would have
+to be derived rather than borrowed. Until then the honest statement is the
+one above."""
 
 import json
 import re

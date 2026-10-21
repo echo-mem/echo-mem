@@ -12,8 +12,9 @@ never calls a model to store one.
 > Your agents start every session from zero. The usual fix is a notes file you paste into
 > context, which grows until it is mostly irrelevant to whatever you are asking. Echo
 > Memory is the other shape: facts connected to each other, and a query that returns the
-> few that matter. On the author's own store that is **96.7% less context** for the same
-> answer, with the answer still present 87.2% of the time across 1,190 questions.
+> few that matter. On the author's own 325 fact store that is **96.7% less context** for
+> the same answer, with the answer still present 87.2% of the time across 1,190 queries
+> the harness derived from their own answers.
 
 ```
 write_episode                          query_memory
@@ -233,13 +234,19 @@ house. Coding agents are where this is proven, not what it is limited to.
 
 ## Numbers, and how they were taken
 
-Every figure comes from this repository or a live store, on a date, with the command that
-reproduces it on yours. The corpus is small and the noise floor is stated, because a
-difference nobody sized is not a result.
+Every figure comes from this repository or a live store, with the command that reproduces
+it on yours and the size of the store it was taken against. The corpus is small and the
+noise floor is stated, because a difference nobody sized is not a result.
+
+Two of these describe the store rather than the product. `eval --context` and
+`eval --ablate` build their queries from the facts they are scoring, so the labels are
+free and the absolute values belong to this store alone; they are honest about a
+difference between configurations and say nothing about how echo-mem would rank on
+somebody else's data. The two external rows are the ones to compare against anything.
 
 | Measure | Value | Reproduce |
 |---|---|---|
-| Context per recall vs injecting everything | **96.7% less**, hit@10 0.872 over 1,190 questions | `echo-memory eval --context` |
+| Context per recall vs injecting everything | **96.7% less** on a 325 fact store, hit@10 0.872 over 1,190 queries derived from their own answers, so read it as a token ratio with a floor attached rather than as accuracy | `echo-memory eval --context` |
 | The same saving across 8x of corpus growth | 75.5% at 32 facts rising to **96.4% at 261**, hit@10 0.900 to 0.946 | `echo-memory eval --context --sweep` |
 | LoCoMo retrieval, 1,982 questions, 5,882 turns | recall@10 **0.601**, hit@10 0.658, MRR 0.460, session@10 0.850 | `echo-memory eval-external locomo` |
 | LongMemEval retrieval, 90 questions, 15 per type | session@10 **0.937**, recall@10 0.727, MRR 0.428 | `echo-memory eval-external longmemeval --per-type 15` |
