@@ -16,6 +16,7 @@ from echo_memory.audit.get_audit_log import get_fact_history
 from echo_memory.cli import (
     adopt,
     calibrate,
+    distil,
     forget,
     health,
     infer_causal,
@@ -254,6 +255,30 @@ def _add_project_parsers(sub) -> None:
     un.add_argument("--node", metavar="ID", help="the node holding the wrong alias")
     un.add_argument("--alias", metavar="NAME", help="the alias to take back")
     un.add_argument("--session-id", metavar="ID", help="session to record in the audit log")
+
+    ds = sub.add_parser(
+        "distil",
+        help="read facts out of a session the harness already recorded",
+    )
+    # Dry run by default. An extraction pass over a conversation is a proposal,
+    # and a command that silently filled a graph with a model's reading of it
+    # would be worse than the capture gap it closes.
+    ds.add_argument(
+        "--session", metavar="ID",
+        help="a session id or its first characters. Default: the most recent",
+    )
+    ds.add_argument(
+        "--cwd", metavar="PATH",
+        help="the project whose transcripts to read. Default: here",
+    )
+    ds.add_argument(
+        "--limit", type=int, metavar="N",
+        help="only the last N turns you typed, to try it cheaply first",
+    )
+    ds.add_argument(
+        "--write", action="store_true",
+        help="actually store the candidates. Without it, nothing is written",
+    )
 
     fg = sub.add_parser(
         "forget", help="erase facts outright, for a data subject's deletion request"
@@ -676,6 +701,7 @@ _PROJECT_COMMANDS = {
     "reattribute": reattribute_cmd.run,
     "unmerge": unmerge.run,
     "calibrate": calibrate.run,
+    "distil": distil.run,
     "forget": forget.run,
     "merge": merge.run,
     "notice": queue_cmd.run_notice,
