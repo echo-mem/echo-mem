@@ -348,12 +348,18 @@ echo-memory benchmark --rounds 20
 v1a success criterion 5. Writes throwaway probe facts into a dedicated
 `benchmark:scratch` group, never your real memory. Representative local run:
 
+Re-measured 2026-10-21 against a **250 fact** scope, which is the number that
+was missing. The table this replaces was taken before `DEFAULT_SEED_FACTS`
+existed, so it measured an almost empty scope: its 8.4ms query was 2x faster
+than the same query has any right to be, which is the mistake `benchmark.py`
+warns about in its own docstring and had already made once in print.
+
 | operation | min | median | max |
 |---|---|---|---|
-| `write_episode` | 12.3ms | 15.1ms | 24.1ms |
-| `query_memory` | 7.8ms | 8.4ms | 30.0ms |
-| query digest | 0.9ms | 0.9ms | 1.4ms |
-| **cold start** (first write in a process) | | **6198ms** | |
+| `write_episode` | 19.8ms | 24.3ms | 27.3ms |
+| `query_memory` | 14.9ms | 16.8ms | 53.0ms |
+| query digest | 3.1ms | 4.2ms | 5.4ms |
+| **cold start** (first write in a process) | | **5174ms** | |
 
 **Cold start is reported separately on purpose.** It is the `LocalEmbedder` lazy-loading
 sentence-transformers, and since every session starts its own MCP server process, it is

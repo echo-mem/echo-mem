@@ -9,7 +9,7 @@ the answer, with what is measured separated from what is argued.
 Echo Memory invokes no model when it stores a fact. Zep and Graphiti, the
 closest architectural match, describe their own ingestion as "every episode
 triggers multiple LLM calls", with "write cost scales with volume". So the
-comparison is not really 15ms against 2 seconds. It is: they extract entities
+comparison is not really 24ms against 2 seconds. It is: they extract entities
 and relations from raw text, and Echo Memory requires the caller to arrive with
 entities and facts already extracted.
 
@@ -36,8 +36,8 @@ marginal on tokens already paid for, and it is done by the party with the most
 information rather than the least.
 
 **A write that calls no model cannot fail for a reason you do not control.**
-Median write latency is 15ms and the only dependency is a database
-(`echo-memory benchmark`). A write path with a model call in it inherits that
+Median write latency is 24ms against a 250 fact scope and the only dependency
+is a database (`echo-memory benchmark`). A write path with a model call in it inherits that
 provider's availability, rate limits, key rotation and pricing, at precisely
 the moment an agent is trying to record something it just learned. Memory that
 is unavailable when the insight happens is memory you do not have.

@@ -245,7 +245,7 @@ difference nobody sized is not a result.
 | LongMemEval retrieval, 90 questions, 15 per type | session@10 **0.937**, recall@10 0.727, MRR 0.428 | `echo-memory eval-external longmemeval --per-type 15` |
 | Lexical BM25 against `ts_rank` | **+0.0271** MRR on entity_pair [+0.0083, +0.0481] and on multihop [+0.0166, +0.0381], the other two shapes inside noise, none worse | `echo-memory eval --ablate`, the `without BM25` row with its sign reversed |
 | Server side model calls per write | **0** | `echo-memory benchmark` |
-| Write, query, digest latency (median) | 15ms, 8ms, 1ms | `echo-memory benchmark` |
+| Write, query, digest latency (median) | 24ms, 17ms, 4ms, against a 250 fact scope | `echo-memory benchmark` |
 | Entity resolution AUC | 0.666, 95% CI [0.421, 0.881] | `echo-memory calibrate` |
 
 That last row is the one that went the wrong way, and it is here on purpose. The interval
