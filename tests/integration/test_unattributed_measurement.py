@@ -23,22 +23,33 @@ from echo_memory.trial.check import unattributed_facts
 
 FACT = "a fact whose writer was never recorded"
 
+# A session that can evidence its own author needs TWO facts, and they have to
+# differ: restating one word for word stores nothing, so two identical writes
+# yield one edge rather than two.
+SECOND = "a second fact of the same session, written with its author intact"
+
 
 def _serve(migrated_db, agent_id="claude-code"):
     config = Config(
         user_id="ayush", agent_id=agent_id, database_url=migrated_db, project="echo-mem"
     )
-    server.startup(config=config, embedder=VectorEmbedder({"probe": REFERENCE, FACT: REFERENCE}))
+    server.startup(config=config, embedder=VectorEmbedder(
+        {"probe": REFERENCE, "other-probe": REFERENCE, FACT: REFERENCE, SECOND: REFERENCE}
+    ))
     return config
 
 
-def _write_fact(session_id="session-1"):
+def _write_fact(session_id="session-1", subject="probe", fact=FACT):
+    """`subject` and `fact` vary together so one session can assert two
+    distinct facts. Edge identity is (source, target, relation_type), so
+    reusing the subject with new text would supersede the first fact instead
+    of adding a second, and reusing both would restate it and store nothing."""
     result = server.write_episode(
         "shared", session_id,
-        [{"name": "probe", "type": "test"}],
-        [{"source": "probe", "target": "probe", "relation_type": "is",
-          "fact": FACT, "confidence": "extracted"}],
-        entity_resolutions={"probe": {"resolved_to": "new"}},
+        [{"name": subject, "type": "test"}],
+        [{"source": subject, "target": subject, "relation_type": "is",
+          "fact": fact, "confidence": "extracted"}],
+        entity_resolutions={subject: {"resolved_to": "new"}},
     )
     return result["edges_created"][0]
 
@@ -149,7 +160,9 @@ def test_recovery_is_offered_when_the_session_can_evidence_it(migrated_db):
 
     config = _serve(migrated_db)
     keeps_author = _write_fact(session_id="evidenced-session")
-    loses_author = _write_fact(session_id="evidenced-session")
+    loses_author = _write_fact(
+        session_id="evidenced-session", subject="other-probe", fact=SECOND
+    )
     with server._state.pool.connection() as conn:
         _set_agent(conn, loses_author, None)
         group = config.group_id("shared")
