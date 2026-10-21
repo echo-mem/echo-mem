@@ -141,7 +141,19 @@ def _not_stored(result: dict) -> dict:
 
     result["stored"] = False
     if result.get("error"):
-        result["not_stored"] = "refused"
+        kind = result.pop("_kind", "refused")
+        result["not_stored"] = kind
+        # Stated rather than left to be inferred from the message. A write
+        # path with no retry guidance makes every caller guess, and the two
+        # wrong guesses are opposite: hammering a validation error forever, or
+        # dropping data on a database blip.
+        result["retryable"] = kind == "unavailable"
+        if kind == "unavailable":
+            result["not_stored_detail"] = (
+                "the store could not be reached, so nothing was written. "
+                "This one is worth retrying: the episode is unchanged and "
+                "re-sending it is safe."
+            )
     elif result.get("ambiguous_entities"):
         mentions = ", ".join(
             str(a.get("mention")) for a in result["ambiguous_entities"][:3]
@@ -171,8 +183,13 @@ def _not_stored(result: dict) -> dict:
     return result
 
 
-def _refused(reason: str) -> dict:
+def _refused(reason: str, kind: str = "refused") -> dict:
     """A refusal, shaped like every other answer this function gives.
+
+    `kind` separates a request that will never work from one that might. A
+    caller is entitled to know whether retrying is pointless or correct, and
+    before this everything that went wrong came back saying "refused", which
+    tells a retry loop to give up on an outage it should wait out.
 
     It used to be `{"error": ...}` and nothing else, which quietly made the
     only reliable success check impossible. A caller cannot ask
@@ -194,7 +211,7 @@ def _refused(reason: str) -> dict:
     change nothing.
     """
     return _not_stored({"error": reason, "edges_created": [], "superseded": [],
-                        "ambiguous_entities": []})
+                        "ambiguous_entities": [], "_kind": kind})
 
 
 class ValidationError(Exception):

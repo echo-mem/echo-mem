@@ -138,3 +138,33 @@ def test_the_one_check_a_caller_writes_is_correct_everywhere():
     ]
 
     assert [c["stored"] for c in cases] == [False, False, False, True]
+
+
+def test_an_outage_is_marked_retryable_and_a_validation_error_is_not():
+    """The two wrong guesses a caller makes without this are opposite:
+    hammering a validation error forever, or dropping data on a database
+    blip."""
+    validation = _refused("fact text too long")
+    outage = _refused("memory database unavailable", kind="unavailable")
+
+    assert validation["not_stored"] == "refused"
+    assert validation["retryable"] is False
+    assert outage["not_stored"] == "unavailable"
+    assert outage["retryable"] is True
+    assert "worth retrying" in outage["not_stored_detail"]
+
+
+def test_the_kind_is_never_leaked_to_the_caller():
+    """It is how _refused talks to _not_stored, not part of the contract."""
+    assert "_kind" not in _refused("x")
+    assert "_kind" not in _refused("x", kind="unavailable")
+
+
+def test_every_refusal_still_answers_edges_created():
+    """The property the whole shape exists for: one check works on every
+    path."""
+    for kind in ("refused", "unavailable"):
+        out = _refused("something", kind=kind)
+        assert ANSWER_KEYS <= set(out), sorted(out)
+        assert out["edges_created"] == []
+        assert out["stored"] is False

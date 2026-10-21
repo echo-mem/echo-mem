@@ -24,6 +24,7 @@ from echo_memory.infra.project import UNKNOWN as UNKNOWN_AGENT
 from echo_memory.ingestion import bootstrap as bootstrap_mod
 from echo_memory.ingestion import capture
 from echo_memory.ingestion.embeddings import Embedder, LocalEmbedder
+from echo_memory.ingestion.write_episode import _refused
 from echo_memory.ingestion.write_episode import write_episode as _write_episode
 from echo_memory.retrieval.causality import trace_cause as _trace_cause
 from echo_memory.retrieval.query_memory import query_memory as _query_memory
@@ -181,8 +182,8 @@ def write_episode(
     """Record something worth remembering later: a decision, a correction, a
     stated preference, or context that would otherwise be re-explained to
     another tool or a later session. Call it the moment you notice one, not
-    batched and not at the end - a missed memory costs more than an extra
-    call. You extract the entities and facts; this server never infers.
+    batched and not at the end. You extract the entities and facts; this
+    server never infers.
 
     entities:
       name  non-empty, unique within this call
@@ -203,13 +204,14 @@ def write_episode(
     ambiguous_entities, to say which candidate a mention meant:
     {"mention": {"resolved_to": "<node_id>" | "new"}}. Omit otherwise.
 
-    assume_new (optional): True when you know every entity here is new - a
-    symbol just read, a title just coined. It answers "new" up front, so the
-    call cannot come back asking. Explicit resolutions win.
+    assume_new (optional): True when every entity here is new. Answers
+    "new" up front so the call cannot come back asking. Explicit
+    resolutions win.
 
-    related_entities in the reply: names this scope already uses for what
-    you just wrote. Reuse them rather than coin a near-synonym. Advisory;
-    no reply needed.
+    In the reply: `stored` is true only if the graph changed; when false,
+    `not_stored` says why and `retryable` says whether to send it again. A
+    call that returns is not a fact that stored. `related_entities` names
+    what this scope already calls these things; prefer them.
 
     Example:
     write_episode(scope="solo", session_id="s1",
@@ -222,7 +224,10 @@ def write_episode(
     try:
         group_id = _state.config.group_id(scope)
     except ConfigError as e:
-        return {"error": str(e)}
+        # Shaped like every other answer this tool gives. A bare {"error"}
+        # here is the exact shape _refused exists to prevent: a caller cannot
+        # ask len(result["edges_created"]) of a dict that has no such key.
+        return _refused(str(e))
     try:
         with _state.pool.connection() as conn:
             return _write_episode(
@@ -231,7 +236,10 @@ def write_episode(
                 assume_new=assume_new,
             )
     except psycopg.OperationalError as e:
-        return _operational_error(e)
+        # kind="unavailable", so a caller can tell a blip worth retrying from
+        # a validation error that will never succeed. The read tools below
+        # keep the bare shape: they have no edges_created to answer for.
+        return _refused(_operational_error(e)["error"], kind="unavailable")
 
 
 

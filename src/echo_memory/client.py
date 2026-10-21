@@ -15,6 +15,7 @@ from echo_memory.audit.get_audit_log import get_audit_log as _get_audit_log
 from echo_memory.infra.config import Config, ConfigError, load_config
 from echo_memory.infra.pool import make_pool
 from echo_memory.ingestion.embeddings import Embedder, LocalEmbedder
+from echo_memory.ingestion.write_episode import _refused
 from echo_memory.ingestion.write_episode import write_episode as _write_episode
 from echo_memory.retrieval.causality import trace_cause as _trace_cause
 from echo_memory.retrieval.query_memory import query_memory as _query_memory
@@ -42,7 +43,9 @@ class EchoMemory:
         try:
             group_id = self._config.group_id(scope)
         except ConfigError as e:
-            return {"error": str(e)}
+            # The write shape, not a bare error: an in-process caller checks
+            # edges_created exactly like an MCP one does.
+            return _refused(str(e))
         with self._pool.connection() as conn:
             return _write_episode(
                 conn, group_id, session_id, entities, facts, entity_resolutions, self._embedder,
