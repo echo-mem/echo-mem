@@ -9,6 +9,8 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+## 0.5.6
+
 **Apache 2.0, for all of it.** Versions 0.5.0 to 0.5.5 shipped under the
 Business Source License, which made production use free only below fifty
 people and $5M of revenue. That is withdrawn. Ateleir Tech holds the copyright
@@ -24,6 +26,32 @@ copyright holder. `LICENSE-APACHE-2.0` is gone; `LICENSE` is that text now.
 One consequence worth naming: the OpenSSF Best Practices badge was blocked
 outright by `floss_license`, which requires an OSI approved licence. It is
 obtainable now, and is documented as not yet claimed rather than claimed.
+
+**A sign-off instead of a contributor agreement.** The CLA added one thing
+over the Apache licence, the right to relicense a contribution later, and this
+project does not use it: everything commercial lives in a separate private
+repository. Replaced by the Developer Certificate of Origin, `git commit -s`.
+The accepted cost is stated in `DCO.md`: no contributed code here can be moved
+off Apache 2.0 without asking its author.
+
+**`echo-memory why` says which scope the fact is in.** `recall` answers from
+both scopes and hands back a fact id; `why` takes the global `--scope`, which
+defaults to solo. So the obvious flow answered "No audit history found" for a
+fact that had some, one scope over. Fixed by @Sonike in #156.
+
+**Published to the MCP registry on every tag.** The registry served 0.5.3 for a
+month while PyPI was on 0.5.5, because publishing was a manual runbook step.
+The server is renamed `com.echo-mem/echo-mem` and authenticated by a DNS record
+on a domain that survives an organisation move, which the old personal
+namespace could not be. A scheduled check says so if the three versions ever
+disagree again.
+
+**A disclosure route that works.** `SECURITY.md` told researchers to use
+GitHub's private vulnerability reporting, which was switched off. It is on, and
+the file no longer claims there is no stable release.
+
+**The README said the hosted plan was $99.** It is $149 for 1,500,000 units, and
+a check in the cloud repository now fails when the two disagree.
 
 ## 0.5.5
 

@@ -6,7 +6,7 @@
 # (`-m echo_memory.server`) and every existing install reference it, and
 # renaming the module would break live configuration to fix a cosmetic mismatch.
 name = "echo-mem"
-version = "0.5.5"
+version = "0.5.6"
 description = "A long-horizon memory architecture for AI agents"
 readme = "README.md"
 # An SPDX expression, not an inlined licence text: pip, PyPI and every
