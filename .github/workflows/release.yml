@@ -107,6 +107,15 @@ jobs:
       attestations: write   # the build provenance written below
       contents: write       # creating the GitHub Release
     steps:
+      # BEFORE download-artifact, not after. This job had no checkout at all,
+      # which was invisible until a step read a repository file: the registry
+      # publish asks server.json for the version and died with
+      # FileNotFoundError on the v0.5.6 tag, after PyPI had already published.
+      #
+      # Order matters. actions/checkout cleans the working directory, so
+      # running it second would delete the dist/ it had just downloaded.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist

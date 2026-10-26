@@ -1,0 +1,58 @@
+# Publish server.json to the MCP registry, on its own.
+#
+# The release workflow does this as its last step, which is where it belongs:
+# the registry points at a PyPI version, so it has to run after PyPI. This is
+# the recovery path for when that last step is the only one that failed.
+#
+# It happened on v0.5.6. PyPI published, the GitHub Release was created with
+# its attestations, and the registry step died with FileNotFoundError on
+# server.json, because the publish job had no checkout. Without a way to run
+# this alone the only recovery was cutting a version nobody needed, which is a
+# bad reason to burn a version number.
+#
+# Deliberately NOT a workflow_dispatch on release.yml itself. That would mean
+# gating five steps on an input and making the release path conditional, and
+# the release path is the one that must not break again.
+name: Registry publish
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.11"
+
+      # The registry verifies PyPI ownership from the mcp-name line in the
+      # description of the version ALREADY on PyPI. Publishing a server.json
+      # whose version is not on PyPI yet is refused, and the refusal reads as
+      # an ownership problem rather than an ordering one, so it is worth
+      # catching here with a message that says which it is.
+      - name: The version in server.json must already be on PyPI
+        run: |
+          VERSION=$(python -c "import json;print(json.load(open('server.json'))['version'])")
+          echo "server.json says $VERSION"
+          if ! curl -sf "https://pypi.org/pypi/echo-mem/$VERSION/json" >/dev/null; then
+            echo "echo-mem $VERSION is not on PyPI, so the registry will refuse" >&2
+            echo "it. Publish the release first; this workflow is the recovery" >&2
+            echo "path for when only the registry step failed." >&2
+            exit 1
+          fi
+
+      - name: Publish to the MCP registry
+        env:
+          DNS_KEY: ${{ secrets.MCP_REGISTRY_DNS_KEY }}
+        run: |
+          curl -sSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64.tar.gz"
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+          ./mcp-publisher login dns --domain echo-mem.com --private-key "$DNS_KEY"
+          ./mcp-publisher publish
