@@ -36,6 +36,7 @@ from echo_memory.eval.external import (
     means,
     report,
     score_question,
+    source_turns,
 )
 from echo_memory.ingestion.write_episode import MAX_STRING_LEN
 
@@ -374,3 +375,75 @@ def test_means_over_a_mix_averages_only_the_rows_that_carry_the_metric():
 
     assert out["MRR"] == 1.0, "the one attributed row, not 0.5"
     assert out["attributed"] is False, "and it still flags that not every row carried it"
+
+
+# --- one result, several source turns ------------------------------------
+
+
+def _multi(keys: list[str], text: str = "something was said") -> dict:
+    """A result a model derived from several turns, as Zep returns them."""
+    return {"fact": text, "provenance": {"projects": keys}}
+
+
+def test_a_fact_derived_from_several_turns_is_credited_to_all_of_them():
+    """The shape that was wrong, and wrong in our favour.
+
+    Zep derives a fact from several episodes and returns `episode_uuids`
+    naming all of them. Scoring one key per result would credit it to one turn
+    and score the rest as misses, on a system that genuinely surfaced them.
+    Both of QUESTION's gold turns are in this single result.
+    """
+    row = score_question(QUESTION, [_multi(["D1:3", "D2:2"])], SESSIONS)
+
+    assert row["rr"] == 1.0
+    assert row["recall@1"] == 1.0, "both gold turns, from one returned fact"
+    assert row["hit@1"] == 1.0
+    assert row["session@1"] == 1.0, "and both gold sessions"
+
+
+def test_the_old_single_key_shape_would_have_scored_that_half():
+    """The control that pins down the size of the bias being removed.
+
+    Same content, carrying only one of its two source turns, which is all the
+    previous shape could express. Recall halves.
+    """
+    row = score_question(QUESTION, [_fact("D1:3")], SESSIONS)
+
+    assert row["recall@1"] == 0.5
+    assert row["rr"] == 1.0
+
+
+def test_a_result_with_no_source_at_all_is_not_attributed():
+    row = score_question(QUESTION, [{"fact": "no provenance anywhere"}], SESSIONS)
+
+    assert row["attribution_rate"] == 0.0
+    assert row["recall@1"] == 0.0
+
+
+def test_attribution_rate_counts_results_not_keys():
+    """Two results, one attributed. The rate is per result, so a fact naming
+    five turns does not count five times and flatter the rate."""
+    row = score_question(
+        QUESTION, [_multi(["D1:3", "D2:2", "D1:1"]), {"fact": "orphan"}], SESSIONS
+    )
+
+    assert row["attribution_rate"] == 0.5
+
+
+def test_source_turns_reads_both_shapes_and_drops_empties():
+    assert source_turns({"provenance": {"project": "D1:1"}}) == frozenset({"D1:1"})
+    assert source_turns({"provenance": {"projects": ["D1:1", "D2:2"]}}) == frozenset(
+        {"D1:1", "D2:2"}
+    )
+    # A backend that returns a list with blanks in it must not create a key
+    # that matches a gold turn by being empty on both sides.
+    assert source_turns({"provenance": {"projects": ["", None]}}) == frozenset()
+    assert source_turns({"provenance": {"project": ""}}) == frozenset()
+    assert source_turns({}) == frozenset()
+
+
+def test_projects_wins_over_project_when_a_backend_sends_both():
+    """`projects` is the richer answer, so it is the one used."""
+    result = {"fact": "x", "provenance": {"project": "D1:1", "projects": ["D1:3", "D2:2"]}}
+
+    assert source_turns(result) == frozenset({"D1:3", "D2:2"})

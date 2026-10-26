@@ -391,6 +391,32 @@ def content_words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS}
 
 
+def source_turns(result: dict) -> frozenset[str]:
+    """Which turns a single returned result came from. Possibly several.
+
+    One key per result was the wrong shape, and it was wrong in OUR FAVOUR,
+    which is why it is being changed before any number is published.
+
+    Echo Memory stores one turn per fact, so one key is all there is, and
+    `provenance.project` carries it. Zep does not: a fact its model derived
+    from three turns comes back with `episode_uuids` naming all three, and
+    crediting it to one of them would score the other two as misses on a
+    system that genuinely surfaced them. Mem0 sits in between, carrying one
+    `turn_key` through extraction even for a memory synthesised from several
+    turns, which is a limit of Mem0 rather than of this scoring.
+
+    So a backend may supply `provenance.projects`, a collection, and
+    `provenance.project` stays the single-key form every existing caller and
+    the whole Echo Memory path already uses.
+    """
+    provenance = result.get("provenance") or {}
+    many = provenance.get("projects")
+    if many:
+        return frozenset(key for key in many if key)
+    one = provenance.get("project") or ""
+    return frozenset({one}) if one else frozenset()
+
+
 def score_question(
     question: Question, returned: list[dict], sessions: dict[str, str],
     *, attributed: bool = True,
@@ -414,10 +440,12 @@ def score_question(
     `answer_words@k` is computed from the returned TEXT and stays comparable
     across every backend.
     """
-    keys = [(f.get("provenance") or {}).get("project") or "" for f in returned]
+    keysets = [source_turns(f) for f in returned]
     text = " ".join(f.get("fact") or "" for f in returned)
     wanted = content_words(question.answer) if question.answer else set()
-    first = next((i + 1 for i, key in enumerate(keys) if key in question.gold_turns), None)
+    first = next(
+        (i + 1 for i, keys in enumerate(keysets) if keys & question.gold_turns), None
+    )
     row: dict = {
         "question_id": question.question_id,
         "category": question.category,
@@ -426,8 +454,8 @@ def score_question(
         "attributed": attributed,
     }
     for k in KS:
-        top = keys[:k]
-        found = set(top) & question.gold_turns
+        top = keysets[:k]
+        found = set().union(*top) & question.gold_turns if top else set()
         if not attributed:
             row[f"recall@{k}"] = None
             row[f"hit@{k}"] = None
@@ -442,7 +470,7 @@ def score_question(
         # turn-to-session relationship differently and one copy of that is
         # enough. A key the map has never heard of matches no gold session,
         # which is the right answer rather than a guess.
-        in_sessions = {sessions.get(key, "") for key in top}
+        in_sessions = {sessions.get(key, "") for keys in top for key in keys}
         row[f"session@{k}"] = (
             len(in_sessions & question.gold_sessions) / len(question.gold_sessions)
             if question.gold_sessions else 0.0
@@ -460,7 +488,7 @@ def score_question(
     # unattributable has half its recall silently scored as a miss, so the
     # share is reported rather than left for a reader to assume it was 1.0.
     row["attribution_rate"] = (
-        sum(1 for key in keys if key) / len(keys) if keys else None
+        sum(1 for keys in keysets if keys) / len(keysets) if keysets else None
     )
     return row
 
