@@ -9,6 +9,12 @@
 Cursor and Codex can recall. Every fact records who wrote it and when, and the server
 never calls a model to store one.
 
+![Claude Code writes a decision with no model call; Cursor recalls it three days later and the fact still names who wrote it](.github/branding/demo.gif)
+
+<sub>Every line above is real output, captured from these commands against a throwaway
+database. The transcript is at
+[`.github/branding/demo-transcript.txt`](.github/branding/demo-transcript.txt).</sub>
+
 > Your agents start every session from zero. The usual fix is a notes file you paste into
 > context, which grows until it is mostly irrelevant to whatever you are asking. Echo
 > Memory is the other shape: facts connected to each other, and a query that returns the

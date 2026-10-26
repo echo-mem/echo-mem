@@ -1,0 +1,7 @@
+### recall_cursor
+Echo Memory already knows this, retrieved for the prompt above. Use it instead of re-deriving or asking the user again:
+- billing moved from Stripe to Razorpay because Stripe does not support UPI mandates in India [written by claude-code, fact_id 1125899906842625]
+If one of these saved the user re-explaining something a different tool told them, call record_recall_save with that fact's fact_id. Call query_memory for the fuller picture - this is a keyword match, not a semantic one.
+### why
+History for fact 1125899906842625:
+  2026-10-26T13:27:15.434152+00:00: created: billing moved from Stripe to Razorpay because Stripe does not support UPI mandates in India

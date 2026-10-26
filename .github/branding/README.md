@@ -44,3 +44,40 @@ codex.
 
 Colours and the mark are taken from `app/opengraph-image.tsx` in the landing
 page repository, so the card and the site agree.
+
+
+## demo.gif
+
+The thing the README claims, shown instead of described: Claude Code records a
+decision with no model call, Cursor recalls it three days later, and the fact
+still names who wrote it.
+
+**Every line of output in it is real.** It was captured by running those
+commands against a throwaway database, and the capture is kept beside the GIF
+in `demo-transcript.txt`. A demo that fabricated its own output would be the
+one place this project's numbers were not measured, which is the opposite of
+the argument it exists to make.
+
+Two bugs were found making it, which is the argument for filming a product
+rather than describing it:
+
+- `echo-memory why` answered "No audit history found" for any fact in the
+  other scope, which is most of them (#155)
+- every fact written from a source checkout is stamped with the version of
+  whatever is installed in the venv, not the code running
+
+### Regenerating it
+
+```bash
+python .github/branding/make_demo_gif.py     # writes frames/
+ffmpeg -y -framerate 18 -i frames/%05d.png \
+  -vf "palettegen=max_colors=96:stats_mode=diff" palette.png
+ffmpeg -y -framerate 18 -i frames/%05d.png -i palette.png \
+  -lavfi "paletteuse=dither=bayer:bayer_scale=3" demo.gif
+```
+
+47KB at 1040x712, 11 seconds. Keep it under a hundred kilobytes: this loads on
+every view of the front page, including on a phone.
+
+If the script changes, re-capture the transcript rather than editing the lines
+by hand. The point is that it is real.
