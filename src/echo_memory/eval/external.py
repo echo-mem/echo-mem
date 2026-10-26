@@ -74,8 +74,10 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
-from echo_memory.ingestion.write_episode import write_episode
-from echo_memory.retrieval.query_memory import query_memory
+# Re-exported, not reimplemented: the integration tests catch
+# external.WriteRefused and the CLI reports it, while the raise itself belongs
+# with the write it guards.
+from echo_memory.eval.backends.echo import WriteRefused  # noqa: F401
 
 KS = (1, 5, 10, 20, 30)
 
@@ -483,11 +485,15 @@ def foreign_facts(conn, prefix: str) -> int:
     return row[0] if row else 0
 
 
-class WriteRefused(RuntimeError):
-    """A turn the store would not take. Never swallowed: a benchmark that
-    quietly drops the turns it finds awkward is measuring a corpus nobody
-    has, and in LongMemEval the refused ones are the long turns, which are
-    disproportionately the ones carrying an answer."""
+# The one implementation of both lives in the Echo Memory backend now. These
+# are re-exported rather than reimplemented: a second copy of the ingest
+# contract is a copy that goes out of sync, and the assume-new assertions in it
+# are the kind of subtlety that was already found the hard way twice (see
+# EchoBackend.ingest).
+def _echo(conn, embedder, agent_id: str = "external-benchmark"):
+    from echo_memory.eval.backends.echo import EchoBackend
+
+    return EchoBackend(conn, embedder, agent_id=agent_id)
 
 
 def ingest(
@@ -497,48 +503,8 @@ def ingest(
     agent_id: str = "external-benchmark",
     progress: Callable[[str], None] | None = None,
 ) -> int:
-    """One fact per turn, keyed so scoring can find it again.
-
-    Both entity mentions are asserted as new, and both assertions are load
-    bearing. Without the utterance one the turns supersede each other: a fact
-    is an edge keyed by (source, target, relation_type), so
-    `speaker --said--> session` writes one fact per session, and 419 turns
-    became 18. Without the speaker one, two names that embed near each other
-    are flagged ambiguous and every fact touching the second is DEFERRED rather
-    than written, with nothing raised - Tim and John in LoCoMo's conv-43, which
-    cost 344 of 680 turns and looked like a successful ingest. An exact name
-    match still overrides the assertion, so a speaker's second turn resolves
-    onto the node their first one made.
-    """
-    written = 0
-    started = time.time()
-    for turn in instance.turns:
-        result = write_episode(
-            conn, instance.group_id, turn.session,
-            [{"name": turn.speaker, "type": "speaker"},
-             {"name": turn.node, "type": "utterance"}],
-            [{"source": turn.speaker, "target": turn.node, "relation_type": "said",
-              "fact": turn.fact, "confidence": "extracted"}],
-            {turn.node: {"resolved_to": "new"}, turn.speaker: {"resolved_to": "new"}},
-            embedder,
-            project=turn.key,
-            agent_id=agent_id,
-        )
-        if not result.get("edges_created"):
-            raise WriteRefused(
-                f"write refused for {turn.node} in {instance.group_id}: "
-                f"{result.get('error') or result}"
-            )
-        written += 1
-        # Reported during ingest rather than only after it, because a long run
-        # is hours of silence otherwise, and the rate is the number that says
-        # whether it is still worth waiting for: write throughput decays as the
-        # database grows (29ms to 129ms across 1,057 to 24,054 nodes, see
-        # docs/BENCHMARKS.md), so a run can slow to a stop without erroring.
-        if progress and written % 500 == 0:
-            rate = written / max(time.time() - started, 1e-9)
-            progress(f"  {instance.group_id}: {written:,} turns written, {rate:.0f}/s")
-    return written
+    """Echo Memory's ingest. See EchoBackend.ingest, which is this."""
+    return _echo(conn, embedder, agent_id).ingest(instance, progress=progress)
 
 
 @dataclass
@@ -548,6 +514,13 @@ class Run:
     dataset: str
     path: str
     top_k: int
+    #: Which system produced these numbers. A results file that does not say is
+    #: useless the moment there is more than one.
+    backend: str = "echo-mem"
+    #: Whether a result could be traced to its source turn. False means the
+    #: turn-keyed metrics in `rows` are null rather than zero; see
+    #: ATTRIBUTION_UNAVAILABLE.
+    attributed: bool = True
     rows: list[dict] = field(default_factory=list)
     instances: int = 0
     turns_written: int = 0
@@ -573,11 +546,10 @@ def fingerprint(path: str) -> tuple[int, str]:
     return size, digest.hexdigest()
 
 
-def run(
-    conn,
+def run_backend(
+    backend,
     dataset: str,
     path: str,
-    embedder,
     *,
     limit: int = 0,
     per_type: int = 0,
@@ -585,27 +557,38 @@ def run(
     results_path: str = "",
     progress: Callable[[str], None] | None = None,
 ) -> Run:
-    """Ingest and score one instance at a time.
+    """Ingest and score one instance at a time, against any backend.
 
     Not two passes. Each instance is a self-contained haystack, so nothing is
     lost by finishing with it before reading the next, and two things are
     gained: peak memory is one haystack, and a run that dies at hour three has
-    scored everything it ingested instead of nothing.
+    scored everything it ingested instead of nothing. That mattered for one
+    system and matters more for four, since a LongMemEval run against a hosted
+    competitor is both slow and billed.
+
+    `backend.check()` runs BEFORE anything is ingested. A four system run that
+    dies on the fourth because its key was never set has wasted the first
+    three, and with Mem0 and Zep calling a model per write, wasted them
+    expensively.
     """
     load = DATASETS[dataset]
     size, digest = fingerprint(path)
+    backend.check()
+    attributed = bool(getattr(backend, "attributes_results", True))
     out = Run(dataset=dataset, path=path, top_k=top_k,
-              dataset_bytes=size, dataset_sha256=digest)
+              dataset_bytes=size, dataset_sha256=digest,
+              backend=getattr(backend, "name", "unknown"),
+              attributed=attributed)
     started = time.time()
     for instance in load(path, limit=limit, per_type=per_type):
-        if already_ingested(conn, instance.group_id, len(instance.turns)):
+        if backend.already_ingested(instance.group_id, len(instance.turns)):
             out.scopes_resumed += 1
         else:
-            out.turns_written += ingest(conn, instance, embedder, progress=progress)
+            out.turns_written += backend.ingest(instance, progress=progress)
         sessions = instance.sessions
         for question in instance.questions:
-            found = query_memory(conn, instance.group_id, question.question, top_k, embedder)
-            row = score_question(question, found.get("facts", []), sessions)
+            found = backend.query(instance.group_id, question.question, top_k)
+            row = score_question(question, found, sessions, attributed=attributed)
             out.rows.append(row)
             if results_path:
                 # Appended as it happens, so a killed run keeps what it scored.
@@ -619,6 +602,24 @@ def run(
             )
     out.seconds = time.time() - started
     return out
+
+
+def run(
+    conn,
+    dataset: str,
+    path: str,
+    embedder,
+    **kwargs,
+) -> Run:
+    """Echo Memory against a dataset. The signature every existing caller uses.
+
+    Kept because the CLI and the integration tests call it, and because "run
+    the benchmark" meaning "run it against this project" is the right default.
+    Pass a backend to `run_backend` for anything else.
+    """
+    from echo_memory.eval.backends.echo import EchoBackend
+
+    return run_backend(EchoBackend(conn, embedder), dataset, path, **kwargs)
 
 
 ATTRIBUTION_UNAVAILABLE = (
