@@ -34,6 +34,7 @@ from echo_memory.eval.external import (
     load_locomo,
     load_longmemeval,
     means,
+    render,
     report,
     score_question,
     source_turns,
@@ -447,3 +448,31 @@ def test_projects_wins_over_project_when_a_backend_sends_both():
     result = {"fact": "x", "provenance": {"project": "D1:1", "projects": ["D1:3", "D2:2"]}}
 
     assert source_turns(result) == frozenset({"D1:3", "D2:2"})
+
+
+def test_render_survives_a_backend_with_no_attribution():
+    """It did not. `line()` formatted every cell with `:.3f`, and a None in a
+    float spec raises TypeError, so the first unattributed backend would have
+    crashed the summary instead of printing it. A dash is also the honest
+    glyph, which 0.000 would not have been."""
+    rows = [score_question(QUESTION, [{"fact": "a tortoise"}], SESSIONS, attributed=False)]
+    out = Run(dataset="locomo", path="x.json", top_k=30,
+              backend="some-backend", attributed=False, rows=rows, instances=1)
+
+    text = render(out)
+
+    assert "some-backend on locomo" in text, "a result has to say what produced it"
+    assert "not computable" in text
+    assert "0.000" not in text.split("recall@k is the share")[0]
+
+
+def test_render_still_prints_numbers_for_an_attributed_backend():
+    rows = [score_question(QUESTION, [_fact("D1:3")], SESSIONS)]
+    out = Run(dataset="locomo", path="x.json", top_k=30,
+              backend="echo-mem", attributed=True, rows=rows, instances=1)
+
+    text = render(out)
+
+    assert "echo-mem on locomo" in text
+    assert "1.000" in text
+    assert "not computable" not in text

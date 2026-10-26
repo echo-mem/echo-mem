@@ -729,6 +729,12 @@ def report(out: Run) -> dict:
     """The machine-readable result. Stable keys, so two runs can be diffed."""
     categories = sorted({r["category"] for r in out.rows if r["category"]})
     return {
+        # FIRST, because the moment there is more than one backend a result
+        # that does not say which system produced it is not a result. The Run
+        # carried this and report() did not emit it, so the first zep run
+        # printed `backend: None` beside its numbers.
+        "backend": out.backend,
+        "attributed": out.attributed,
         "dataset": out.dataset,
         "dataset_path": out.path,
         "dataset_bytes": out.dataset_bytes,
@@ -756,14 +762,32 @@ def render(out: Run) -> str:
     if not out.rows:
         return "no questions scored: check the dataset path and that it holds gold evidence\n"
 
+    def cell(value, width: int) -> str:
+        """A number, or a dash where there is honestly no number.
+
+        Not `:.3f` unconditionally. A backend that cannot attribute a result to
+        its source turn records None for the turn-keyed metrics, and formatting
+        None with a float spec raises TypeError - so the first unattributed
+        backend would have crashed the summary rather than printed it. A dash
+        also reads correctly, which 0.000 would not.
+        """
+        if value is None:
+            return f"{'-':>{width}}"
+        return f"{value:>{width}.3f}"
+
     def line(label: str, stats: dict) -> str:
         return (
             f"  {label:<26}{stats['n']:>7,}"
-            f"{stats['recall@1']:>11.3f}{stats['recall@10']:>11.3f}{stats['recall@30']:>11.3f}"
-            f"{stats['hit@10']:>9.3f}{stats['session@10']:>12.3f}{stats['MRR']:>8.3f}"
+            f"{cell(stats['recall@1'], 11)}{cell(stats['recall@10'], 11)}"
+            f"{cell(stats['recall@30'], 11)}"
+            f"{cell(stats['hit@10'], 9)}{cell(stats['session@10'], 12)}"
+            f"{cell(stats['MRR'], 8)}"
         )
 
     overall = means(out.rows)
+    unattributed = (
+        ["", ATTRIBUTION_UNAVAILABLE, ""] if not out.attributed else []
+    )
     head = (
         f"  {'category':<26}{'n':>7}{'recall@1':>11}{'recall@10':>11}"
         f"{'recall@30':>11}{'hit@10':>9}{'session@10':>12}{'MRR':>8}"
@@ -771,7 +795,7 @@ def render(out: Run) -> str:
     scopes = f"{out.instances:,} scope" + ("" if out.instances == 1 else "s")
     lines = [
         "",
-        f"{out.dataset} via {out.path}",
+        f"{out.backend} on {out.dataset} via {out.path}",
         (f"{scopes}, {out.turns_written:,} turns written, "
          f"{out.scopes_resumed} already present, {out.seconds:.0f}s"),
         "",
@@ -786,6 +810,7 @@ def render(out: Run) -> str:
     for category, rows in by_category.items():
         lines.append(line(category, means(rows)))
 
+    lines += unattributed
     lines += [
         "",
         "recall@k is the share of a question's cited turns returned in the top k;",
