@@ -9,6 +9,22 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Apache 2.0, for all of it.** Versions 0.5.0 to 0.5.5 shipped under the
+Business Source License, which made production use free only below fifty
+people and $5M of revenue. That is withdrawn. Ateleir Tech holds the copyright
+in the whole work and relicenses all of it, those versions included, so the
+grant only widened and nobody lost a right they already had.
+
+The restriction was protecting the wrong thing: what makes this hard to run is
+not the source, it is a Postgres with Apache AGE and pgvector that somebody has
+to operate, and the hosted plan sells exactly that. `LICENSE` is the canonical
+Apache text, byte for byte so GitHub detects it, and `NOTICE` names the
+copyright holder. `LICENSE-APACHE-2.0` is gone; `LICENSE` is that text now.
+
+One consequence worth naming: the OpenSSF Best Practices badge was blocked
+outright by `floss_license`, which requires an OSI approved licence. It is
+obtainable now, and is documented as not yet claimed rather than claimed.
+
 ## 0.5.5
 
 **`echo-memory forget` erases facts outright.** GDPR Article 17 and India's DPDP

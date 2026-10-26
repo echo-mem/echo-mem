@@ -3,7 +3,7 @@
 [![CI](https://github.com/echo-mem/echo-mem/actions/workflows/ci.yml/badge.svg)](https://github.com/echo-mem/echo-mem/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/echo-mem)](https://pypi.org/project/echo-mem/)
 [![Python](https://img.shields.io/pypi/pyversions/echo-mem)](https://pypi.org/project/echo-mem/)
-[![License](https://img.shields.io/badge/license-BSL%201.1-blue)](LICENSE)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue)](LICENSE)
 
 **Shared memory for AI agents, as a graph in your own database.** What Claude Code learns,
 Cursor and Codex can recall. Every fact records who wrote it and when, and the server
@@ -435,25 +435,24 @@ issue with the output.
 
 ## License
 
-Business Source License 1.1. See [`LICENSE`](LICENSE).
+**Apache 2.0.** See [`LICENSE`](LICENSE). Run it, fork it, build on it, ship it in your
+product, at any size, with no agreement and nobody to ask.
 
-The source is public and stays public. What changed on 25 September 2026 is who may run it
-in production without an agreement:
+For about a month this was not true. Versions 0.5.0 to 0.5.5 shipped under the Business
+Source License, which made production use free only below fifty people and $5M of revenue.
+That is withdrawn. Ateleir Tech holds the copyright in the whole work and relicenses all of
+it, those versions included, so the grant only ever got wider and nobody lost a right they
+already had.
 
-| | |
-|---|---|
-| Development, testing, evaluation, research, teaching | free, any size |
-| Production, under 50 employees and under $5M revenue | free |
-| Production, above that | [talk to us](mailto:hello@echo-mem.com) |
-| Offering it to third parties as a hosted service | [talk to us](mailto:hello@echo-mem.com) |
+The reasoning, since a project that changes its licence twice owes you one: the restriction
+was protecting the wrong thing. What makes this hard to run is not the source, it is a
+Postgres with Apache AGE and pgvector that somebody has to operate, back up and upgrade.
+[The hosted plan](https://echo-mem.com) sells exactly that and is unaffected by the
+licence. Meanwhile the restriction was costing the thing the project most needs, which is
+for people to be able to use it without reading a grant first.
 
-Each released version converts to **Apache 2.0 four years after it is published**, and that
-conversion is automatic and irrevocable.
-
-Versions published before this change remain under Apache 2.0 permanently. That includes
-everything up to and including 0.4.1 on PyPI. Relicensing cannot reach back, and this note
-exists so nobody has to work that out from a git history. The Apache text those versions
-were released under is kept at [`LICENSE-APACHE-2.0`](LICENSE-APACHE-2.0).
+What is not Apache 2.0 is the hosted service itself: the metering, billing and tenancy that
+only exist because somebody is being invoiced. None of it sits in the read or write path.
 
 <!-- The MCP registry proves you own a PyPI package by finding this line in the
      package's own description. It has to survive into the built distribution,

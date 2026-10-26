@@ -47,10 +47,10 @@ The latest release on PyPI is supported; at the time of writing that is
 **0.5.5**. Fixes go to the newest version rather than being backported, so
 upgrading is the remedy.
 
-Versions up to and including **0.4.1** remain under Apache 2.0 permanently (see
-[`LICENSE-APACHE-2.0`](LICENSE-APACHE-2.0)) and **0.5.0** onward are BSL 1.1.
-That is a licensing statement, not a support one: no released version older
-than the current one receives fixes.
+The whole project is Apache 2.0. Versions 0.5.0 to 0.5.5 shipped under the
+Business Source License and were relicensed on 2026-10-26, so no version you
+can install carries a restriction. That is a licensing statement, not a support
+one: no released version older than the current one receives fixes.
 
 ## What this project does and does not claim
 

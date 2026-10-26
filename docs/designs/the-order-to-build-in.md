@@ -75,9 +75,11 @@ questions. This is not a small correction to a minor signal.
 
 ### Why in SQL, and not an extension
 
-- `pg_search` (ParadeDB) is **AGPL-3.0**. This project is BSL 1.1 and ships a
-  Postgres image customers run themselves. Adding AGPL to that image is a
-  question nobody wants to answer on a sales call.
+- `pg_search` (ParadeDB) is **AGPL-3.0**. This project is Apache 2.0 and ships a
+  Postgres image customers run themselves. The relicence does not settle this:
+  AGPL in an image a customer runs is still a question nobody wants to answer
+  on a sales call, and Apache is one-way compatible with AGPL rather than the
+  other way round.
 - `pg_textsearch` (Tiger Data) is memory-resident, 64MB per index by default,
   and young.
 - A customer may bring their own Postgres, where neither extension exists.

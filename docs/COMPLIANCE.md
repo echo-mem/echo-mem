@@ -6,7 +6,8 @@ and the command that reproduces it is given.
 
 ## The licence of Echo Memory itself
 
-Business Source License 1.1, SPDX `BUSL-1.1`. Licensor Ateleir Tech.
+Apache License 2.0, SPDX `Apache-2.0`. Copyright Ateleir Tech, named in
+`NOTICE`.
 
 **This is source available, not open source.** BSL is neither OSI approved nor
 FSF free, and saying otherwise to pass a checklist would be the kind of claim
@@ -130,16 +131,21 @@ stated here rather than explained away when asked:
 
 ## OpenSSF Best Practices Badge
 
-**Not obtainable, and will not be claimed.** The badge's first criterion,
-`floss_license`, is a MUST: the software has to be released under an OSI
-approved or FSF free licence. Echo Memory is BSL 1.1. Versions 0.4.1 and earlier
-are Apache 2.0 and would qualify, but badging a superseded version would be
-misleading.
+**Obtainable as of 2026-10-26, and not yet claimed.** The badge's first
+criterion, `floss_license`, is a MUST: the software has to be released under an
+OSI approved or FSF free licence. That blocked it outright while the project was
+BSL 1.1, and the relicence to Apache 2.0 removes the block.
 
-If a buyer's checklist requires this badge specifically, the honest answer is
-that it is incompatible with the licence, and that Scorecard plus signed
-provenance is stronger evidence than a self declared badge, because both are
-computed by somebody else.
+It is not claimed yet because the badge is self assessed against about sixty
+criteria and asserting it before working through them would be the kind of
+unearned claim this document exists to avoid. Several are already met by things
+done for other reasons: a public repository with a stated contribution process,
+a documented vulnerability reporting route with a stated response time, signed
+releases with build provenance, and a test suite that must pass before a merge.
+
+Until it is claimed, the stronger evidence is Scorecard plus the Sigstore
+attestation on each release, because both are computed by somebody else rather
+than declared here.
 
 ## Vulnerability reporting
 

@@ -1,12 +1,13 @@
 """The licence this project claims has to be the one in the file.
 
-A package that says Apache-2.0 in its metadata while shipping a Business
-Source License is making a false statement to everybody who installs it, and
-those are exactly the people who check metadata rather than read a LICENSE.
+A package that says one licence in its metadata while shipping another is
+making a false statement to everybody who installs it, and those are exactly
+the people who read metadata rather than a LICENSE file.
 
-These pin the three places the claim appears and the one fact that no licence
-change can alter: versions already published stay under the licence they went
-out with.
+This project has now changed licence twice: Apache 2.0 to BSL 1.1 on
+2026-09-25, and back to Apache 2.0 on 2026-10-26. Both times the thing that
+broke first was a claim in a file nobody thought to look at. So these pin
+every place the claim appears, including the ones that are easy to forget.
 """
 
 from __future__ import annotations
@@ -21,75 +22,84 @@ def flat(path: Path) -> str:
     """The file with its line wrapping collapsed.
 
     A licence is wrapped for a human to read, so asserting on raw text makes
-    a test fail when a phrase happens to straddle a newline - which says
+    a test fail when a phrase happens to straddle a newline, which says
     nothing about whether the licence is right. This one did exactly that on
     "fewer than 50 employees".
     """
     return " ".join(path.read_text().split())
 
 
-def test_the_licence_file_is_the_business_source_license():
+def test_the_licence_file_is_the_apache_license():
     text = flat(ROOT / "LICENSE")
 
-    assert "Business Source License 1.1" in text
-    assert "Licensor: Ateleir Tech" in text
-    assert "Change License: Apache License, Version 2.0" in text, (
-        "a BSL with no change licence never becomes open source"
+    assert "Apache License" in text
+    assert "Version 2.0, January 2004" in text
+    assert "http://www.apache.org/licenses/" in text
+
+
+def test_the_licence_text_is_unmodified():
+    """Byte for byte, because GitHub detects a licence by matching the text
+    and a helpful edit turns Apache-2.0 into "Other" in the sidebar. That is
+    not cosmetic: "Other" is what kept this project out of every directory
+    that filters on an OSI licence.
+
+    202 lines is the canonical file. The copyright holder is named in NOTICE,
+    which is the mechanism Apache provides for it, rather than by filling in
+    the appendix and changing the text.
+    """
+    lines = (ROOT / "LICENSE").read_text().splitlines()
+
+    assert len(lines) == 202, f"LICENSE is {len(lines)} lines, not the canonical 202"
+    assert "[yyyy] [name of copyright owner]" in flat(ROOT / "LICENSE"), (
+        "the appendix placeholder was filled in, which edits the canonical text"
     )
 
 
-def test_the_additional_use_grant_says_who_may_use_it_free():
-    """A BSL with no grant, or a vague one, is a licence nobody can act on
-    without asking a lawyer - which for a small team means not adopting it."""
-    text = flat(ROOT / "LICENSE")
+def test_the_notice_names_the_copyright_holder():
+    text = flat(ROOT / "NOTICE")
 
-    assert "fewer than 50 employees" in text
-    assert "US$5,000,000" in text
-    assert "non-production purpose" in text
-    assert "parent, subsidiary or affiliated entity" in text, (
-        "without this, a subsidiary of a large company reads as a small one"
-    )
+    assert "Ateleir Tech" in text
+    assert "Apache License, Version 2.0" in text
 
 
-def test_the_package_metadata_does_not_still_claim_apache():
-    """pip, PyPI and every licence scanner read this field as fact, so it is
-    the one place a stale "Apache-2.0" would do real damage. BUSL-1.1 is the
-    SPDX identifier for this licence, which makes the claim machine-readable
-    rather than a filename a scanner has to go and parse."""
-    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    licence = data["project"]["license"]
+def test_the_package_metadata_says_apache():
+    meta = tomllib.loads((ROOT / "pyproject.toml").read_text())["project"]
 
-    assert licence == "BUSL-1.1", (
-        f"pyproject says {licence!r}, which is not what LICENSE contains"
-    )
-    classifiers = " ".join(data["project"].get("classifiers", []))
-    assert "Apache" not in classifiers, (
-        "a classifier still advertises Apache-2.0"
-    )
+    assert meta["license"] == "Apache-2.0"
+    assert "LICENSE" in meta["license-files"]
+    assert "NOTICE" in meta["license-files"]
 
 
-def test_both_licence_texts_ship_with_the_package():
-    """The Apache text is not decoration in the repository. Anyone on 0.4.1 or
-    earlier holds an Apache 2.0 grant, and a wheel that ships only the BSL
-    file tells them the opposite."""
-    data = tomllib.loads((ROOT / "pyproject.toml").read_text())
-    assert set(data["project"]["license-files"]) == {"LICENSE", "LICENSE-APACHE-2.0"}
+def test_nothing_still_claims_the_business_source_license():
+    """The failure mode this whole file exists for. Going Apache to BSL left
+    the metadata claiming Apache for a while; going back is the same hazard
+    pointed the other way, and a stale BSL claim is worse because it tells
+    somebody they may not use what they may."""
+    for name in ("LICENSE", "NOTICE", "pyproject.toml"):
+        text = flat(ROOT / name)
+        assert "BUSL-1.1" not in text, name
+        if name != "NOTICE":
+            # NOTICE records the history on purpose; nothing else should.
+            assert "Business Source" not in text, name
 
 
-def test_the_apache_text_is_kept_for_the_versions_released_under_it():
-    """Relicensing cannot reach backwards. Everything up to 0.4.1 went out
-    under Apache 2.0 and stays there, so the text those users are entitled to
-    has to remain in the repository."""
-    apache = ROOT / "LICENSE-APACHE-2.0"
+def test_the_readme_states_the_licence_and_that_it_widened():
+    """Somebody who saw this project in October read that production use
+    needed an agreement above fifty people. They have to be able to find out
+    that it does not, without reading a git history."""
+    text = flat(ROOT / "README.md")
 
-    assert apache.exists(), "the licence earlier releases were made under is gone"
-    assert "Apache License" in apache.read_text()
+    assert "Apache 2.0" in text
+    assert "0.5.0 to 0.5.5" in text, "the BSL window is not named"
+    assert "wider" in text, "it does not say nobody lost a right"
 
 
-def test_the_readme_states_that_earlier_versions_stay_apache():
-    """Somebody on 0.4.1 needs to know where they stand without reading a git
-    history or a lawyer."""
-    readme = flat(ROOT / "README.md")
+def test_the_readme_badge_matches_the_licence():
+    assert "license-Apache%202.0-blue" in (ROOT / "README.md").read_text()
 
-    assert "remain under Apache 2.0" in readme
-    assert "0.4.1" in readme
+
+def test_no_stale_apache_only_file_is_left_behind():
+    """LICENSE-APACHE-2.0 existed to hold the text for versions released
+    before the BSL window. LICENSE is that text now, and two copies invite
+    them to drift."""
+    assert not (ROOT / "LICENSE-APACHE-2.0").exists()
