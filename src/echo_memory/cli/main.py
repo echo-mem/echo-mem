@@ -7,6 +7,7 @@ constructed directly."""
 import argparse
 import json
 import os
+import shlex
 import sys
 import time
 from datetime import date
@@ -1134,6 +1135,16 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "why":
         result = get_fact_history(conn, group_id, args.fact_id)
+        if not result["entries"]:
+            other_scope = "shared" if args.scope == "solo" else "solo"
+            other = get_fact_history(conn, config.group_id(other_scope), args.fact_id)
+            if other["entries"]:
+                print(
+                    f"Fact {args.fact_id} has audit history in the {other_scope} scope, "
+                    f"not {args.scope}.\n"
+                    f"  echo-memory --scope {other_scope} why {shlex.quote(args.fact_id)}"
+                )
+                return 0
         print(render_history(args.fact_id, result["entries"]))
         return 0
 
