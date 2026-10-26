@@ -1134,18 +1134,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "why":
         result = get_fact_history(conn, group_id, args.fact_id)
-        found_in = None
-        if not result["entries"]:
-            # `recall` answers from both scopes, so the id a user copies out of
-            # it is as likely to be the other one as this one. Looking there
-            # before answering turns a dead end into a command they can run.
-            # Deliberately NOT merging the two: --scope still means what it
-            # says, and a history silently assembled from a scope nobody asked
-            # for is a worse answer than a redirect.
-            other = "shared" if args.scope == "solo" else "solo"
-            if get_fact_history(conn, config.group_id(other), args.fact_id)["entries"]:
-                found_in = other
-        print(render_history(args.fact_id, result["entries"], found_in))
+        print(render_history(args.fact_id, result["entries"]))
         return 0
 
     if args.command == "export":
