@@ -913,7 +913,7 @@ def _missing_similarity(
 
 def _annotate(
     facts: list[dict], similarity: dict[str, float],
-    vector_ids: set[str], lexical_ids: set[str],
+    vector_ids: set[str], lexical_ids: set[str], graph_ids: set[str],
 ) -> None:
     """Say why each fact is in the answer, in place.
 
@@ -935,6 +935,15 @@ def _annotate(
                 is no embedding to compare against and no honest number to
                 give. Omitted rather than faked.
     matched     which channels found it, as information rather than quality.
+                `vector`, `lexical`, and `graph` for a fact the one hop
+                expansion reached. The hop is the only channel that ADDS
+                candidates the content channels did not return, so leaving it
+                out of this list did not mean an empty `matched` - it meant the
+                loop below skipped the fact entirely, and it came back with no
+                rank, no score and no matched at all. Salience appends a list
+                too, but it is a permutation of what the content channels
+                found and can reorder an answer without adding to one, so it
+                is not a channel in this sense and is deliberately absent.
 
     The null that used to appear here caused real harm and the shape of it is
     worth keeping. score was omitted for lexical-only facts, a customer sorted
@@ -953,7 +962,9 @@ def _annotate(
     for position, fact in enumerate(facts, start=1):
         edge_id = fact["fact_id"]
         matched = [
-            name for name, ids in (("vector", vector_ids), ("lexical", lexical_ids))
+            name for name, ids in (
+                ("vector", vector_ids), ("lexical", lexical_ids), ("graph", graph_ids),
+            )
             if edge_id in ids
         ]
         if not matched:
@@ -1035,6 +1046,9 @@ def query_memory(
 
     similarity: dict[str, float] = {}
     query_embedding: list[float] | None = None
+    # Empty on every path but a hop that actually ran, which keeps a digest
+    # annotating nothing - see _annotate.
+    graph_ids: list[str] = []
     if digest:
         ranked_ids = _digest_candidates(conn, group_id, top_k, as_of=as_of)
         vector_ids, lexical_ids = [], []
@@ -1127,6 +1141,7 @@ def query_memory(
             if only is not None:
                 allowed = set(only)
                 neighbours = [e for e in neighbours if e in allowed]
+            graph_ids = neighbours
             lists.append(neighbours)
         # Salience last, over the candidates the content channels found, so
         # it can reorder an answer but never add to one. It is a prior on
@@ -1154,7 +1169,9 @@ def query_memory(
         similarity.update(
             _missing_similarity(conn, group_id, query_embedding, unscored)
         )
-    _annotate(facts, similarity, set(vector_ids), set(lexical_ids))
+    _annotate(
+        facts, similarity, set(vector_ids), set(lexical_ids), set(graph_ids)
+    )
 
     log_query_memory(
         _logger,
