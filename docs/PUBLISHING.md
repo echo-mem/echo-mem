@@ -68,13 +68,43 @@ mcp-publisher login dns --domain echo-mem.com --private-key <hex>
 mcp-publisher publish
 ```
 
-### The old listing
+### The old listing has to go FIRST
 
-`io.github.ayushcodes10/echo-mem` is frozen at 0.5.3 and should be deprecated
-with `mcp-publisher status`, which needs an interactive `mcp-publisher login
-github` as that account. Until then it is a live listing pointing at a release
-from September, and anyone who already has that name in a config keeps
-resolving to it.
+Deprecating `io.github.ayushcodes10/echo-mem` is not tidying up afterwards. It
+is a **prerequisite**, because the registry refuses two servers that claim the
+same remote URL:
+
+```
+400 {"detail":"Failed to publish server","errors":[{"message":"remote URL
+https://api.echo-mem.com/mcp is already used by server
+io.github.ayushcodes10/echo-mem"}]}
+```
+
+That is what the v0.5.6 publish hit. The plan had been to publish the new name
+first so the listing was never absent, and the registry does not allow it: the
+gap between the old name being deprecated and the new one appearing cannot be
+avoided, only kept short.
+
+Two traps in `mcp-publisher status` itself, both of which cost a run:
+
+- **It prompts.** `Continue? [y/N]` on stdin, and with no terminal it dies with
+  `failed to read response: EOF`. Pipe `yes y |` into it.
+- **The token lives five minutes.** `mcp-publisher login github` writes a JWT to
+  `~/.config/mcp-publisher/token.json` whose `exp` is `iat` plus 300 seconds, so
+  a login and a separate `status` call minutes later fails with
+  `401 ... token has invalid claims: token is expired`. Chain them in one
+  command rather than running them as two steps:
+
+```bash
+mcp-publisher login github && yes y | mcp-publisher status \
+  --status deprecated --all-versions \
+  --message "Renamed to com.echo-mem/echo-mem" \
+  io.github.ayushcodes10/echo-mem
+```
+
+The `github` login is required because that namespace belongs to a personal
+account; the DNS key cannot speak for it. Anyone who already has the old name
+in a config keeps resolving to it until this runs.
 
 Several downstream directories ingest the registry on a schedule, so publishing
 here propagates to listings that would otherwise each need a manual submission.
