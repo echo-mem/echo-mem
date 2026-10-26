@@ -136,12 +136,27 @@ criterion, `floss_license`, is a MUST: the software has to be released under an
 OSI approved or FSF free licence. That blocked it outright while the project was
 BSL 1.1, and the relicence to Apache 2.0 removes the block.
 
-It is not claimed yet because the badge is self assessed against about sixty
-criteria and asserting it before working through them would be the kind of
-unearned claim this document exists to avoid. Several are already met by things
-done for other reasons: a public repository with a stated contribution process,
-a documented vulnerability reporting route with a stated response time, signed
-releases with build provenance, and a test suite that must pass before a merge.
+It is not claimed yet because the badge is self assessed against 67 criteria at
+the passing level, and asserting it before working through them would be the
+kind of unearned claim this document exists to avoid.
+
+They have now been worked through, one at a time, in
+[OPENSSF-BADGE.md](OPENSSF-BADGE.md): the answer and the evidence for all 67.
+**No MUST is unmet.** 43 are MUST, of which 39 are met and 4 are N/A where the
+criteria file permits N/A for that specific criterion, which was checked rather
+than assumed.
+
+Three are answered Unmet, all of them SUGGESTED, which do not block the badge:
+
+| | why |
+|---|---|
+| `test_most` | coverage is not measured at all, so there is no number to claim |
+| `warnings_strict` | ruff near its defaults, and no type checker |
+| `dynamic_analysis` | no fuzzer and no sanitizer runs before a release |
+
+Each is a real gap, answered Unmet rather than argued into a Met. Two criteria,
+`know_secure_design` and `know_common_errors`, are assertions about the
+maintainer and are left for the maintainer to make.
 
 Until it is claimed, the stronger evidence is Scorecard plus the Sigstore
 attestation on each release, because both are computed by somebody else rather
