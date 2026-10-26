@@ -294,3 +294,83 @@ def test_the_report_says_accuracy_is_absent_and_why():
     assert payload["overall"]["n"] == 1
     # One of the question's two cited turns came back, so half of them did.
     assert payload["by_category"]["single hop"]["recall@30"] == 0.5
+
+
+# --- a backend that cannot say which turn a result came from --------------
+
+
+def test_an_unattributed_backend_scores_null_not_zero():
+    """The number that would make this comparison dishonest.
+
+    Mem0 and Zep call a model on write and store something DERIVED from the
+    turns, so "which turn did this come from" can have no single answer. The
+    tempting thing is to score a missing attribution as a miss, which reports
+    0.0 for a competitor that retrieved exactly the right content and merely
+    could not name its source turn. That understates it, in our favour, in the
+    one direction a reader of our own benchmark has most reason to suspect.
+    """
+    returned = [{"fact": "Ada adopted a three legged tortoise"}]
+
+    row = score_question(QUESTION, returned, SESSIONS, attributed=False)
+
+    for metric in ("rr", "recall@5", "hit@5", "session@5"):
+        assert row[metric] is None, metric
+    assert row["attributed"] is False
+    # The content WAS retrieved, and the text based metric says so. This is the
+    # whole point: null means not computable, not zero.
+    assert row["answer_words@5"] == 1.0
+
+
+def test_the_same_results_with_attribution_do_score():
+    """The control. Identical text, with the turn key present, scores."""
+    returned = [_fact("D1:3", "Ada adopted a three legged tortoise")]
+
+    row = score_question(QUESTION, returned, SESSIONS)
+
+    assert row["rr"] == 1.0
+    assert row["hit@5"] == 1.0
+    assert row["attributed"] is True
+
+
+def test_means_drops_nulls_rather_than_averaging_them_as_zero():
+    rows = [
+        score_question(QUESTION, [{"fact": "a three legged tortoise"}],
+                       SESSIONS, attributed=False),
+        score_question(QUESTION, [{"fact": "a three legged tortoise"}],
+                       SESSIONS, attributed=False),
+    ]
+
+    out = means(rows)
+
+    assert out["MRR"] is None
+    assert out["recall@5"] is None
+    assert out["attributed"] is False
+    assert "not computable" in out["attribution_unavailable"]
+    # Still reports what it honestly can.
+    assert out["answer_words@5"] == 1.0
+    assert out["n"] == 2
+
+
+def test_means_says_so_when_every_row_is_attributed():
+    rows = [score_question(QUESTION, [_fact("D1:3")], SESSIONS)]
+
+    out = means(rows)
+
+    assert out["attributed"] is True
+    assert "attribution_unavailable" not in out
+    assert out["MRR"] == 1.0
+
+
+def test_means_over_a_mix_averages_only_the_rows_that_carry_the_metric():
+    """A mixed set should not silently dilute. It cannot arise from one run,
+    since a backend is attributed or it is not, but a combined report over
+    several backends can hold both and must not average a None in as zero."""
+    rows = [
+        score_question(QUESTION, [_fact("D1:3")], SESSIONS),
+        score_question(QUESTION, [{"fact": "unrelated"}], SESSIONS, attributed=False),
+    ]
+
+    out = means(rows)
+
+    assert out["MRR"] == 1.0, "the one attributed row, not 0.5"
+    assert out["attributed"] is False, "and it still flags that not every row carried it"

@@ -389,11 +389,28 @@ def content_words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in STOPWORDS}
 
 
-def score_question(question: Question, returned: list[dict], sessions: dict[str, str]) -> dict:
+def score_question(
+    question: Question, returned: list[dict], sessions: dict[str, str],
+    *, attributed: bool = True,
+) -> dict:
     """One row of results for one question, from what retrieval returned.
 
-    `returned` is query_memory's fact list in rank order. The turn a fact came
+    `returned` is a backend's result list in rank order. The turn a fact came
     from is read out of its provenance, which is where ingest put it.
+
+    `attributed=False` for a backend that cannot say which turn a result came
+    from, which is every system that stores something a model DERIVED from the
+    turns rather than the turns themselves. The turn-keyed metrics are then
+    recorded as None, not 0.0.
+
+    That distinction is the whole reason this parameter exists. Scoring an
+    unanswerable attribution as a miss would report 0.0 for a competitor that
+    retrieved exactly the right content and merely could not name its source
+    turn - understating it, in our favour, in the one direction a reader of our
+    own benchmark has most reason to suspect. None is not a worse number; it is
+    the absence of one, and `means` drops it rather than averaging it in.
+    `answer_words@k` is computed from the returned TEXT and stays comparable
+    across every backend.
     """
     keys = [(f.get("provenance") or {}).get("project") or "" for f in returned]
     text = " ".join(f.get("fact") or "" for f in returned)
@@ -402,12 +419,21 @@ def score_question(question: Question, returned: list[dict], sessions: dict[str,
     row: dict = {
         "question_id": question.question_id,
         "category": question.category,
-        "rr": 1 / first if first else 0.0,
+        "rr": (1 / first if first else 0.0) if attributed else None,
         "answer_scoreable": len(wanted) >= ANSWER_MIN_WORDS,
+        "attributed": attributed,
     }
     for k in KS:
         top = keys[:k]
         found = set(top) & question.gold_turns
+        if not attributed:
+            row[f"recall@{k}"] = None
+            row[f"hit@{k}"] = None
+            row[f"session@{k}"] = None
+            if row["answer_scoreable"]:
+                words = content_words(" ".join(f.get("fact") or "" for f in returned[:k]))
+                row[f"answer_words@{k}"] = len(wanted & words) / len(wanted)
+            continue
         row[f"recall@{k}"] = len(found) / len(question.gold_turns) if question.gold_turns else 0.0
         row[f"hit@{k}"] = 1.0 if found else 0.0
         # Looked up, never re-derived from the key: the datasets spell the
@@ -595,6 +621,15 @@ def run(
     return out
 
 
+ATTRIBUTION_UNAVAILABLE = (
+    "this backend stores what a model derived from the turns rather than the "
+    "turns, so a result cannot be traced to the turn it came from. The "
+    "turn-keyed metrics (MRR, recall@k, hit@k, session@k) are not computable "
+    "and are null rather than zero: a zero would report it as having retrieved "
+    "nothing, when what is missing is the attribution, not the content. "
+    "answer_words@k is computed from the returned text and stays comparable."
+)
+
 ACCURACY_UNAVAILABLE = (
     "both benchmarks define accuracy as model-judged QA over what memory "
     "returned; this harness calls no model, so it reports retrieval only. "
@@ -612,10 +647,27 @@ def means(rows: list[dict]) -> dict:
     if not rows:
         return {}
     scoreable = [r for r in rows if r["answer_scoreable"]]
-    out: dict = {"n": len(rows), "MRR": statistics.mean(r["rr"] for r in rows)}
+
+    def over(metric: str):
+        """The mean over rows that actually carry this metric, or None.
+
+        A backend that cannot attribute a result to a source turn records None
+        for the turn-keyed metrics rather than 0.0, so averaging has to drop
+        them. `statistics.mean` over a list holding None raises; silently
+        coercing to 0.0 would be the exact dishonesty that None exists to
+        avoid, by reporting a competitor as having retrieved nothing.
+        """
+        values = [r[metric] for r in rows if r.get(metric) is not None]
+        return statistics.mean(values) if values else None
+
+    out: dict = {"n": len(rows), "MRR": over("rr")}
+    # Said out loud rather than left to be inferred from a column of nulls.
+    out["attributed"] = all(r.get("attributed", True) for r in rows)
+    if not out["attributed"]:
+        out["attribution_unavailable"] = ATTRIBUTION_UNAVAILABLE
     for k in KS:
         for metric in ("recall", "hit", "session"):
-            out[f"{metric}@{k}"] = statistics.mean(r[f"{metric}@{k}"] for r in rows)
+            out[f"{metric}@{k}"] = over(f"{metric}@{k}")
     out["answer_scoreable"] = len(scoreable)
     if scoreable:
         for k in KS:
