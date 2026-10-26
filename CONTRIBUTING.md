@@ -5,19 +5,28 @@ Thanks for considering a contribution. This project is early and staged; please 
 proposing anything, so your PR fits the current build phase (v1a → v1b → v1.1, in that
 order, each gated on the previous one's exit criteria).
 
-## The contributor agreement
+## Sign your commits
 
-The first pull request you open will get a bot comment asking you to sign the
-[Contributor License Agreement](CLA.md). It is a one-line reply in the PR thread, and it
-is asked once ever, not once per PR.
+One line per commit:
 
-Read [`CLA.md`](CLA.md) for what it grants and why. The short version: you keep your
-copyright, everything you contribute stays available under the project's licence, and
-every version converts to Apache-2.0 four years after publication, and
-the agreement adds the right to also distribute your contribution under other terms —
-because a paid hosted edition is planned, and some team features may ship
-source-available. Asking now is the version of that conversation where nobody is
-surprised later.
+```bash
+git commit -s -m "your message"
+```
+
+That appends `Signed-off-by: Your Name <your@email.address>`, which is the
+[Developer Certificate of Origin](DCO.md): a statement that you wrote the code,
+or have the right to submit it. The Linux kernel, Docker and GitLab use the same
+mechanism. A CI check reads the trailer on every commit in a pull request.
+
+Forgot? `git commit --amend -s --no-edit` for the last one, or
+`git rebase --signoff main` for a branch, then force push with lease.
+
+There is no contributor agreement to read and no bot to reply to. There was one
+until 2026-10-26, and it was dropped because the only thing it added over the
+Apache 2.0 licence was the right to relicense your contribution later, which
+this project does not use: everything commercial lives in a separate private
+repository. [`DCO.md`](DCO.md) says what that costs the project, which is that
+no contributed code here can be moved off Apache 2.0 without asking you.
 
 ## Before you start
 

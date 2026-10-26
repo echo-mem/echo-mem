@@ -424,8 +424,9 @@ no feature held back. Above either threshold, production use needs an agreement:
 <summary>Contributing</summary>
 
 See [`CONTRIBUTING.md`](CONTRIBUTING.md). Issues and pull requests welcome; please read the
-design docs first so proposals fit the staged build plan. A first pull request is asked to
-sign the [Contributor License Agreement](CLA.md), once, in the PR thread.
+design docs first so proposals fit the staged build plan. Commits need a sign-off line,
+`git commit -s`, which is the [Developer Certificate of Origin](DCO.md). There is no
+contributor agreement to read.
 
 The most useful contribution is a measurement that disagrees with one of the numbers
 above. Run `echo-memory eval`, `calibrate` or `benchmark` on your own store and open an
