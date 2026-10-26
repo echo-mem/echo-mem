@@ -22,6 +22,16 @@ from echo_memory.retrieval.query_memory import query_memory
 GROUP = "g1"
 NEAR = "the pool was sized 5 and checkout returned 502s"
 FAR = "LEXQUERY the office coffee machine was replaced"
+# Reached only by the one hop expansion. It shares the "checkout" node with
+# NEAR, so a hop from NEAR finds it, and it is far enough from the query for
+# the vector floor to reject it and shares no term with the query for full
+# text search to match, so neither content channel returns it.
+HOP = "the ledger reconciles nightly against the bank"
+# Vector-matches NEAR exactly and matches nothing lexically, so NEAR is found
+# by the vector channel alone. A query that matched NEAR by its words would
+# also match HOP through the shared "checkout" entity name, and the hop would
+# never be the only thing that found it.
+GRAPHSEED = "GRAPHSEED"
 
 
 def _embedder():
@@ -34,16 +44,22 @@ def _embedder():
         # stored facts so the vector channel's floor rejects them and only
         # full text search can match.
         "LEXQUERY": REFERENCE,
+        GRAPHSEED: REFERENCE,
+        "ledger": unit_vector_at_angle(-0.85),
         NEAR: REFERENCE,
         FAR: unit_vector_at_angle(0.0),
+        HOP: unit_vector_at_angle(-0.9),
     })
 
 
-def _seed(conn, embedder):
-    for src, tgt, fact in (
+def _seed(conn, embedder, with_neighbour: bool = False):
+    edges = [
         ("pool size", "checkout", NEAR),
         ("coffee machine", "the office", FAR),
-    ):
+    ]
+    if with_neighbour:
+        edges.append(("checkout", "ledger", HOP))
+    for src, tgt, fact in edges:
         write_episode(
             conn, GROUP, "s1",
             [{"name": src, "type": "thing"}, {"name": tgt, "type": "thing"}],
@@ -140,3 +156,75 @@ def test_a_digest_ranks_nothing_so_it_claims_nothing(migrated_db):
     for fact in result["facts"]:
         assert "score" not in fact
         assert "rank" not in fact
+
+
+def test_a_fact_the_graph_hop_reached_says_which_channel_found_it(migrated_db):
+    """The hop was not a channel, so its facts came back claiming nothing.
+
+    `_annotate` built `matched` from the vector and lexical id sets and
+    skipped anything in neither. A fact the one hop expansion added is in
+    neither by construction - adding what the content channels missed is the
+    entire point of it - so it fell through with no rank, no score and no
+    matched, while the README said every returned fact carries all three.
+
+    That exact shape has already cost this project a customer answer once: a
+    fact with a null score sorted to the back of a list, got truncated by a
+    character budget, and the model invented a replacement. The null here was
+    waiting to do it again behind a flag.
+    """
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder, with_neighbour=True)
+
+    facts = query_memory(conn, GROUP, GRAPHSEED, 10, embedder, graph_hops=1)["facts"]
+
+    by_graph = [f for f in facts if f["matched"] == ["graph"]]
+    assert by_graph, (
+        "precondition: the hop has to be the only channel that found something. "
+        f"got {[(f['fact'], f.get('matched')) for f in facts]}"
+    )
+    assert any(f["fact"] == HOP for f in by_graph)
+    for fact in by_graph:
+        assert fact["rank"] is not None, fact
+        assert fact["score"] is not None, fact
+
+
+def test_nothing_the_hop_adds_is_missing_rank_score_or_matched(migrated_db):
+    """The general form over CHANNELS, not just over queries.
+
+    `test_no_returned_fact_is_missing_a_score` already claimed to be the
+    general form so the next channel could not reintroduce the null. It
+    generalised over queries and never turned the hop on, so the next channel
+    reintroduced it and the test stayed green. Turning the hop on is the part
+    that matters.
+    """
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder, with_neighbour=True)
+
+    for query in (GRAPHSEED, NEAR, "LEXQUERY"):
+        facts = query_memory(conn, GROUP, query, 10, embedder, graph_hops=1)["facts"]
+        assert facts, query
+        for field in ("rank", "score", "matched"):
+            missing = [f["fact"] for f in facts if f.get(field) is None]
+            assert not missing, f"{query!r} returned facts with no {field}: {missing}"
+        assert [f["rank"] for f in facts] == list(range(1, len(facts) + 1)), query
+
+
+def test_the_hop_being_on_does_not_make_a_digest_claim_anything(migrated_db):
+    """A digest ranks nothing against nothing, and the new channel must not
+    change that. `graph_ids` is empty on every path but a hop that ran, which
+    is what keeps the skip in `_annotate` doing its other job."""
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder, with_neighbour=True)
+
+    result = query_memory(
+        conn, GROUP, None, 10, embedder, digest=True, graph_hops=1
+    )
+
+    assert result["facts"]
+    for fact in result["facts"]:
+        assert "score" not in fact
+        assert "rank" not in fact
+        assert "matched" not in fact
