@@ -1,0 +1,65 @@
+<!doctype html><html><head><meta charset=utf-8>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:1280px; height:640px; }
+  body {
+    background:#0b0e13;
+    background-image:
+      linear-gradient(115deg, rgba(224,72,63,.16) 0%, rgba(11,14,19,0) 42%),
+      linear-gradient(245deg, rgba(104,224,136,.11) 0%, rgba(11,14,19,0) 46%);
+    color:#e7ebf3;
+    font-family:'IBM Plex Sans','Helvetica Neue',Helvetica,Arial,sans-serif;
+    padding:64px 74px; display:flex; gap:56px; align-items:center;
+    -webkit-font-smoothing:antialiased;
+  }
+  .left { flex:1 1 60%; display:flex; flex-direction:column; }
+  .brand { display:flex; align-items:center; gap:16px; margin-bottom:34px; }
+  .mark { width:48px; height:48px; border-radius:999px; border:2px solid #e0483f;
+          display:flex; align-items:center; justify-content:center; }
+  .mark i { width:26px; height:26px; border-radius:999px; border:2px solid #e0483f;
+            display:flex; align-items:center; justify-content:center; }
+  .mark i b { width:10px; height:10px; border-radius:999px; background:#e0483f; display:block; }
+  .name { font-size:25px; letter-spacing:4px; font-weight:700; }
+  .eyebrow { font-size:18px; letter-spacing:3px; color:#e0483f; margin-bottom:18px; font-weight:600; }
+  h1 { font-size:54px; line-height:1.07; font-weight:800; letter-spacing:-1px; }
+  h1 em { color:#e0483f; font-style:normal; }
+  .sub { margin-top:22px; font-size:22px; color:#9aa3b5; line-height:1.45; max-width:560px; }
+  .foot { display:flex; align-items:center; gap:18px; margin-top:40px; flex-wrap:wrap; }
+  .url { display:flex; align-items:center; gap:10px; font-size:19px; color:#9aa3b5; }
+  .dot { width:9px; height:9px; border-radius:999px; background:#68e088; display:block; }
+  .pill { border:1px solid #2a303b; border-radius:999px; padding:6px 14px; font-size:16px; color:#9aa3b5; }
+
+  .right { flex:0 0 400px; }
+  .card { border:1px solid #222934; border-radius:14px; background:rgba(255,255,255,.022);
+          padding:28px 26px; font-family:'IBM Plex Mono',Menlo,monospace; font-size:17px; line-height:2; }
+  .n { color:#e7ebf3; font-weight:700; }
+  .rel { color:#e0483f; }
+  .meta { color:#6b7484; font-size:15.5px; }
+  .meta b { color:#9aa3b5; font-weight:400; }
+  .g { color:#68e088; }
+</style></head><body>
+  <div class=left>
+    <div class=brand>
+      <div class=mark><i><b></b></i></div>
+      <div class=name>ECHO MEMORY</div>
+    </div>
+    <div class=eyebrow>SHARED MEMORY FOR AI AGENTS</div>
+    <h1>The server never calls<br>a model to <em>write</em>.</h1>
+    <div class=sub>A causally typed memory graph in your own Postgres. What Claude Code learns, Cursor and Codex can recall.</div>
+    <div class=foot>
+      <span class=url><i class=dot></i> github.com/echo-mem/echo-mem</span>
+      <span class=pill>Apache 2.0</span>
+      <span class=pill>MCP</span>
+    </div>
+  </div>
+  <div class=right>
+    <div class=card>
+      <div><span class=n>billing</span> <span class=rel>──uses──▸</span> <span class=n>Razorpay</span></div>
+      <div class=meta>│ written by <b>claude-code</b></div>
+      <div class=meta>│ supersedes <span class=rel>▸</span> <b>Stripe</b></div>
+      <div class=meta>└ read by <b>cursor</b>, <b>codex</b></div>
+      <div style="height:10px"></div>
+      <div class=meta><span class=g>✓</span> 0 model calls to store this</div>
+    </div>
+  </div>
+</body></html>
