@@ -93,6 +93,11 @@ class EchoBackend:
                 progress(f"  {instance.group_id}: {written:,} turns written, {rate:.0f}/s")
         return written
 
+    def settle(self, group_id: str, expected: int,
+               progress: Callable[[str], None] | None = None) -> None:
+        """Nothing to wait for. write_episode has committed and read back
+        before it returns, which is the property the whole product is about."""
+
     def query(self, group_id: str, question: str, top_k: int) -> list[dict]:
         found = query_memory(self._conn, group_id, question, top_k, self._embedder)
         return found.get("facts", [])

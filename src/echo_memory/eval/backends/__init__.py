@@ -84,6 +84,18 @@ class Backend(Protocol):
     def ingest(self, instance, progress: Callable[[str], None] | None = None) -> int:
         """Write every turn of one instance. Returns turns written."""
 
+    def settle(self, group_id: str, expected: int,
+               progress: Callable[[str], None] | None = None) -> None:
+        """Block until what was ingested is actually queryable.
+
+        A no-op for a synchronous store. Not optional for Mem0, whose `add`
+        returns `{"status": "PENDING"}` before the memory exists: three single
+        turn adds returned in under a second and took about five seconds to
+        appear. A harness that ingests and immediately queries measures an
+        empty store and reports the competitor at zero, which is the most
+        embarrassing way to win a benchmark.
+        """
+
     def query(self, group_id: str, question: str, top_k: int) -> list[dict]:
         """Ranked results, most relevant first.
 

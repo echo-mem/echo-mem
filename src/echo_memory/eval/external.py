@@ -452,6 +452,16 @@ def score_question(
             row[f"answer_words@{k}"] = len(wanted & words) / len(wanted)
     row["returned"] = len(returned)
     row["chars"] = len(text)
+    # How much of what came back could be scored at all. Attribution is not
+    # all-or-nothing per BACKEND, only per result: Mem0 carries a turn key
+    # through extraction for a memory derived from one turn, and cannot for one
+    # it synthesised from several - it has `replaced_by` and `synthesized`
+    # fields for exactly that case. A system whose answers are half
+    # unattributable has half its recall silently scored as a miss, so the
+    # share is reported rather than left for a reader to assume it was 1.0.
+    row["attribution_rate"] = (
+        sum(1 for key in keys if key) / len(keys) if keys else None
+    )
     return row
 
 
@@ -585,6 +595,9 @@ def run_backend(
             out.scopes_resumed += 1
         else:
             out.turns_written += backend.ingest(instance, progress=progress)
+            # Before the first question, not after the last instance. An async
+            # backend has queued work and querying now scores an empty store.
+            backend.settle(instance.group_id, len(instance.turns), progress)
         sessions = instance.sessions
         for question in instance.questions:
             found = backend.query(instance.group_id, question.question, top_k)
@@ -674,6 +687,9 @@ def means(rows: list[dict]) -> dict:
         for k in KS:
             out[f"answer_words@{k}"] = statistics.mean(r[f"answer_words@{k}"] for r in scoreable)
     out["mean_facts_returned"] = statistics.mean(r["returned"] for r in rows)
+    # Beside every turn-keyed number, so a low recall can be told apart from a
+    # recall that was never measurable.
+    out["attribution_rate"] = over("attribution_rate")
     # What the answer cost, beside whether it was right. A configuration that
     # finds everything by returning everything is not better, and this is the
     # number that says so; `eval` reports the same thing as tokens.
