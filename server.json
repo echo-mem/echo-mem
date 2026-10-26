@@ -1,6 +1,6 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
-  "name": "io.github.ayushcodes10/echo-mem",
+  "name": "com.echo-mem/echo-mem",
   "title": "Echo Memory",
   "description": "Shared memory for AI agents, as a graph in your own Postgres. Writes never call an LLM.",
   "version": "0.5.5",
@@ -44,7 +44,7 @@
       "headers": [
         {
           "name": "Authorization",
-          "description": "Bearer <key>, from https://app.echo-mem.com — the hosted option, which needs no local database.",
+          "description": "Bearer <key>, from https://app.echo-mem.com \u2014 the hosted option, which needs no local database.",
           "isRequired": true,
           "isSecret": true
         }

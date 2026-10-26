@@ -58,7 +58,7 @@ def test_a_stale_registry_says_to_publish(wire, capsys):
 
     err = capsys.readouterr().err
     assert "registry serves 0.5.3" in err
-    assert "mcp-publisher publish" in err
+    assert "publish step failed or was skipped" in err
 
 
 def test_a_stale_manifest_is_a_different_message(wire, capsys):

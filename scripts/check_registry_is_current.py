@@ -37,7 +37,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 REGISTRY = "https://registry.modelcontextprotocol.io/v0/servers?search=echo-mem"
 PYPI = "https://pypi.org/pypi/echo-mem/json"
-SERVER_NAME = "io.github.ayushcodes10/echo-mem"
+# The DNS verified namespace. The old io.github.ayushcodes10/echo-mem belonged
+# to a personal account, so no Actions token could claim it and publishing
+# could never be automated. That listing is frozen at 0.5.3 and should be
+# deprecated; this one is what a client is told to install now.
+SERVER_NAME = "com.echo-mem/echo-mem"
+OLD_SERVER_NAME = "io.github.ayushcodes10/echo-mem"
 
 
 def _get(url: str, what: str) -> dict:
@@ -86,9 +91,9 @@ def main() -> int:
     elif listed != published:
         problems.append(
             f"the registry serves {listed} and PyPI has {published}. The "
-            f"manifest was never published. Run `mcp-publisher login github` "
-            f"then `mcp-publisher publish` from the repository root. See "
-            f"docs/PUBLISHING.md."
+            f"release workflow publishes this automatically, so a mismatch "
+            f"here means the publish step failed or was skipped. Check the "
+            f"Release run for the tag, and see docs/PUBLISHING.md."
         )
 
     if problems:

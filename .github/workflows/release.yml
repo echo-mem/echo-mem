@@ -167,3 +167,39 @@ jobs:
           https://pypi.org/integrity/echo-mem/${GITHUB_REF_NAME#v}/echo_mem-${GITHUB_REF_NAME#v}-py3-none-any.whl/provenance
 
           What changed: [CHANGELOG.md](https://github.com/echo-mem/echo-mem/blob/main/CHANGELOG.md)"
+
+      # The MCP registry, which is how somebody looking for a memory server
+      # finds this one. It served 0.5.3 for a month while PyPI was on 0.5.5,
+      # because publishing was a manual step in a runbook and a manual step is
+      # eventually a forgotten one.
+      #
+      # Authenticated by DNS rather than by GitHub, and that is the whole
+      # reason the server was renamed to com.echo-mem/echo-mem. The old name,
+      # io.github.ayushcodes10/echo-mem, belonged to a personal account, so no
+      # Actions token could ever claim it. An io.github.echo-mem/* namespace
+      # would have worked today and broken the next time the repository moves
+      # organisation, which it has already done once. A domain survives that.
+      #
+      # LAST, after PyPI and after the GitHub Release. The registry points at
+      # a PyPI version, so announcing a release the index does not yet serve
+      # would send somebody to install something that is not there.
+      - name: Publish to the MCP registry
+        env:
+          DNS_KEY: ${{ secrets.MCP_REGISTRY_DNS_KEY }}
+        run: |
+          # The tag is the source of truth for what was just published, so the
+          # manifest is checked against it rather than trusted. A server.json
+          # left at the previous version would quietly re-publish the old one.
+          VERSION="${GITHUB_REF_NAME#v}"
+          MANIFEST=$(python -c "import json;print(json.load(open('server.json'))['version'])")
+          if [ "$MANIFEST" != "$VERSION" ]; then
+            echo "server.json says $MANIFEST and the tag says $VERSION" >&2
+            exit 1
+          fi
+
+          curl -sSL -o mcp-publisher.tar.gz \
+            "https://github.com/modelcontextprotocol/registry/releases/latest/download/mcp-publisher_$(uname -s | tr '[:upper:]' '[:lower:]')_amd64.tar.gz"
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+          ./mcp-publisher login dns --domain echo-mem.com --private-key "$DNS_KEY"
+          ./mcp-publisher publish

@@ -456,5 +456,11 @@ only exist because somebody is being invoiced. None of it sits in the read or wr
 
 <!-- The MCP registry proves you own a PyPI package by finding this line in the
      package's own description. It has to survive into the built distribution,
-     which is why it lives in the README rather than in a workflow. -->
-mcp-name: io.github.ayushcodes10/echo-mem
+     which is why it lives in the README rather than in a workflow.
+
+     It is checked against the README of the version ALREADY ON PyPI, which
+     makes the ordering strict: this name cannot be published to the registry
+     until a release carrying this line has reached PyPI first. The release
+     workflow does PyPI before the registry for exactly that reason, so the
+     first automated publish is the first release after this change. -->
+mcp-name: com.echo-mem/echo-mem
