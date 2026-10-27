@@ -515,6 +515,35 @@ def _add_project_parsers(sub) -> None:
         "--top-k", type=int, default=30, metavar="K",
         help="facts per query (default: 30, the largest k reported)",
     )
+    # The judged pass is its own command, not a flag on eval-external, because
+    # it is a separate pass over a SAVED results file. A LoCoMo run against a
+    # hosted backend is hours of billed ingestion; changing a judge prompt or
+    # adding a second judge must not mean paying for that again.
+    jex = sub.add_parser(
+        "judge-external",
+        help="answer and judge a finished eval-external run, for a number "
+             "comparable to a published QA accuracy figure",
+    )
+    jex.add_argument(
+        "results",
+        help="the .jsonl an eval-external run wrote with --results",
+    )
+    jex.add_argument(
+        "--limit", type=int, default=0, metavar="N",
+        help="judge only the first N questions. Use it to price a run before "
+             "committing to thousands of model calls",
+    )
+    jex.add_argument(
+        "--top-k", type=int, default=30, metavar="K",
+        help="facts shown to the answerer (default: 30, matching the run)",
+    )
+    jex.add_argument(
+        "--out", metavar="PATH", default="",
+        help="append each answer and its verdicts here as they happen",
+    )
+    jex.add_argument("--json", metavar="PATH", default="",
+                     help="write the machine-readable summary here")
+
     ext.add_argument(
         "--backend", default="echo-mem", choices=sorted(external_backends),
         help="which memory system to measure (default: echo-mem). A "
@@ -800,6 +829,95 @@ def _eval_external(args, config) -> int:
     print(external.render(result), end="")
     return 0 if result.rows else 1
 
+
+def _judge_external(args) -> int:
+    """Answer and judge a finished run.
+
+    Needs no database and no config: it reads a results file and calls two
+    providers, so it is reached before load_config like the competitor
+    benchmark path.
+    """
+    import json as _json
+
+    from echo_memory.cli import llm
+    from echo_memory.eval import qa
+
+    try:
+        answerer = llm.provider_from_env()
+        second = llm.provider_from_env(
+            prefix="ECHO_MEMORY_JUDGE2", default_shape=llm.OPENAI
+        )
+    except llm.ModelUnavailable as exc:
+        print(
+            f"error: {exc}\n\n"
+            f"This pass needs TWO providers from different vendors. The first "
+            f"answers\nand judges (ECHO_MEMORY_LLM_*), the second judges the "
+            f"same answers\n(ECHO_MEMORY_JUDGE2_*), so how far a verdict "
+            f"depends on the judge is a\nnumber rather than a reassurance.",
+            file=sys.stderr,
+        )
+        return 2
+
+    if not Path(args.results).is_file():
+        print(f"error: no such file: {args.results}", file=sys.stderr)
+        return 2
+
+    judges = {answerer.model: answerer, second.model: second}
+    if len(judges) < 2:
+        print(
+            f"error: both judges are {answerer.model!r}. Agreement between a "
+            f"model and itself measures nothing; point ECHO_MEMORY_JUDGE2_MODEL "
+            f"at a different model.",
+            file=sys.stderr,
+        )
+        return 2
+
+    try:
+        records = qa.judge_run(
+            args.results, answerer, judges,
+            limit=args.limit, top_k=args.top_k, out_path=args.out,
+            progress=lambda line: print(line, file=sys.stderr, flush=True),
+        )
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if not records:
+        print("error: nothing judged: no row carried a gold answer", file=sys.stderr)
+        return 1
+
+    names = list(judges)
+    summary = {
+        "results": args.results,
+        "answered_by": answerer.model,
+        "judges": names,
+        "accuracy": [qa.accuracy(records, n) for n in names],
+        "agreement": qa.agreement(records, names[0], names[1]),
+    }
+    if args.json:
+        Path(args.json).write_text(_json.dumps(summary, indent=2) + "\n")
+        print(f"wrote {args.json}", file=sys.stderr)
+
+    print()
+    print(f"answered by {answerer.model} from what the run retrieved")
+    for row in summary["accuracy"]:
+        acc = "n/a" if row["accuracy"] is None else f"{row['accuracy']:.3f}"
+        print(
+            f"  {row['judge']:<34} accuracy {acc}   "
+            f"graded {row['graded']:,}/{row['n']:,}   "
+            f"could not answer {row['cannot_answer']:,}"
+        )
+    agree = summary["agreement"]
+    raw = "n/a" if agree["raw"] is None else f"{agree['raw']:.3f}"
+    kappa = "n/a" if agree["kappa"] is None else f"{agree['kappa']:.3f}"
+    print()
+    print(f"  judges agreed on {raw} of {agree['n']:,} graded answers, "
+          f"Cohen's kappa {kappa}")
+    print("  Kappa, not raw agreement alone: two judges who both say CORRECT")
+    print("  90% of the time agree 82% of the time by chance.")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -824,6 +942,11 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.backend not in NEEDS_DATABASE:
             return _eval_external(args, None)
+
+    # Same again: judging reads a results file and calls two providers. It
+    # never opens the database.
+    if args.command == "judge-external":
+        return _judge_external(args)
 
     try:
         config = load_config()

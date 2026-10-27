@@ -244,12 +244,12 @@ hint written is audited and marked as extracted late, which is what makes `--cle
 able to remove exactly these and never one you wrote at write time.
 
 **No inference on the write path.** Extraction happens in the calling agent, so storing
-a memory invokes no model on the server. Two commands in the engine reach a provider and
-both are worth naming rather than glossing: `infer-causal-hints` above, and `distil`.
-Neither is an exception to the claim. Each is a command a person types against facts
-already stored, neither runs as part of a write, a migration or a hook, and
-`src/echo_memory/cli/llm.py` holds the only outbound request in the engine, so a store
-that runs neither never causes a model call. The cost moved rather than vanished: the agent
+a memory invokes no model on the server. Three commands in the engine reach a provider and
+all three are worth naming rather than glossing: `infer-causal-hints` above, `distil`, and
+`judge-external`, which grades a finished benchmark run. None is an exception to the claim.
+Each is a command a person types against facts already stored, none runs as part of a
+write, a migration or a hook, and `src/echo_memory/cli/llm.py` holds the only outbound
+request in the engine, so a store that runs none of them never causes a model call. The cost moved rather than vanished: the agent
 has to arrive with entities and facts already extracted, which is what the
 [tool contract](docs/DEVELOPMENT.md) spells out. The comparison that makes this matter is
 Zep/Graphiti, the closest architectural match, whose own description of ingestion is that
@@ -407,7 +407,7 @@ and the v1a to v1b plan.
 
 | | |
 |---|---|
-| **v1a, built** | Basic recall. Seven MCP tools, 35 CLI commands, on PyPI and in the MCP registry. |
+| **v1a, built** | Basic recall. Seven MCP tools, 36 CLI commands, on PyPI and in the MCP registry. |
 | **v1b, part built** | Causal typing and `trace_cause` shipped in 0.5.0. Multi hop associative retrieval has not: 187 questions no single fact answers score MRR 0.212 today, and that number is what the rest of v1b has to beat. |
 | **v1c, designed** | Consolidation: hot, consolidated and archived tiers, so retrieval cost stops tracking total facts written. Nothing implemented. |
 | **v1.1, planned** | Organisation wide tenancy: per agent, per team, or org wide graphs. |

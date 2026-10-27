@@ -41,6 +41,11 @@ LLM_MODULE = SRC / "cli" / "llm.py"
 MODEL_CALLERS = {
     "infer-causal-hints": SRC / "cli" / "infer_causal.py",
     "distil": SRC / "distil" / "candidates.py",
+    # The judged pass over a finished external benchmark run. It answers from
+    # what a backend retrieved and has two judges grade that answer, so it
+    # calls a model by definition - and it is the third member this
+    # enumeration gained, which is the drift this test exists to catch.
+    "judge-external": SRC / "eval" / "qa.py",
 }
 
 
