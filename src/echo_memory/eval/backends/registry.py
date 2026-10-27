@@ -30,12 +30,26 @@ def _zep(conn, embedder):
     return ZepBackend()
 
 
+def _letta(conn, embedder):
+    from echo_memory.eval.backends.letta import LettaBackend
+
+    return LettaBackend()
+
+
+def _cognee(conn, embedder):
+    from echo_memory.eval.backends.cognee import CogneeBackend
+
+    return CogneeBackend()
+
+
 #: Every backend, by the name the CLI takes. echo-mem is the default, so
 #: `eval-external locomo <path>` keeps meaning what it has always meant.
 BACKENDS: dict[str, Callable] = {
     "echo-mem": _echo,
     "mem0": _mem0,
     "zep": _zep,
+    "letta": _letta,
+    "cognee": _cognee,
 }
 
 #: Which backends need a database. Only ours: a competitor run should not
