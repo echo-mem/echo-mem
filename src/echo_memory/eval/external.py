@@ -419,7 +419,7 @@ def source_turns(result: dict) -> frozenset[str]:
 
 def score_question(
     question: Question, returned: list[dict], sessions: dict[str, str],
-    *, attributed: bool = True,
+    *, attributed: bool = True, keep_facts: bool = False,
 ) -> dict:
     """One row of results for one question, from what retrieval returned.
 
@@ -490,6 +490,17 @@ def score_question(
     row["attribution_rate"] = (
         sum(1 for keys in keysets if keys) / len(keysets) if keysets else None
     )
+    if keep_facts:
+        # The retrieved text itself, so the judged QA pass is a separate,
+        # re-runnable pass over saved results rather than something welded
+        # into the run. A LoCoMo run against a hosted backend is hours of
+        # billed ingestion; changing the judge, or adding a second one, must
+        # not mean paying for that again. Also means both judges score the
+        # identical returned set, which is what makes their agreement mean
+        # anything.
+        row["facts"] = [f.get("fact") or "" for f in returned]
+        row["gold_answer"] = question.answer
+        row["question"] = question.question
     return row
 
 
@@ -629,12 +640,24 @@ def run_backend(
         sessions = instance.sessions
         for question in instance.questions:
             found = backend.query(instance.group_id, question.question, top_k)
-            row = score_question(question, found, sessions, attributed=attributed)
-            out.rows.append(row)
+            row = score_question(
+                question, found, sessions, attributed=attributed,
+                # Only into the file. Keeping the text on every row in memory
+                # for a 1,986 question corpus buys nothing, since `means`
+                # never reads it.
+                keep_facts=bool(results_path),
+            )
             if results_path:
                 # Appended as it happens, so a killed run keeps what it scored.
                 with open(results_path, "a") as handle:
                     handle.write(json.dumps(row) + "\n")
+            # Dropped from the in-memory row AFTER the file has it. `means`
+            # never reads the text, and holding 1,986 questions' worth of
+            # retrieved facts for the whole run is megabytes for nothing.
+            out.rows.append(
+                {k: v for k, v in row.items()
+                 if k not in ("facts", "gold_answer", "question")}
+            )
         out.instances += 1
         if progress:
             progress(
