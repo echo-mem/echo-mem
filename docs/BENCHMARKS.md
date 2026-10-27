@@ -300,6 +300,190 @@ feature turns the hop on per question rather than for everybody. Nothing can
 yet tell a multi hop question from a single hop one, and that is the actual v1b
 problem.
 
+## Against Mem0, Zep, Letta and cognee, 2026-10-27
+
+Every number above is about this system with nothing beside it, which is the
+limitation issue #147 names. `eval-external --backend` runs another memory
+system through the same harness: the same corpus, the same scoring, the same
+code path, because a comparison where our side ran one path and theirs ran
+another is measuring the harness.
+
+### The baseline this comparison uses
+
+LoCoMo in full, all ten conversations, 5,882 turns into an empty scratch
+database in **310 seconds** (18.9 turns/s), 1,982 questions scored. Dataset
+sha256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4`.
+
+| Category | n | recall@1 | recall@10 | recall@30 | hit@10 | session@10 | MRR |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| **overall** | **1,982** | **0.341** | **0.643** | **0.725** | **0.700** | **0.907** | **0.485** |
+| temporal | 321 | 0.450 | 0.692 | 0.775 | 0.720 | 0.900 | 0.565 |
+| single hop | 841 | 0.385 | 0.712 | 0.784 | 0.729 | 0.976 | 0.514 |
+| adversarial | 446 | 0.380 | 0.722 | 0.794 | 0.729 | 0.980 | 0.497 |
+| multi hop | 282 | 0.088 | 0.361 | 0.503 | 0.631 | 0.681 | 0.360 |
+| open domain | 92 | 0.136 | 0.319 | 0.362 | 0.435 | 0.647 | 0.260 |
+
+`answer_words@10` 0.629 over the 1,242 questions with two or more content
+words in their gold answer.
+
+**This is not the same as the 2026-09-26 row above.** MRR 0.460 to 0.485,
+recall@10 0.601 to 0.643, on the identical corpus, the identical question set
+and the same scoring code.
+
+The delta is **not attributed to any one change here, because it has not been
+ablated.** Several retrieval changes landed in between, and the most likely
+contributor is BM25 replacing `ts_rank` on the lexical channel: that went in at
+15:24 on 2026-09-26 and the run above it was recorded at 14:37 the same day, so
+it is genuinely after it rather than merely later in the file. Saying which
+change earned the 0.025 would need each one run on its own, which is what
+`eval` and its ablation flags are for and is not what this section measured.
+
+Both rows are kept rather than the older one being overwritten. A benchmark
+file that only ever shows the current number cannot be used to check whether a
+change helped.
+
+Multi hop at MRR 0.360 and open domain at 0.260 remain the weak shapes, and
+`session@10` 0.907 against `recall@10` 0.643 is the same gap both corpora have
+always shown. The right conversation comes back far more often than the right
+line in it.
+
+### The attribution problem, which decides whether any of this is honest
+
+Scoring matches what came back against the gold turns by reading a turn key out
+of each result. That works here because one turn becomes one fact, so the key
+survives exactly. It does not generalise, and the ways it fails all run in our
+favour unless they are handled:
+
+| system | what a result is | attribution |
+|---|---|---|
+| echo-mem | one stored turn | exact |
+| Zep | a fact derived from several episodes | **every** source episode, via `episode_uuids` |
+| Mem0 | a memory derived from one or more turns | one `turn_key`, even when several turns fed it |
+| Letta | a stored passage | exact, via `tags` |
+| cognee | a chunk of the graph | unverified; two routes attempted |
+
+Two consequences are built into the scoring rather than mentioned afterwards.
+
+**A result may name several source turns.** Crediting a Zep fact derived from
+three turns to one of them scores the other two as misses on a system that
+genuinely surfaced them. Measured on the fixture: recall@1 1.000 reading all
+sources against 0.500 reading one. Half the recall, against a competitor.
+
+**A system that cannot attribute a result scores null, not zero.** A zero
+reports a competitor that retrieved the right content and merely could not name
+its source turn as having retrieved nothing. `means` drops nulls rather than
+averaging them in, and every report says which metrics were not computable and
+why. `attribution_rate` sits beside the turn-keyed numbers so a low recall can
+be told from a recall that was never measurable.
+
+**And attribution can be present and wrong, which is worse than absent.** Mem0
+on the fixture returned `attribution_rate` 1.000 with `recall@k` 0.000 and
+`session@10` 0.750: right sessions, wrong turns, because a memory synthesised
+from several turns carries one of their keys. Nothing outside Mem0 can tell
+that case from a genuine miss, so its turn-keyed metrics understate it by an
+unknown amount. For Mem0, `session@k`, `answer_words@k` and the judged answer
+are the comparisons that carry weight.
+
+### Write cost, which is what this project is actually about
+
+Measured, not projected, for ours. Measured on 12 turns and extrapolated for
+Zep, which is flagged as coarse until the full run replaces it:
+
+| | turns/s | LoCoMo, 5,882 turns |
+|---|---:|---|
+| echo-mem | 18.9 | 310 seconds |
+| Zep | 0.17 | ~9.8 hours, extrapolated |
+
+Zep's own documentation says every episode triggers multiple LLM calls and that
+write cost scales with volume, so a gap of this shape is expected; its size is
+the thing worth having a number for. LongMemEval S at 246,930 turns projects to
+roughly 17 days per hosted backend, which is why the full comparison is run on
+LoCoMo and LongMemEval is not claimed.
+
+Letta should look like us rather than like Zep, because inserting a passage
+embeds it without running an extraction model. cognee splits the two: `add` is
+cheap and `cognify` is where the model cost lands, so its `ingest` does both
+and reports both. Those two predictions are written here before the runs so
+they can be checked rather than adjusted afterwards.
+
+### Retrieval is a ceiling, and the judged pass is the comparable number
+
+Everything above is retrieval: did the turn holding the answer come back. Mem0
+and Zep publish model-judged QA accuracy, which is a different measurement, and
+quoting one as the other would be dishonest in the specific way that is easy to
+get away with. `judge-external` produces the comparable number from a saved
+results file:
+
+- one model answers each question from **only** what that backend returned,
+  never the gold answer and never the transcript, and may reply `CANNOT ANSWER`
+- that outcome is counted apart from a wrong answer, because for a memory
+  system "did not retrieve it" and "retrieved and misled" are different
+  failures
+- **two judges from different vendors** grade the identical answer string, so
+  their disagreement is judge variance and nothing else
+- reported as raw agreement **and** Cohen's kappa, because two judges who both
+  say CORRECT 90% of the time agree 82% of the time by chance
+
+Both prompts are constants in `src/echo_memory/eval/qa.py` and are published
+with any number taken from them. A judged figure whose prompt is not published
+cannot be argued with, and one that cannot be argued with is not evidence.
+
+### Running it
+
+The backend SDKs are **not** in this project's requirements: they pull heavy,
+mutually incompatible dependency trees. Install them into a separate
+environment.
+
+```bash
+python3 -m venv .venv-bench
+.venv-bench/bin/pip install -e . mem0ai zep-cloud letta-client cognee
+```
+
+Credentials are read from the environment and there is deliberately no flag for
+any of them, because a benchmark command ends up in a shell history and beside
+a results file.
+
+```bash
+export MEM0_API_KEY=...                  # mem0
+export ZEP_API_KEY=...                   # zep
+export LETTA_BASE_URL=http://localhost:8283   # letta, plus a server
+export LETTA_MODEL=... LETTA_EMBEDDING=...
+export COGNEE_LLM_API_KEY=... COGNEE_LLM_MODEL=...
+
+echo-memory eval-external locomo locomo10.json --backend zep \
+  --json zep.json --results zep.jsonl
+```
+
+Every backend is checked **before** anything is ingested, because a four system
+run that dies on the fourth for a missing key has wasted the first three, and
+with Mem0 and Zep billing per write it has wasted them expensively.
+
+Then the judged pass over the saved file, which needs two providers from
+different vendors:
+
+```bash
+export ECHO_MEMORY_LLM_API_KEY=...   ECHO_MEMORY_LLM_MODEL=...
+export ECHO_MEMORY_JUDGE2_API_KEY=... ECHO_MEMORY_JUDGE2_MODEL=...
+export ECHO_MEMORY_JUDGE2_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai
+
+echo-memory judge-external zep.jsonl --json zep-judged.json
+```
+
+### What is verified and what is not
+
+Verified by a live run: the echo-mem baseline above; Mem0 and Zep end to end on
+the fixture, including ingest, settle, score and render.
+
+**Not yet run:** Mem0 and Zep on full LoCoMo; Letta and cognee against
+anything, because both need a model provider and Letta also needs a server.
+Their adapters are written to API shapes read off the installed SDKs, not
+guessed, and are marked unverified in their own module docstrings. That
+distinction is worth keeping: for both hosted backends, every assumption that
+had not actually been run turned out to be wrong - Mem0's writes are
+asynchronous, its `search` refuses the argument its `add` accepts, Zep creates
+a duplicate graph for a repeated name, and `metadata` survives extraction in
+both when the design had assumed it would not.
+
 ## Reproducing any of it
 
 Point the two external benchmarks at a scratch database. They write real facts
