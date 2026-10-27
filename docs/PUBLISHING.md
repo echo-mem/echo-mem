@@ -68,11 +68,11 @@ mcp-publisher login dns --domain echo-mem.com --private-key <hex>
 mcp-publisher publish
 ```
 
-### The old listing has to go FIRST
+### The old listing has to be DELETED first, not deprecated
 
-Deprecating `io.github.ayushcodes10/echo-mem` is not tidying up afterwards. It
-is a **prerequisite**, because the registry refuses two servers that claim the
-same remote URL:
+Retiring `io.github.ayushcodes10/echo-mem` is not tidying up afterwards. It is a
+**prerequisite**, because the registry refuses two servers that claim the same
+remote URL:
 
 ```
 400 {"detail":"Failed to publish server","errors":[{"message":"remote URL
@@ -82,8 +82,23 @@ io.github.ayushcodes10/echo-mem"}]}
 
 That is what the v0.5.6 publish hit. The plan had been to publish the new name
 first so the listing was never absent, and the registry does not allow it: the
-gap between the old name being deprecated and the new one appearing cannot be
-avoided, only kept short.
+gap cannot be avoided, only kept short.
+
+**`deprecated` is not enough, and this page said it was.** All four old
+versions were set to `deprecated`, and the publish failed again with the same
+400 and the same message. A deprecated server still holds its remote URL;
+deprecation changes what the registry tells a reader about a version, not what
+it reserves. Only `deleted` releases the URL:
+
+```
+0.5.3: deprecated -> deleted
+...
+✓ Successfully published   com.echo-mem/echo-mem@0.5.6
+```
+
+`deleted` is the registry's own soft delete and is reversible with
+`--status active`, which is what makes it a safe step rather than a last
+resort. Done on 2026-10-27; the publish succeeded on the next dispatch.
 
 Two traps in `mcp-publisher status` itself, both of which cost a run:
 
@@ -96,15 +111,23 @@ Two traps in `mcp-publisher status` itself, both of which cost a run:
   command rather than running them as two steps:
 
 ```bash
-mcp-publisher login github && yes y | mcp-publisher status \
-  --status deprecated --all-versions \
-  --message "Renamed to com.echo-mem/echo-mem" \
-  io.github.ayushcodes10/echo-mem
+mcp-publisher login github -token "$(gh auth token)" \
+  && yes y | mcp-publisher status \
+    --status deleted --all-versions \
+    --message "Renamed to com.echo-mem/echo-mem" \
+    io.github.ayushcodes10/echo-mem
 ```
 
-The `github` login is required because that namespace belongs to a personal
-account; the DNS key cannot speak for it. Anyone who already has the old name
-in a config keeps resolving to it until this runs.
+**`login github` takes `-token`, so it does not have to be interactive at all.**
+The device flow was the reason this needed a human: it prints a URL and a code
+and waits, which cannot be chained inside the five second window the token
+lives for in practice. `gh auth token` supplies a token for the same personal
+account that owns the namespace, which is the thing the login is proving. Two
+runs were lost to the device flow before noticing the flag.
+
+The `github` login is still required rather than the DNS key, because that
+namespace belongs to a personal account and the domain key cannot speak for it.
+Anyone who already has the old name in a config stops resolving once this runs.
 
 Several downstream directories ingest the registry on a schedule, so publishing
 here propagates to listings that would otherwise each need a manual submission.
