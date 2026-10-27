@@ -49,6 +49,7 @@ from echo_memory.cli.skill import package as package_skill
 from echo_memory.cli.skill import render_skill
 from echo_memory.cli.status import fetch_status, render_status
 from echo_memory.cli.why import render_history
+from echo_memory.eval.backends.registry import BACKENDS as external_backends
 from echo_memory.eval.external import DATASETS as external_datasets
 from echo_memory.infra.config import ConfigError, load_config
 from echo_memory.infra.db import connect
@@ -514,6 +515,14 @@ def _add_project_parsers(sub) -> None:
         "--top-k", type=int, default=30, metavar="K",
         help="facts per query (default: 30, the largest k reported)",
     )
+    ext.add_argument(
+        "--backend", default="echo-mem", choices=sorted(external_backends),
+        help="which memory system to measure (default: echo-mem). A "
+             "competitor reads its credential from the environment, never "
+             "from a flag, because a benchmark command ends up in a shell "
+             "history and a results file. Their SDKs are not in this "
+             "project's requirements: see docs/BENCHMARKS.md",
+    )
     ext.add_argument("--json", metavar="PATH", default="",
                      help="write the machine-readable report here")
     ext.add_argument(
@@ -711,6 +720,86 @@ _PROJECT_COMMANDS = {
 }
 
 
+
+def _eval_external(args, config) -> int:
+    """The eval-external command.
+
+    A function rather than a branch in main() because it is reached from
+    two places: before load_config for a competitor backend, which needs
+    no local database, and after it for ours, which does. `config` is None
+    on the first path and nothing reached from it reads the config.
+    """
+    from echo_memory.eval import external
+    from echo_memory.ingestion.embeddings import LocalEmbedder
+
+    try:
+        external.check_flags(args.dataset, args.per_type)
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if not Path(args.path).is_file():
+        print(
+            f"error: no such file: {args.path}\n"
+            f"This corpus is not in the repository and is yours to fetch:\n"
+            f"  {external.DATASET_URLS[args.dataset]}\n"
+            f"tests/fixtures/ holds a small synthetic file in the same schema.",
+            file=sys.stderr,
+        )
+        return 2
+
+    from echo_memory.eval.backends import BackendUnavailable
+    from echo_memory.eval.backends.registry import NEEDS_DATABASE, build
+
+    # Only our own backend needs a database, or may touch one. A mem0 or
+    # zep run refusing to start because this database holds somebody's
+    # facts would be a guard firing on a risk that is not present: it is
+    # not going to write here.
+    conn = None
+    embedder = None
+    if args.backend in NEEDS_DATABASE:
+        conn = connect(config.database_url)
+        prefix = external.PREFIXES[args.dataset]
+        held = external.foreign_facts(conn, prefix)
+        if held and not args.force:
+            print(
+                f"error: this database holds {held:,} fact(s) outside {prefix}: scopes.\n"
+                f"A {args.dataset} run writes real facts through the real write path, so "
+                f"anything\nit adds is indistinguishable from ordinary memory afterwards. "
+                f"Point\nECHO_MEMORY_DATABASE_URL at a scratch database, or pass --force if "
+                f"this is one.",
+                file=sys.stderr,
+            )
+            return 1
+
+        embedder = LocalEmbedder()
+        # The first call loads the model; keep it out of the rate.
+        embedder.embed("warm")
+
+    try:
+        backend = build(args.backend, conn, embedder)
+        result = external.run_backend(
+            backend, args.dataset, args.path,
+            limit=args.limit, per_type=args.per_type, top_k=args.top_k,
+            results_path=args.results,
+            progress=lambda line: print(line, file=sys.stderr, flush=True),
+        )
+    except BackendUnavailable as exc:
+        # Before anything is ingested, by design: a four backend run that
+        # dies on the fourth has wasted the first three, expensively where
+        # a model is called per write.
+        print(f"error: backend {args.backend!r} cannot run: {exc}", file=sys.stderr)
+        return 2
+    except ValueError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+
+    if args.json:
+        Path(args.json).write_text(json.dumps(external.report(result), indent=2) + "\n")
+        print(f"wrote {args.json}", file=sys.stderr)
+    print(external.render(result), end="")
+    return 0 if result.rows else 1
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
 
@@ -724,6 +813,17 @@ def main(argv: list[str] | None = None) -> int:
     # local database, so requiring a database URL to configure it is a circle.
     if args.command == "connect":
         return connect_cmd.run(args)
+
+    # Same reason as quickstart and connect, from the other direction: a
+    # competitor benchmark measures somebody else's hosted service and
+    # never opens this database, so requiring ECHO_MEMORY_DATABASE_URL to
+    # reach it would refuse the run over a risk that is not present. Ours
+    # still needs the config and gets it below.
+    if args.command == "eval-external":
+        from echo_memory.eval.backends.registry import NEEDS_DATABASE
+
+        if args.backend not in NEEDS_DATABASE:
+            return _eval_external(args, None)
 
     try:
         config = load_config()
@@ -937,58 +1037,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "eval-external":
-        from echo_memory.eval import external
-        from echo_memory.ingestion.embeddings import LocalEmbedder
-
-        try:
-            external.check_flags(args.dataset, args.per_type)
-        except ValueError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
-
-        if not Path(args.path).is_file():
-            print(
-                f"error: no such file: {args.path}\n"
-                f"This corpus is not in the repository and is yours to fetch:\n"
-                f"  {external.DATASET_URLS[args.dataset]}\n"
-                f"tests/fixtures/ holds a small synthetic file in the same schema.",
-                file=sys.stderr,
-            )
-            return 2
-
-        conn = connect(config.database_url)
-        prefix = external.PREFIXES[args.dataset]
-        held = external.foreign_facts(conn, prefix)
-        if held and not args.force:
-            print(
-                f"error: this database holds {held:,} fact(s) outside {prefix}: scopes.\n"
-                f"A {args.dataset} run writes real facts through the real write path, so "
-                f"anything\nit adds is indistinguishable from ordinary memory afterwards. "
-                f"Point\nECHO_MEMORY_DATABASE_URL at a scratch database, or pass --force if "
-                f"this is one.",
-                file=sys.stderr,
-            )
-            return 1
-
-        embedder = LocalEmbedder()
-        embedder.embed("warm")  # the first call loads the model; keep it out of the rate
-
-        try:
-            result = external.run(
-                conn, args.dataset, args.path, embedder,
-                limit=args.limit, per_type=args.per_type, top_k=args.top_k,
-                results_path=args.results,
-                progress=lambda line: print(line, file=sys.stderr, flush=True),
-            )
-        except ValueError as exc:
-            print(f"error: {exc}", file=sys.stderr)
-            return 2
-
-        if args.json:
-            Path(args.json).write_text(json.dumps(external.report(result), indent=2) + "\n")
-            print(f"wrote {args.json}", file=sys.stderr)
-        print(external.render(result), end="")
-        return 0 if result.rows else 1
+        return _eval_external(args, config)
 
     if args.command == "benchmark":
         from echo_memory.ingestion.embeddings import LocalEmbedder
