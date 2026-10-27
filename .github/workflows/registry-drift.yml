@@ -16,6 +16,12 @@
 name: Registry drift
 
 on:
+  # On demand as well as on a schedule. A workflow that can only be triggered
+  # by cron cannot be verified when it matters: after fixing the thing it
+  # watches, the only way to know it now passes is to wait a day. That is the
+  # same shape as release.yml running on tags alone, which is how the v0.5.6
+  # publish shipped a job with no checkout in it.
+  workflow_dispatch:
   schedule:
     # 06:00 UTC daily. Not on the hour, because every cron in the world runs
     # then and GitHub delays the queue.
