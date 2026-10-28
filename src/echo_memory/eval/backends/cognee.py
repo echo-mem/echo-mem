@@ -37,6 +37,14 @@ the reverse of every other backend here and a genuinely surprising way for a
 run to be misconfigured. llm_config and embedding_config are passed to `add`
 explicitly for that reason, rather than relying on the environment at all.
 
+**`literal_text=True` is not optional.** A `DataItem` whose `data` is a string
+is passed to `save_data_item_to_storage`, which reads it as a URL, an S3 path or
+a local path unless that flag is set; the flag defaults to False. Every turn
+here is conversational text, so without it the ingest resolves paths instead of
+storing turns. Found by reading cognee's own
+`save_data_item_to_storage_detailed` rather than by a run, which is the only
+reason it is not sitting in a corpus of nothing.
+
 **Unverified against a live cognify at the time of writing.** The API shapes
 come from the installed package; no graph has been built, because cognify needs
 a provider key this machine does not have. Said here rather than in a commit
@@ -134,6 +142,14 @@ class CogneeBackend:
         items = [
             DataItem(
                 data=f"{turn.speaker}: {turn.fact}",
+                # Without this the string is read as a URL, an S3 path or a
+                # local path. save_data_item_to_storage only stores a string
+                # verbatim when literal_text is set, and it defaults to False,
+                # so every conversational turn here would have been resolved as
+                # a path instead of ingested. Found by reading that function
+                # rather than by a run, which is the only reason it is not a
+                # silent corpus of nothing.
+                literal_text=True,
                 # Both routes to the turn key, because which one survives
                 # chunking into a CHUNKS result is not documented.
                 external_metadata={"turn_key": turn.key},
