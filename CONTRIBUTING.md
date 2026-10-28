@@ -59,6 +59,19 @@ not `fix bug`. No AI-tool attribution in commit messages or co-author trailers.
   for future retrieval-quality evals (e.g. "does `query_memory` rank a labeled query set
   well"), not in use yet; see `docs/DEVELOPMENT.md`'s test-strategy note.
 - CI must pass before merge.
+- **If the contribution is automated, say so in the PR body.** A line is enough:
+  "opened by <tool>". This is not a rule against automated contributions and
+  none has been rejected for being one; the code is judged the same way either
+  way. It is so that a reviewer learns it from the description rather than from
+  a hidden HTML comment, which is how it was discovered the first time
+  (PR #169). A review reads differently when "the author will see this" may not
+  be true, and the honest version of that is worth more than the appearance of
+  a human.
+- **Rebase rather than merge `main` into your branch.** `git rebase --signoff
+  origin/main` keeps the branch linear and, because `dco.yml` checks every
+  commit rather than only the tip, avoids the one failure mode that catches
+  people out: the merge commit a branch update creates carries no sign-off, and
+  is often authored by whoever pressed the button rather than by you.
 - **Never commit to `main`.** Branch, test, open a PR, merge. `scripts/git-hooks/pre-commit`
   refuses commits made on `main`; install it with
   `git config core.hooksPath scripts/git-hooks`. The hook cannot protect a branch it is
