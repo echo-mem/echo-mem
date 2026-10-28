@@ -29,6 +29,27 @@ configured IN THAT SERVER for the embedding model, which a passage insert
 needs even though no extraction model runs. Neither is something this adapter
 can supply, so `check` reports them separately and by name.
 
+**Finding that server is the hard part, and as of 2026-10-28 neither obvious
+route is it.** `letta_client` targets a REST API - `/v1/agents/{id}/passages` -
+and both of the things that look like they would serve it are the "Letta Code"
+agent CLI instead:
+
+    docker letta/letta:latest   Cmd ['letta', '--help'], no exposed ports,
+                                LETTA_PACKAGE_MANAGER=npm. `letta server
+                                --listen` starts a WebSocket app server on a
+                                random loopback port, serving OpenAI style
+                                /chat/completions where each agent is a model.
+                                Not the REST API above.
+    pip install letta (0.34.12) also the CLI: "Letta Code is a general purpose
+                                CLI for interacting with Letta agents".
+
+So the REST server is either Letta Cloud, or an older release than the 0.34.x
+line. This adapter works against Cloud unchanged - `LETTA_BASE_URL` to
+https://api.letta.com and `LETTA_TOKEN` to an API key, which is the `cloud`
+entry in `letta_client`'s own ENVIRONMENTS map - and that is the route to
+verifying it. Recorded in this much detail because the hunt cost two sessions
+and the next person should not repeat it.
+
 **Unverified against a live server at the time of writing.** The API shapes are
 read from the installed SDK and the adapter is written to them, but no ingest
 has run, because the server needs a provider key this machine does not have.
