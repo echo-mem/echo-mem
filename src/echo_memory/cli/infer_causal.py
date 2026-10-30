@@ -462,7 +462,7 @@ def _audit(conn, group_id: str, mutation_type: str, edge_id: str, summary: str,
     column - that is what the check is for - so a batch command that left it
     null would make every store it touched report a stale writer.
     """
-    from echo_memory import __version__
+    from echo_memory import __writer_version__
 
     conn.execute(
         """INSERT INTO public.audit_entry
@@ -470,7 +470,7 @@ def _audit(conn, group_id: str, mutation_type: str, edge_id: str, summary: str,
                 affected_edge_ids, summary, resolution_detail)
            VALUES (%s, %s, %s, %s::public.audit_mutation_type,
                    %s::text[]::graphid[], %s, %s)""",
-        (group_id, SESSION_ID, __version__, mutation_type, [edge_id], summary, detail),
+        (group_id, SESSION_ID, __writer_version__, mutation_type, [edge_id], summary, detail),
     )
 
 

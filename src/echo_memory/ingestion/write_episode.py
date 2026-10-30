@@ -511,10 +511,10 @@ def _write_audit_entry(conn, group_id: str, session_id: str, **fields) -> None:
     # gap has already cost this store 30 facts with no author and 7 with no
     # project. `health` compares this against its own version and says
     # "restart your client" instead of leaving it to be found in the data.
-    from echo_memory import __version__
+    from echo_memory import __writer_version__
 
     columns = ["group_id", "session_id", "writer_version"] + list(fields.keys())
-    values = [group_id, session_id, __version__] + list(fields.values())
+    values = [group_id, session_id, __writer_version__] + list(fields.values())
     placeholders = ", ".join(["%s"] * len(values))
     conn.execute(
         f"INSERT INTO public.audit_entry ({', '.join(columns)}) VALUES ({placeholders})",

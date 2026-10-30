@@ -100,8 +100,10 @@ def stale_writer(conn, group_ids: list[str]) -> str | None:
     with no author over sixteen days, and 7 with no project. Both times the code
     on disk was correct and the tests passed.
 
-    Comparing the newest audit entry's writer against this process's own version
-    is the only way to see it from outside.
+    Comparing the newest audit entry's writer against this process's own stamp
+    is the only way to see it from outside. The stamp cannot be the installed
+    version, which never moves in an editable checkout and so once sat on both
+    sides of this comparison: it is the install version plus a source digest.
 
     A null is uninformative only before the column existed, which is what
     schema_moment records. After that moment a write with no version is not a
@@ -109,7 +111,7 @@ def stale_writer(conn, group_ids: list[str]) -> str | None:
     first version of this check skipped every null and so could not see the
     very servers it was built for.
     """
-    from echo_memory import __version__
+    from echo_memory import __writer_version__
 
     row = conn.execute(
         """SELECT ae.writer_version
@@ -121,7 +123,7 @@ def stale_writer(conn, group_ids: list[str]) -> str | None:
             ORDER BY ae."timestamp" DESC LIMIT 1""",
         (group_ids,),
     ).fetchone()
-    if row is None or row[0] == __version__:
+    if row is None or row[0] == __writer_version__:
         return None
     # A write with no version, made after this database gained the column, is
     # proof the writer predates it. Skipping those was the original mistake:
@@ -406,11 +408,11 @@ def findings(h: dict) -> tuple[list[str], list[str], list[str]]:
     # stale writer is why a store has facts with no author or no project, and
     # every other line here is describing its output.
     if h.get("stale_writer"):
-        from echo_memory import __version__
+        from echo_memory import __writer_version__
 
         attention.append(
             f"the last write came from version {h['stale_writer']}, but "
-            f"{__version__} is installed"
+            f"{__writer_version__} is running"
         )
         rec.append(
             "An MCP stdio server holds the code it imported when the client "

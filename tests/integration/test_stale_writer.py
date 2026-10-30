@@ -14,6 +14,12 @@ saying "nothing recorded" and the check keeps skipping it.
 
 A null is uninformative only before the column existed. After that moment it is
 the signal.
+
+Issue #175 is the other half of the same blindness: the stamp itself was the
+installed version, and that value sat on both sides of the comparison - in an
+editable install the .dist-info never moves with the source, so the column
+recorded the installer, not the writer. The stamp now names the code: install
+version for humans plus a digest of the package's own files taken at import.
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from __future__ import annotations
 import pytest
 from fake_embedder import REFERENCE, VectorEmbedder
 
+import echo_memory
 from echo_memory.cli.health import stale_writer
 from echo_memory.infra.db import connect
 from echo_memory.ingestion.write_episode import write_episode
@@ -58,6 +65,50 @@ def test_a_writer_that_stamps_an_older_version_is_flagged(migrated_db):
         conn.execute("UPDATE public.audit_entry SET writer_version = '0.0.1'")
 
         assert stale_writer(conn, [GROUP]) == "0.0.1"
+
+
+def test_the_stamp_names_the_running_code_not_the_installed_metadata(migrated_db):
+    """The installed version cannot answer "which code wrote this fact": it is
+    whatever the last pip install wrote and never moves in an editable
+    checkout. The digest suffix is the part that tracks the code."""
+    with connect(migrated_db) as conn:
+        _write(conn)
+        (stamped,) = conn.execute(
+            "SELECT writer_version FROM public.audit_entry LIMIT 1"
+        ).fetchone()
+
+        assert stamped == echo_memory.__writer_version__
+        assert stamped != echo_memory.__version__
+
+
+def test_a_stamp_of_the_install_version_alone_is_flagged(migrated_db):
+    """What the pre-digest code stamped and what issue #175's store is full of:
+    rows naming an install instead of the code that ran. A stamp that cannot
+    name a code state is untrusted provenance, not a clean bill of health."""
+    with connect(migrated_db) as conn:
+        _write(conn)
+        conn.execute(
+            "UPDATE public.audit_entry SET writer_version = %s",
+            (echo_memory.__version__,),
+        )
+
+        assert stale_writer(conn, [GROUP]) == echo_memory.__version__
+
+
+def test_a_server_running_older_code_than_the_process_asking_is_flagged(migrated_db):
+    """The harder half: both real incidents were servers whose code on disk
+    was right and whose running process was old. Write through the real
+    stamping path with a stale identity, then ask from the current one."""
+    stale = f"{echo_memory.__version__}+000000000000"
+    current = echo_memory.__writer_version__
+    with connect(migrated_db) as conn:
+        echo_memory.__writer_version__ = stale
+        try:
+            _write(conn)
+        finally:
+            echo_memory.__writer_version__ = current
+
+        assert stale_writer(conn, [GROUP]) == stale
 
 
 def test_a_writer_that_stamps_nothing_at_all_is_flagged(migrated_db):

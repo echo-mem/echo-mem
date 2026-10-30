@@ -215,7 +215,7 @@ def test_a_hint_a_caller_wrote_is_not_a_candidate(migrated_db):
 # --- the write ---------------------------------------------------------------
 
 def test_write_sets_the_hint_marks_it_and_audits_it(migrated_db):
-    from echo_memory import __version__
+    from echo_memory import __writer_version__
 
     conn = connect(migrated_db)
     edges = _seed(conn, _embedder())
@@ -236,7 +236,7 @@ def test_write_sets_the_hint_marks_it_and_audits_it(migrated_db):
     # A null writer_version after migration 0019 is read by `health` as proof
     # the writer predates the column, which would make every store this touched
     # report a stale server.
-    assert version == __version__
+    assert version == __writer_version__
 
 
 def test_a_proposal_that_cannot_quote_the_fact_is_dropped(migrated_db, capsys):
