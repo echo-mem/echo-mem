@@ -15,6 +15,21 @@ updates:
       # No prefix with a colon: the repository writes commit subjects as
       # sentences, and "chore(deps):" is not one.
       prefix: Update
+    groups:
+      # codeql-action has to move as ONE pull request. Both `init` and
+      # `analyze` come from that repository and CodeQL refuses to run when they
+      # disagree:
+      #
+      #   Loaded a configuration file for version '4.39.1', but running version
+      #   '4.39.0'. All steps in a workflow that use `github/codeql-action`
+      #   must use the same version to work correctly.
+      #
+      # Ungrouped, Dependabot opens one pull request per `uses:` line, so each
+      # one bumps half the pair and fails on its own - which is what #181 and
+      # #185 were. Both looked like a broken CodeQL rather than a split update.
+      # Every future CodeQL release would have done the same thing.
+      codeql-action:
+        patterns: ["github/codeql-action*"]
   - package-ecosystem: pip
     directory: /
     schedule:
