@@ -9,6 +9,57 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**`writer_version` names the code, and old stores will say so.** The column
+exists to answer "which code wrote this fact" and recorded the installed
+distribution version instead, which in an editable checkout is frozen at `pip
+install` time and never moves with the source. The same value sat on both sides
+of `health`'s staleness comparison, so the check built to catch a version
+mismatch could not fail: a process running 0.5.6 code with 0.3.0 metadata
+stamped `0.3.0`, compared it against `0.3.0`, and reported healthy.
+
+The stamp is now the install version plus a digest of the package's own source
+as it stood at import. **Expect `health` to report `stale_writer` once on any
+existing store**, because everything written before this carries a bare install
+version. That is the finding working, not a regression: it is about the
+provenance of old rows rather than anything being broken now, and what wrote
+them cannot be recovered - only stopped from claiming otherwise. Reported by
+#175, fixed in #180 by @bfs2021, with the startup-snapshot boundary tightened
+after review by @NixEngine: a digest taken at import cannot identify a module
+imported later, and the claim is narrowed to say so rather than widened to
+pretend otherwise.
+
+**`get_audit_log` says when it held entries back.** The result carries
+`truncated`, and the cap was silent before: 500 entries came back whether the
+log held 500 or 50,000, and `since` was the documented way to page with nothing
+to say it was needed. #143, fixed in #169 by @bfs2021, with the boundary
+corrected in #179 by @Logic769 after @DevdattaRane found the edge case while
+reading the first fix - `truncated` is true only above the cap now, where
+exactly 500 entries used to report it falsely.
+
+**`eval-external --backend` measures another memory system.** Every benchmark
+number this project published was about itself with no baseline beside it.
+Mem0, Zep, Letta and cognee now run through the same harness, the same corpus
+and the same scoring, because a comparison where one side ran a different code
+path measures the harness. Verified on LoCoMo in full for this project, 1,982
+questions in 310 seconds; the competitor runs and their caveats are in
+`docs/BENCHMARKS.md`, including which backends have never actually run.
+
+**`judge-external` grades a finished run.** Retrieval is a ceiling on QA
+accuracy and not comparable to the accuracy figures hosted products publish, so
+this is the comparable number: one model answers from only what a backend
+returned, and two judges from different vendors grade the identical answer, with
+raw agreement and Cohen's kappa reported so how far a verdict depends on the
+judge is a number rather than a reassurance. Both prompts are in
+`src/echo_memory/eval/qa.py` and are published with anything taken from them.
+That makes 36 CLI commands.
+
+**The MCP registry entry is `com.echo-mem/echo-mem`.** The old
+`io.github.ayushcodes10/echo-mem` belonged to a personal account that no Actions
+token could ever claim, so publishing could not be automated. It is deleted, not
+deprecated: a deprecated server keeps holding its remote URL and the new name
+could not be published while it did. Anyone with the old name in a config needs
+to change it. #148.
+
 ## 0.5.6
 
 **Apache 2.0, for all of it.** Versions 0.5.0 to 0.5.5 shipped under the
