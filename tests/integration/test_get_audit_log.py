@@ -164,15 +164,32 @@ def test_entries_from_one_episode_come_back_in_the_order_they_happened(migrated_
             assert kinds == ["created", "fact_superseded"], _json.dumps(kinds)
 
 
-def test_truncated_flag_true_at_the_cap_and_false_below(migrated_db):
+def test_truncated_flag_is_false_at_499_and_500_and_true_at_501(migrated_db):
+    """truncated must be true only when more than MAX_ENTRIES entries exist.
+
+    Exactly MAX_ENTRIES used to report truncated=True because a query for
+    MAX_ENTRIES rows cannot tell "that is all there is" from "there is more".
+    Asking the database for one extra row makes the boundary exact, so 499 and
+    the 500-entry cap are both false and only 501 is true. The 500 case is the
+    whole point and is the one the previous test could not express.
+    """
     conn = connect(migrated_db)
-    def write_one(n: int) -> None:
+
+    def count(group: str) -> int:
+        # Count in SQL rather than reading through get_audit_log: the reader
+        # returns at most MAX_ENTRIES, so it cannot report the 501-entry case.
+        return conn.execute(
+            "SELECT count(*) FROM public.audit_entry WHERE group_id = %s",
+            (group,),
+        ).fetchone()[0]
+
+    def write_one(group: str, n: int) -> None:
         # entity names reach the embedder inside "<source> <target>. <fact>";
         # register the fact text so the fallback in fake_embedder resolves it,
         # and the name itself for the node embedding
         embedder = VectorEmbedder({f"entry {n}": REFERENCE, f"tool-{n}": REFERENCE})
         write_episode(
-            conn, "g-trunc", f"sess-{n}",
+            conn, group, f"sess-{n}",
             [{"name": f"tool-{n}", "type": "tool"}],
             [{
                 "source": f"tool-{n}",
@@ -181,32 +198,38 @@ def test_truncated_flag_true_at_the_cap_and_false_below(migrated_db):
                 "fact": f"entry {n}",
                 "confidence": "extracted",
             }],
-            # one episode = one created entry plus its entity_resolved entry,
-            # so count episodes from the audit log itself instead of assuming
             {f"tool-{n}": {"resolved_to": "new"}},
             embedder,
             assume_new=True,
         )
 
-    # Fill to exactly one entry under the cap and exactly at it, whatever an
-    # episode's exact audit footprint is: write one, measure, then add the
-    # remaining episodes one at a time until the count is right.
-    write_one(0)
-    after_one = len(get_audit_log(conn, "g-trunc")["entries"])
-    assert after_one < MAX_ENTRIES - 1, "one episode already reached the cap"
+    # Derive how many audit entries one episode writes from the log itself
+    # rather than assuming a number, so this survives a change in an episode's
+    # footprint (it is more than one entry: a created row plus its resolution).
+    probe = "g-trunc-probe"
+    write_one(probe, 0)
+    per_episode = count(probe)
+    assert per_episode >= 1
 
-    n = 1
-    while True:
-        result = get_audit_log(conn, "g-trunc")
-        count = len(result["entries"])
-        if count == MAX_ENTRIES - 1:
-            assert result["truncated"] is False
-            break
-        assert count < MAX_ENTRIES - 1, count
-        write_one(n)
-        n += 1
+    def fill_to(group: str, target: int) -> None:
+        # Whole episodes carry the group most of the way while keeping their
+        # real footprint; direct rows then land it exactly on the boundary,
+        # because 499 and 501 are not multiples of a two-entry episode.
+        n = 0
+        while count(group) + per_episode <= target:
+            write_one(group, n)
+            n += 1
+        for _ in range(target - count(group)):
+            conn.execute(
+                """INSERT INTO public.audit_entry (group_id, session_id, mutation_type, summary)
+                   VALUES (%s, 's', 'created', 'pad')""",
+                (group,),
+            )
+        assert count(group) == target
 
-    write_one(n + 1)
-    result = get_audit_log(conn, "g-trunc")
-    assert len(result["entries"]) == MAX_ENTRIES
-    assert result["truncated"] is True
+    for target, expected in ((499, False), (MAX_ENTRIES, False), (MAX_ENTRIES + 1, True)):
+        group = f"g-trunc-{target}"
+        fill_to(group, target)
+        result = get_audit_log(conn, group)
+        assert len(result["entries"]) == min(target, MAX_ENTRIES), target
+        assert result["truncated"] is expected, target

@@ -63,9 +63,10 @@ def _row_to_entry(row) -> dict:
 
 
 def get_audit_log(conn, group_id: str, since: str | None = None) -> dict:
-    """At most MAX_ENTRIES entries; `truncated` says when the log went on
-    past that. Page forward with `since` (an ISO8601 lower bound; the
-    returned entries start at or after it)."""
+    """At most MAX_ENTRIES entries; `truncated` is true only when more than
+    that many entries exist (exactly MAX_ENTRIES is not truncated). Page
+    forward with `since` (an ISO8601 lower bound; the returned entries start
+    at or after it)."""
     start = time.perf_counter()
     try:
         since_dt = _parse_since(since)
@@ -92,10 +93,15 @@ def get_audit_log(conn, group_id: str, since: str | None = None) -> dict:
         ORDER BY "timestamp" ASC, id ASC
         LIMIT %s
         """,
-        (group_id, since_dt, since_dt, MAX_ENTRIES),
+        # Ask for one more than we return: with exactly MAX_ENTRIES rows in
+        # the store, LIMIT MAX_ENTRIES cannot tell "that is all there is" from
+        # "there is more", and the flag would be wrong in the one case it
+        # exists to get right.
+        (group_id, since_dt, since_dt, MAX_ENTRIES + 1),
     ).fetchall()
 
-    entries = [_row_to_entry(row) for row in rows]
+    truncated = len(rows) > MAX_ENTRIES
+    entries = [_row_to_entry(row) for row in rows[:MAX_ENTRIES]]
 
     _logger.info(
         "get_audit_log",
@@ -107,7 +113,7 @@ def get_audit_log(conn, group_id: str, since: str | None = None) -> dict:
             }
         },
     )
-    return {"entries": entries, "truncated": len(entries) == MAX_ENTRIES}
+    return {"entries": entries, "truncated": truncated}
 
 
 def get_fact_history(conn, group_id: str, fact_id: str) -> dict:
