@@ -1318,6 +1318,11 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 0
         print(render_history(args.fact_id, result["entries"]))
+        if result.get("truncated"):
+            print(
+                f"(showing the oldest {len(result['entries'])} entries; "
+                "later restatements were truncated)"
+            )
         return 0
 
     if args.command == "export":

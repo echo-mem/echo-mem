@@ -52,6 +52,7 @@ def test_get_fact_history_traces_a_superseded_fact(migrated_db):
 
     mutation_types = [e["mutation_type"] for e in result["entries"]]
     assert mutation_types == ["created", "fact_superseded"]
+    assert result["truncated"] is False
 
 
 def test_export_group_writes_index_and_node_files(migrated_db, tmp_path):
