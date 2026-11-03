@@ -83,6 +83,66 @@ def test_nothing_still_claims_the_business_source_license():
             assert "Business Source" not in text, name
 
 
+#: Files that describe the licence to a reader deciding whether they may use
+#: this. NOTICE is deliberately absent: it records the BSL window on purpose.
+SELLS_THE_LICENCE = ("README.md", "docs/COMPLIANCE.md")
+
+#: Phrases that cannot be true under Apache 2.0, whatever sentence they sit in.
+#: Deliberately the OBLIGATION rather than the numbers: "fewer than 50
+#: employees" may legitimately appear in a sentence saying that restriction was
+#: withdrawn, and banning the figure would ban the correction along with the
+#: claim. An obligation has no past tense that reads this way - there is no
+#: honest current sentence containing "needs a commercial licence".
+IMPOSSIBLE_UNDER_APACHE = (
+    "needs a commercial licence",
+    "needs an agreement",
+    "not open source",
+    "converts to apache 2.0 four years",
+    "neither osi approved nor",
+)
+
+
+def test_no_file_that_sells_the_licence_still_imposes_a_bsl_obligation():
+    """The bug this is written for, which the two tests below missed.
+
+    On 2026-11-03, eight days after the relicence, README's Hosted section
+    still read "free in production for organisations under 50 people and under
+    $5M revenue ... above either threshold, production use needs an
+    agreement", and docs/COMPLIANCE.md - the page a buyer's legal review reads
+    - still said "This is source available, not open source" and described the
+    same restriction plus a four year conversion date.
+
+    Both existing README tests passed throughout. They assert the CORRECTION is
+    present: that "Apache 2.0" appears, that the BSL window is named, that the
+    word "wider" is there. All true, and all true sixty lines away from a
+    paragraph telling a reader they may not use this. A guard that checks a
+    correction exists cannot see the claim it was meant to replace, which is
+    the same shape as a guard matching an identifier instead of a behaviour.
+
+    So this asserts the ABSENCE of the obligation, which is the thing that
+    would stop somebody using software they are free to use.
+    """
+    for name in SELLS_THE_LICENCE:
+        text = flat(ROOT / name).lower()
+        for phrase in IMPOSSIBLE_UNDER_APACHE:
+            assert phrase not in text, (
+                f"{name} still says {phrase!r}, which Apache 2.0 does not "
+                f"impose. A reader deciding whether they may use this would "
+                f"be told, wrongly, that they may not."
+            )
+
+
+def test_the_compliance_page_says_it_is_open_source():
+    """The inverse claim, stated rather than merely not-denied. COMPLIANCE.md
+    exists to answer a procurement checklist, and `floss_license_osi` in
+    docs/OPENSSF-BADGE.md is answered Met on the grounds that Apache 2.0 is OSI
+    approved. The two pages contradicted each other for eight days."""
+    text = flat(ROOT / "docs/COMPLIANCE.md").lower()
+
+    assert "this is open source" in text
+    assert "osi approved" in text
+
+
 def test_the_readme_states_the_licence_and_that_it_widened():
     """Somebody who saw this project in October read that production use
     needed an agreement above fifty people. They have to be able to find out

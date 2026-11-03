@@ -9,20 +9,24 @@ and the command that reproduces it is given.
 Apache License 2.0, SPDX `Apache-2.0`. Copyright Ateleir Tech, named in
 `NOTICE`.
 
-**This is source available, not open source.** BSL is neither OSI approved nor
-FSF free, and saying otherwise to pass a checklist would be the kind of claim
-this document exists to avoid.
+**This is open source.** Apache 2.0 is OSI approved and FSF free. An earlier
+version of this page said the opposite, which was true while the project was
+BSL 1.1 and false from the moment it was not; a checklist answered from it in
+the meantime was answered wrongly, in the direction of understating the rights
+on offer.
 
-Production use is free for an organisation with **fewer than 50 employees AND
-under US$5,000,000 annual revenue**, counting parents, subsidiaries and
-affiliates. Development, testing, evaluation, research and teaching are free for
-everybody at any size. Above either threshold, production use needs a commercial
-licence, and so does offering Echo Memory to third parties as a hosted service:
-hello@echo-mem.com.
+**There is no employee count, no revenue threshold and no commercial licence.**
+Production use is free for any organisation at any size, including offering
+Echo Memory to third parties as a hosted service. The restriction this page
+used to describe - fewer than 50 employees and under US$5,000,000 of revenue -
+was withdrawn on 2026-10-26 and does not apply to any version.
 
-Each published version converts to Apache 2.0 four years after it ships.
-Version 0.4.1 and everything before it are Apache 2.0 permanently, because
-relicensing cannot reach backwards.
+Nor is there a conversion date to wait for. BSL converts each version to
+Apache 2.0 four years after it ships, and that mechanic is gone with the
+licence: **every version is Apache 2.0 now**, including 0.5.0 to 0.5.5 which
+shipped under BSL. Ateleir Tech holds the copyright in the whole work and
+relicensed all of it, so the grant only widened and nobody lost a right they
+already had.
 
 ## What ships, and under which licence
 
