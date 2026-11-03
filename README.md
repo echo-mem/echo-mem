@@ -423,10 +423,10 @@ for 1,500,000 units, where a unit is one fact written or one fact returned. It i
 from the first key, because hosting is the thing it charges for, and it runs the same
 published package you would install yourself.
 
-Running it yourself is free for development, testing and evaluation at any size, and free
-in production for organisations under 50 people and under $5M revenue, with no account and
-no feature held back. Above either threshold, production use needs an agreement:
-[talk to us](mailto:hello@echo-mem.com).
+Running it yourself is free, for anything, at any size, with no account and no feature
+held back. Apache 2.0 attaches no employee count, no revenue threshold and no agreement
+to that. If you want the database run for you, or a commercial arrangement around it,
+[talk to us](mailto:hello@echo-mem.com) by choice rather than by obligation.
 
 <details>
 <summary>Contributing</summary>
