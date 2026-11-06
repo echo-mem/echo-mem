@@ -25,6 +25,7 @@ from echo_memory.cli import (
     merge,
     quickstart,
     reattribute_cmd,
+    retain,
     stop_gate,
     unmerge,
 )
@@ -313,6 +314,34 @@ def _add_project_parsers(sub) -> None:
         "--log", action="store_true",
         help="every erasure recorded for this scope. What a restore has to replay",
     )
+
+    rt = sub.add_parser(
+        "retain", help="how long this scope keeps a fact, and enforcing it"
+    )
+    # With no flags it reports. --days sets a policy, --enforce deletes under
+    # one, and like `forget` only --confirm actually removes anything.
+    rt.add_argument(
+        "--days", type=int, metavar="N",
+        help="keep a fact for N days from when it became true. Needs --reason and --by",
+    )
+    rt.add_argument(
+        "--reason", metavar="TEXT",
+        help="the purpose this duration serves. What an auditor reads, so it is required",
+    )
+    rt.add_argument(
+        "--by", metavar="WHO",
+        help="who decided the policy, or who is enforcing it (default: cli)",
+    )
+    rt.add_argument(
+        "--enforce", action="store_true",
+        help="remove what the policy no longer permits keeping, through the "
+             "same erasure path a subject deletion request takes",
+    )
+    rt.add_argument(
+        "--confirm", action="store_true",
+        help="actually erase. Without it, --enforce only shows what would go",
+    )
+    rt.add_argument("--ref", metavar="TEXT", help="the ticket this answers, never its contents")
 
     notice = sub.add_parser(
         "notice", help="queue a memory file for ingestion (called by the capture hook)"
@@ -742,6 +771,7 @@ _PROJECT_COMMANDS = {
     "calibrate": calibrate.run,
     "distil": distil.run,
     "forget": forget.run,
+    "retain": retain.run,
     "merge": merge.run,
     "notice": queue_cmd.run_notice,
     "pending": queue_cmd.run_pending,
