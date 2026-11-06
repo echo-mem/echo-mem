@@ -28,6 +28,7 @@ from echo_memory.cli import (
     retain,
     stop_gate,
     unmerge,
+    verify,
 )
 from echo_memory.cli import analyse as analyse_cmd
 from echo_memory.cli import connect as connect_cmd
@@ -342,6 +343,20 @@ def _add_project_parsers(sub) -> None:
         help="actually erase. Without it, --enforce only shows what would go",
     )
     rt.add_argument("--ref", metavar="TEXT", help="the ticket this answers, never its contents")
+
+    vf = sub.add_parser(
+        "verify", help="has any fact been changed behind this store's back"
+    )
+    vf.add_argument(
+        "--head", action="store_true",
+        help="print this scope's chain head, to record somewhere outside the "
+             "database. Unkeyed, that record is what the chain is worth",
+    )
+    vf.add_argument(
+        "--backfill", action="store_true",
+        help="attest facts written before this shipped. A baseline from now, "
+             "which says nothing about the past",
+    )
 
     notice = sub.add_parser(
         "notice", help="queue a memory file for ingestion (called by the capture hook)"
@@ -772,6 +787,7 @@ _PROJECT_COMMANDS = {
     "distil": distil.run,
     "forget": forget.run,
     "retain": retain.run,
+    "verify": verify.run,
     "merge": merge.run,
     "notice": queue_cmd.run_notice,
     "pending": queue_cmd.run_pending,
