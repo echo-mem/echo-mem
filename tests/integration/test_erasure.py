@@ -427,7 +427,14 @@ def test_no_tool_published_over_mcp_can_erase():
     published = {t.name for t in server.server._tool_manager.list_tools()}
 
     assert published, "precondition: the server publishes some tools"
-    forbidden = {"forget", "erase", "delete", "purge", "erase_scope"}
+    # Retention enforcement is in here because it IS erasure: it hands its
+    # overdue facts to erase() and deletes exactly as permanently. An agent
+    # that can set a one day policy and enforce it has an erase_scope by
+    # another name.
+    forbidden = {
+        "forget", "erase", "delete", "purge", "erase_scope",
+        "retain", "retention", "set_retention", "enforce_retention",
+    }
     assert not (published & forbidden), (
         f"erasure must not be reachable over MCP: {sorted(published & forbidden)}"
     )
