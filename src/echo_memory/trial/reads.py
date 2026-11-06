@@ -14,6 +14,16 @@ _logger = get_logger("read_event")
 
 HOOK = "hook"
 QUERY = "query_memory"
+#: The other two read surfaces. They were not recorded anywhere, on either the
+#: self hosted or the hosted path, so "which facts has this agent been given"
+#: could be answered for query_memory and not for the two tools that also hand
+#: facts to an agent. A delivery record with a hole in it is not one.
+TRACE = "trace_cause"
+AUDIT = "get_audit_log"
+
+#: Every kind this table carries. Named so a reader of the data knows the set
+#: without grepping, and so a new surface has somewhere obvious to register.
+KINDS = (HOOK, QUERY, TRACE, AUDIT)
 
 # The ratio characters-to-tokens for English prose. Rough on purpose: the point
 # is an order of magnitude a reader can act on, not a billing figure, and the
