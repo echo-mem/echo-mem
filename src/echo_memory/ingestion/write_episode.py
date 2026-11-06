@@ -8,6 +8,7 @@ import uuid
 
 import psycopg
 
+from echo_memory import attestation
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger, log_write_episode
 from echo_memory.infra.project import UNKNOWN as PROJECT_UNKNOWN
@@ -487,6 +488,12 @@ def _create_edge(
         "INSERT INTO public.fact_embedding (edge_id, group_id, embedding) VALUES (%s::graphid, %s, %s)",
         (edge_id, group_id, embedding),
     )
+    # Chain this fact's claims into the scope's attestation, so that nothing
+    # can change its text, its endpoints or its author later without that
+    # being visible. Here rather than at the end of write_episode because the
+    # digest covers what was actually stored, read back from the graph, and
+    # this is the only place that knows the fact is in it.
+    attestation.attest(conn, group_id, edge_id)
     return edge_id
 
 
