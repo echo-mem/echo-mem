@@ -237,6 +237,71 @@ and without `--confirm` it only reports what would go. When enforcement runs
 is an operational choice, so it belongs in whatever invokes it rather than in
 a column here.
 
+## Whether provenance can be trusted
+
+Every fact records its author, its session, the version of the package that
+wrote it and when it became true. Until 2026-11-06 all of that was believed
+because the database said so: anyone who could write SQL could change a
+fact's text, repoint it at a different entity, or rewrite its `agent_id`, and
+nothing afterwards could tell that it had happened. For AI governance that is
+the gap that matters, because the value of "which agent asserted this" is
+precisely that it cannot be edited later by whoever finds the answer
+inconvenient.
+
+Each fact now carries a digest over its own claims - the endpoint names, the
+relation, the text, the confidence, the causal type, `t_valid`, `agent_id`,
+the project and the session - chained to the previous attestation in the same
+scope. `echo-memory verify` recomputes the chain and answers three separate
+questions: has any fact changed since it was written, is the chain
+continuous, and does every fact have a link at all.
+
+```bash
+echo-memory verify           # recompute the chain for this scope
+echo-memory verify --head    # the one string to record elsewhere
+echo-memory verify --backfill  # attest facts written before this shipped
+```
+
+### What it is worth, which depends on one of two things
+
+A digest stored in the same database as the data it attests is worth nothing
+against somebody who can recompute it. That needs one of:
+
+- **A key.** `ECHO_MEMORY_ATTESTATION_KEY` makes each digest an HMAC-SHA256,
+  so SQL access without the key cannot forge one. The key does not belong in
+  the database; the same secret store the erasure key uses is the right place.
+- **An external witness.** Unkeyed the chain is still a chain: any change
+  anywhere alters every digest after it, including the head. Recording the
+  head outside this database - a ticket, a commit, a log the database cannot
+  reach - makes a silent rewrite impossible with no key at all.
+
+With neither, this detects corruption and careless edits and nothing more.
+`verify` prints which of the two is in force on every run rather than
+reporting a clean chain as though the result were unconditional, and the
+`keyed` column is on every row so a scope attested unkeyed cannot later be
+described as keyed.
+
+### Three things it does not prove
+
+**Not the author.** `agent_id` is still a string the writer supplies. The
+attestation proves the recorded author has not changed since the write, not
+that it was true at the write. Proving that would need a key per agent, and
+an agent here is a model running in somebody else's process rather than
+something that can hold one.
+
+**Not the interval before the attestation.** A fact attested by `--backfill`
+has a baseline from the moment it ran and says nothing about what happened
+before. Each row's `attested_at` is what keeps that visible, which is why
+backfilling is an operator command rather than something `init-db` does
+quietly.
+
+**Not the absence of deletion, on its own.** A missing link is visible, but
+whether it was erasure doing its job or somebody removing evidence is
+answered by reconciling the gaps against `erasure_event`, which `verify`
+does. A legitimate rewrite - `merge` repointing an edge, a causal pass
+retyping a fact - is reported and labelled with the audit entry that accounts
+for it rather than hidden, so a reader still sees that the fact is not what
+was attested.
+
 ## Supply chain and build integrity
 
 Releases are built and published by GitHub Actions through **PyPI Trusted
