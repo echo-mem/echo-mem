@@ -975,6 +975,16 @@ def _annotate(
         fact["matched"] = matched
 
 
+# Reading does not record a read. `trial/reads.record` is the caller's job,
+# because the caller is the only thing that knows whether facts were DELIVERED
+# to an agent: the eval harness and the benchmark backends call this function
+# thousands of times and must not fill the delivery log with their own traffic.
+#
+# The two callers that do deliver are echo_memory/server.py and the hosted
+# service's echo_cloud/tools.py. The hosted one imported this function
+# directly for months and recorded nothing, so every customer read was
+# unaccounted for while the self hosted edition logged all of them. If a third
+# read surface appears, it belongs on that list and in `reads.KINDS`.
 def query_memory(
     conn, group_id: str, query: str | None, top_k: int, embedder,
     digest: bool = False, lexical_only: bool = False,
