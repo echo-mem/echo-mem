@@ -58,6 +58,139 @@ GCC-exception-3.1`. A naive scan reports scipy as strong copyleft. Its own
 licence is BSD-3-Clause, per its classifier. The script prefers identifiers over
 prose for exactly this reason.
 
+## Encryption, and the two places there is none
+
+Measured against the running service on 2026-11-06, not described from the
+deployment plan. Every claim below has the command that checks it.
+
+### In transit
+
+TLS 1.3 on all three hostnames, certificate issued and renewed by Caddy:
+
+```bash
+echo | openssl s_client -connect app.echo-mem.com:443 \
+  -servername app.echo-mem.com -brief
+# Protocol version: TLSv1.3   Ciphersuite: TLS_AES_128_GCM_SHA256
+```
+
+`api.echo-mem.com`, `app.echo-mem.com` and `admin.echo-mem.com` all answer
+TLS 1.3 with AES-128-GCM. Plain HTTP is answered with a 308 to HTTPS. The
+session cookie is `httponly`, `secure` and `samesite=lax`, so it is never sent
+over plain HTTP in production and is not readable by page scripts.
+
+Only ports 80 and 443 are open to the internet, and **there is no SSH**:
+operator access is AWS Systems Manager, so there is no key to lose and no
+listening sshd.
+
+```bash
+aws ec2 describe-security-groups --group-ids sg-07b90334765275cec \
+  --query 'SecurityGroups[0].IpPermissions[].FromPort'
+# 80, 443
+```
+
+**The application to database hop is NOT encrypted.** Postgres has `ssl = off`
+and live connections report `ssl = f`:
+
+```bash
+docker compose exec -T db psql -U postgres -d echo_cloud \
+  -c "SELECT ssl, client_addr FROM pg_stat_ssl JOIN pg_stat_activity USING (pid)"
+# f | 172.18.0.3
+```
+
+That is stated rather than glossed because it is the question a reviewer
+should ask. The connection never leaves the machine: the database is a
+container on the same host, reached over a Docker bridge address, and its port
+is not reachable from outside the instance — only 80 and 443 are open, and a
+direct connection to 5433 from the internet is refused. So the traffic is not
+exposed to a network an attacker can be on, and TLS between two processes on
+one host would protect against an attacker who already has that host.
+
+It is still a real difference from a managed database, and the honest version
+is: this deployment's isolation is the instance boundary, not transport
+encryption. A deployment that moves the database off the host **must** set
+`sslmode=verify-full`; `ECHO_CLOUD_DATABASE_URL` accepts it and
+[DEPLOY.md](../DEPLOY.md) says so.
+
+### At rest
+
+The volume holding every customer's memory is encrypted with a KMS customer
+managed key:
+
+```bash
+aws ec2 describe-volumes --filters \
+  Name=attachment.instance-id,Values=i-03f980b2c6b27c24e \
+  --query 'Volumes[].{encrypted:Encrypted,kms:KmsKeyId}'
+# Encrypted: true
+# arn:aws:kms:ap-south-1:190460274227:key/bc0ff9de-...
+```
+
+Daily EBS snapshots inherit that encryption, and every snapshot in the account
+reports `Encrypted: true`.
+
+Nightly logical backups go to S3 with SSE-S3 (AES256) and bucket keys, the
+bucket blocks all four forms of public access, and versioning is on:
+
+```bash
+aws s3api head-object --bucket echomem-cloud-backups-190460274227 \
+  --key postgres/2026/11/echo_cloud-20261106T021846Z.dump
+# ServerSideEncryption: AES256
+```
+
+The instance role's S3 permissions are `PutObject` and
+`AbortMultipartUpload`, scoped to the `postgres/*` prefix, plus `ListBucket`.
+**No `GetObject` and no `DeleteObject`**, verified from the role rather than
+from the script's comment:
+
+```bash
+aws iam get-role-policy --role-name echomem-cloud-ec2 \
+  --policy-name echomem-backup-write
+```
+
+So a compromised host can write a new backup and list what exists. It cannot
+read an old one or destroy one. Versioning covers overwrite of the same key.
+
+**Customer facts are stored as plaintext rows.** There is no field level or
+column level encryption. What protects them at rest is the encrypted volume
+and the encrypted backup, which means they are protected against a lost disk
+or a leaked snapshot and **not** against anybody who can reach the running
+database. Said plainly because "encrypted at rest" is often read as the
+second thing and here it is only the first.
+
+Credentials are not stored in a recoverable form at all, which is a stronger
+property than encryption:
+
+| | how it is stored |
+|---|---|
+| Account passwords | Argon2, via `argon2.PasswordHasher` |
+| API keys | SHA-256 of the key; only the last four digits are kept in clear |
+| Erasure subjects | HMAC-SHA256 of the normalised name |
+
+So a database dump does not yield a password or a usable API key. The key
+hash is unsalted SHA-256, which is correct here and would not be for a
+password: the input is `secrets.token_urlsafe(32)`, 32 bytes from a CSPRNG,
+rather than something a person chose - so there is no dictionary to run
+against it and nothing a salt would defend.
+
+Deployment secrets live in `/opt/echo-mem-cloud/.env` on the instance,
+readable by root, which is ordinary for Docker Compose and is the thing to
+replace first if this moves to a platform with a secret manager.
+
+### Two gaps, named rather than left to be found
+
+**No HSTS.** Plain HTTP redirects to HTTPS, but without
+`Strict-Transport-Security` a first visit over HTTP can have that redirect
+stripped by an active network attacker. It is a one line Caddy change and the
+only reason to be careful is that browsers cache it, so a short `max-age`
+comes first.
+
+**No bucket policy denying non-TLS requests.** Uploads use HTTPS because the
+AWS SDK defaults to it, not because the bucket refuses anything else. A
+`Deny` on `aws:SecureTransport: false` would make it a property of the bucket
+rather than of the client.
+
+Neither is exploitable from where the service stands today. Both are listed
+because a page that only lists what is right is not evidence of anything.
+
 ## Supply chain and build integrity
 
 Releases are built and published by GitHub Actions through **PyPI Trusted
