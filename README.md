@@ -407,7 +407,7 @@ and the v1a to v1b plan.
 
 | | |
 |---|---|
-| **v1a, built** | Basic recall. Seven MCP tools, 37 CLI commands, on PyPI and in the MCP registry. |
+| **v1a, built** | Basic recall. Seven MCP tools, 38 CLI commands, on PyPI and in the MCP registry. |
 | **v1b, part built** | Causal typing and `trace_cause` shipped in 0.5.0. Multi hop associative retrieval has not: 187 questions no single fact answers score MRR 0.212 today, and that number is what the rest of v1b has to beat. |
 | **v1c, designed** | Consolidation: hot, consolidated and archived tiers, so retrieval cost stops tracking total facts written. Nothing implemented. |
 | **v1.1, planned** | Organisation wide tenancy: per agent, per team, or org wide graphs. |
