@@ -191,6 +191,52 @@ rather than of the client.
 Neither is exploitable from where the service stands today. Both are listed
 because a page that only lists what is right is not evidence of anything.
 
+## Retention and deletion
+
+Two separate obligations, answered by two commands.
+
+**On request.** GDPR Article 17 and the DPDP Act require actual deletion of a
+subject's personal data when they ask. `echo-memory forget` does it: a fact
+and every version of its triple, or an entity with its aliases and every fact
+touching it, or a whole scope. Supersession is not deletion - a superseded
+fact keeps its text and gains a `t_invalid` - so this is a separate path that
+also removes embeddings, redacts audit text, strips fact ids out of read and
+eval records, drops the orphaned entities and vacuums the pages. Every run
+writes an `erasure_event` row holding counts, a scope, a verb, who asked and a
+ticket reference, and deliberately no fact text and no subject name. See
+[ERASURE.md](ERASURE.md).
+
+**As a standing rule.** Article 5(1)(e) and the DPDP Act also require that
+data is not kept longer than its purpose needs, which no deletion-on-request
+path answers. `echo-memory retain` records how long a scope keeps a fact,
+measured from the instant the fact became true, along with the purpose that
+duration serves and the person who decided it. Both are required columns: "we
+delete after 90 days" is not a compliance answer, and the reason is the part
+nobody can reconstruct later. Replacing a policy retires the old one rather
+than overwriting it, so "why did we stop deleting after 90 days" stays
+answerable.
+
+`retain --enforce` deletes what the policy no longer permits keeping, and it
+does so by handing those facts to the same erasure path above - so a retention
+deletion and a subject request leave one kind of record rather than two.
+Neither is reachable over MCP, and there is a test that reads the published
+tool list so adding either later fails loudly: irreversible deletion one
+prompt injection away from any agent holding a key is not a trade worth
+making.
+
+### What this does not do
+
+**There is no default policy.** A scope with no policy keeps its facts, and
+`retain` reports that as "nobody has decided" rather than as a retention
+period, because those are different answers and only one of them is a
+finding. Inventing a default would be this software deciding a compliance
+question on an operator's behalf, in the direction of deleting their data.
+
+**Nothing enforces on a schedule.** `retain --enforce` is an operator action,
+and without `--confirm` it only reports what would go. When enforcement runs
+is an operational choice, so it belongs in whatever invokes it rather than in
+a column here.
+
 ## Supply chain and build integrity
 
 Releases are built and published by GitHub Actions through **PyPI Trusted
