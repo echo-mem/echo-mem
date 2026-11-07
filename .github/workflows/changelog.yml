@@ -1,0 +1,100 @@
+# A pull request either records what it changes for a user, or says out loud
+# that it changes nothing.
+#
+# CHANGELOG.md states its own rule at the top: anything that changes what a
+# user gets, what a number means, or what the database looks like belongs
+# there. Nothing enforced it, and between 0.5.6 and 2026-10-30 six
+# user-visible changes shipped while `## Unreleased` stayed empty - a new
+# field on get_audit_log, writer_version changing meaning, two new commands,
+# and a registry rename that stops an old config resolving. The entries exist
+# now because somebody reconstructed them from the git log afterwards, which
+# records what could be reconstructed rather than what the author knew at the
+# time.
+#
+# The escape hatch is the whole design problem. A check that fires on every
+# pull request teaches people to write "renamed a variable" entries, and a
+# padded changelog is unreadable. A check that can be silenced invisibly gets
+# silenced by default. So there is exactly one way to skip it, a label, and a
+# label is visible on the pull request next to the check it turned off.
+name: Changelog
+
+on:
+  pull_request:
+    # `labeled` and `unlabeled` are here so that adding the label re-runs this
+    # rather than leaving a red check that is already satisfied, which is the
+    # state people learn to ignore.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+permissions:
+  contents: read
+
+jobs:
+  entry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: A changelog entry, a label, or nothing a user can see
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELLED: ${{ contains(github.event.pull_request.labels.*.name, 'no changelog') }}
+        run: |
+          # Bots raise most pull requests here and cannot be asked to write
+          # prose. Blocking them makes this a check people route around.
+          AUTHOR='${{ github.event.pull_request.user.login }}'
+          case "$AUTHOR" in
+            *\[bot\]) echo "$AUTHOR is a bot; no entry required"; exit 0 ;;
+          esac
+
+          if [ "$LABELLED" = "true" ]; then
+            echo "labelled 'no changelog', which is visible on the pull request"
+            exit 0
+          fi
+
+          changed=$(git diff --name-only "$BASE".."$HEAD")
+          if [ -z "$changed" ]; then
+            echo "no files changed"
+            exit 0
+          fi
+
+          if printf '%s\n' "$changed" | grep -qx 'CHANGELOG.md'; then
+            echo "CHANGELOG.md is in the diff"
+            exit 0
+          fi
+
+          # Paths that cannot change what a user gets. Exempting by path is
+          # cheaper than labelling, and narrow on purpose: a README edit can
+          # change a published number, and docs/ holds the compliance and
+          # benchmark pages that people make decisions from.
+          if ! printf '%s\n' "$changed" | grep -qvE '^(tests/|\.github/)'; then
+            echo "diff is confined to tests/ and .github/"
+            exit 0
+          fi
+
+          cat >&2 <<EOF
+
+          This pull request changes files outside tests/ and .github/ and does
+          not touch CHANGELOG.md.
+
+          Its first line is the rule:
+
+            Anything that changes what a user gets, what a number means, or
+            what the database looks like belongs here.
+
+          Add an entry under ## Unreleased, written now rather than
+          reconstructed from the git log at release time.
+
+          If it genuinely changes nothing a user can see, add the label
+
+            no changelog
+
+          which skips this check and stays visible beside it, so a reader can
+          tell the difference between "nothing to say" and "nobody looked".
+
+          Files outside the exempt paths:
+          EOF
+          printf '%s\n' "$changed" | grep -vE '^(tests/|\.github/)' | sed 's/^/            /' >&2
+          exit 1
