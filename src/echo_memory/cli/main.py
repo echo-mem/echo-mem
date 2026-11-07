@@ -540,8 +540,8 @@ def _add_project_parsers(sub) -> None:
     ext.add_argument("dataset", choices=sorted(external_datasets))
     ext.add_argument(
         "path",
-        help="the dataset file, which you download yourself: neither corpus is "
-             "redistributable here (see docs/BENCHMARKS.md for both URLs). "
+        help="the dataset file, which you download yourself: none of the three is "
+             "redistributable here (see docs/BENCHMARKS.md for all three URLs). "
              "tests/fixtures/ holds a small synthetic file in each schema",
     )
     ext.add_argument(

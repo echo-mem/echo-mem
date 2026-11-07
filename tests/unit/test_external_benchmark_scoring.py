@@ -476,3 +476,37 @@ def test_render_still_prints_numbers_for_an_attributed_backend():
     assert "echo-mem on locomo" in text
     assert "1.000" in text
     assert "not computable" not in text
+
+
+# --- resume, which did not work for the case it exists for ----------------
+
+
+def test_a_partly_written_scope_is_cleared_before_it_is_rewritten():
+    """`already_ingested` says a scope interrupted midway is "rewritten rather
+    than trusted". Nothing made that true.
+
+    ingest wrote every turn into a scope that still held some of them, and the
+    first turn already present came back `not_stored: unchanged`, which the
+    echo backend raises `WriteRefused` on. So resume worked for a scope that
+    had FINISHED and failed for the one case it exists to handle: a run killed
+    partway, which is what happened to the first full LongMemEval attempt and
+    what the docstring cites as the reason for the feature.
+
+    Found while adding BEAM, by running the same fixture twice.
+    """
+    import inspect
+
+    from echo_memory.eval import external
+    from echo_memory.eval.backends.echo import EchoBackend
+
+    assert hasattr(EchoBackend, "clear"), (
+        "the echo backend cannot empty a scratch scope, so an interrupted run "
+        "cannot be resumed"
+    )
+    source = inspect.getsource(external.run_backend)
+    assert 'getattr(backend, "clear"' in source, (
+        "run_backend does not clear a partly written scope before rewriting it"
+    )
+    # Capability-checked rather than required, because a competitor backend
+    # cannot necessarily drop a scope it does not own.
+    assert "if clear is not None" in source

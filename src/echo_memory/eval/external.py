@@ -27,7 +27,7 @@ be a hostile thing to do to a clone. `tests/fixtures/` holds a small synthetic
 file in each schema so the harness itself can be tested without either
 download.
 
-**What is measured, and what is not.** Both benchmarks are published as QA
+**What is measured, and what is not.** All three corpora are published as QA
 accuracy: a model reads what memory returned, writes an answer, and a second
 model judges it. That is the number people quote. This harness calls no model
 anywhere, so it does not produce that number and `accuracy` in its JSON is
@@ -65,6 +65,7 @@ rather than starting over.
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import re
@@ -226,7 +227,7 @@ def instances_in(path: str, limit: int = 0) -> Iterator[dict]:
 # `longmemeval` so a scratch database half-filled by the standalone script this
 # replaced still resumes instead of being ingested a second time under a new
 # name.
-PREFIXES = {"locomo": "locomo", "longmemeval": "lme"}
+PREFIXES = {"locomo": "locomo", "longmemeval": "lme", "beam": "beam"}
 
 # Where the file comes from, so a missing path can say so instead of raising
 # FileNotFoundError at whoever typed it. Recorded here rather than only in the
@@ -236,6 +237,10 @@ DATASET_URLS = {
     "longmemeval": (
         "https://huggingface.co/datasets/xiaowu0162/longmemeval/resolve/main/longmemeval_s"
     ),
+    # Parquet rather than a file this reads directly, so BENCHMARKS.md carries
+    # the four lines that convert it. Named here anyway: the CLI is where
+    # somebody finds out they do not have the corpus.
+    "beam": "https://huggingface.co/datasets/Mohammadta/BEAM",
 }
 
 
@@ -368,9 +373,211 @@ def load_longmemeval(path: str, limit: int = 0, per_type: int = 0) -> Iterator[I
         )
 
 
+# BEAM spells its gold evidence three ways depending on the ability: a flat
+# list of chat ids, a mapping whose values are lists of them, or nothing at
+# all. Nothing at all is not an omission - abstention questions are
+# unanswerable on purpose, and there is no turn to retrieve.
+def _beam_gold(question: dict) -> set[str]:
+    source = question.get("source_chat_ids")
+    if source is None:
+        # contradiction_resolution and friends name them here instead, as
+        # strings like "chat_id: 58".
+        refs = question.get("conversation_references") or question.get(
+            "conversation_reference"
+        )
+        if isinstance(refs, str):
+            refs = [refs]
+        source = refs or []
+    ids: set[str] = set()
+    if isinstance(source, dict):
+        # {"first_statement": [58], "second_statement": [24]} and the other
+        # shapes of the same idea. The keys name what each id is FOR, which is
+        # worth nothing to retrieval scoring and everything to a reader of the
+        # dataset, so they are dropped here and not earlier.
+        values: list = []
+        for value in source.values():
+            values.extend(value if isinstance(value, list) else [value])
+        source = values
+    for item in source or []:
+        if isinstance(item, int):
+            ids.add(str(item))
+        elif isinstance(item, str):
+            found = re.findall(r"\d+", item)
+            ids.update(found)
+    return ids
+
+
+#: Where each ability keeps its gold answer. Ten abilities, four different
+#: field names, and two that have none at all - instruction_following and
+#: preference_following are scored on whether a response COMPLIES rather than
+#: on what it says, so the rubric is the gold.
+BEAM_ANSWER_FIELDS = ("answer", "ideal_answer", "ideal_response", "ideal_summary")
+
+
+def _beam_answer(question: dict) -> str:
+    for name in BEAM_ANSWER_FIELDS:
+        value = question.get(name)
+        if value:
+            return str(value)
+    rubric = question.get("rubric") or []
+    return "; ".join(str(r) for r in rubric)
+
+
+def _beam_text(content: str) -> str:
+    """The message, without the generator's own index marker.
+
+    Every first message of a session ends with `->-> 1,1`, which is BEAM's
+    bookkeeping rather than something a person said. Left in, it becomes part
+    of a stored fact and part of what a judge reads.
+    """
+    return re.sub(r"\s*->->\s*[\d,]+\s*$", "", content).strip()
+
+
+def _plan_order(name: str) -> tuple[int, str]:
+    """`plan-10` sorts after `plan-9`, which a lexical sort gets wrong.
+
+    Ordering matters because it decides the order facts are written in, and a
+    conversation read out of order is a different conversation to anything
+    that reasons about event ordering - which is one of the ten abilities.
+    """
+    digits = re.findall(r"\d+", name)
+    return (int(digits[-1]) if digits else 0, name)
+
+
+def _beam_sessions(chat) -> list[list[dict]]:
+    """Both published shapes of `chat`, flattened to sessions of messages.
+
+    BEAM at 128K, 500K and 1M publishes a session as a list of messages.
+    BEAM-10M is a separate dataset and nests two levels deeper: a session is a
+    mapping of `plan-N` to a list of batches, and a batch is
+    `{batch_number, time_anchor, turns}` where `turns` is a list of LISTS of
+    messages.
+
+    Normalised here rather than in two loaders, because everything after this
+    point - the chunking, the keys, the anchors, the gold intersection - is
+    identical and a second copy of it is a second thing to get wrong. The
+    batch's own `time_anchor` is pushed onto any message that lacks one, since
+    at 10M that is where the date lives.
+    """
+    sessions: list[list[dict]] = []
+    for entry in chat or []:
+        if isinstance(entry, list):
+            sessions.append([m for m in entry if isinstance(m, dict)])
+            continue
+        if not isinstance(entry, dict):
+            continue
+        messages: list[dict] = []
+        for plan in sorted(entry, key=_plan_order):
+            for batch in entry.get(plan) or []:
+                if not isinstance(batch, dict):
+                    continue
+                anchor = batch.get("time_anchor")
+                for group in batch.get("turns") or []:
+                    for message in (group if isinstance(group, list) else [group]):
+                        if not isinstance(message, dict):
+                            continue
+                        if anchor and not message.get("time_anchor"):
+                            message = {**message, "time_anchor": anchor}
+                        messages.append(message)
+        if messages:
+            sessions.append(messages)
+    return sessions
+
+
+def load_beam(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance]:
+    """BEAM, as a JSON array or JSONL of the rows published on HuggingFace.
+
+    Four scales - 128K, 500K, 1M and 10M tokens - of 100 conversations and
+    2,000 human-validated questions over ten memory abilities. It is the only
+    one of the three corpora here whose questions were written by people
+    rather than derived from their own answers, and the only one that reaches
+    a scale where this store's lack of consolidation is the thing being
+    measured rather than a caveat.
+
+    Two structural differences from LoCoMo and LongMemEval, both of which the
+    loader has to absorb rather than hide:
+
+    **`probing_questions` is a Python repr, not JSON.** Single quoted, so
+    `json.loads` raises on every row. `ast.literal_eval` reads it, and is
+    safe on a literal in a way `eval` is not.
+
+    **`chat` has two shapes.** The 10M split is a separate dataset and nests
+    two levels deeper, a session being a mapping of `plan-N` to batches of
+    turn groups. `_beam_sessions` normalises both.
+
+    **The time anchor is on the first message of a session and nowhere else.**
+    Carried forward here, because `when` rides into every fact's text and a
+    tenth of this benchmark is temporal reasoning. Without it, only the first
+    message of each session would carry a date and the ability BEAM measures
+    most directly would be unanswerable for a reason that is ours.
+    """
+    check_flags("beam", per_type)
+    for row in instances_in(path, limit):
+        conversation_id = str(row.get("conversation_id", ""))
+        turns: list[Turn] = []
+        for position, session in enumerate(_beam_sessions(row.get("chat")), start=1):
+            anchor = ""
+            for message in session:
+                # Sticky: each message inherits the last anchor seen in its
+                # own session, and sessions do not inherit from each other.
+                anchor = message.get("time_anchor") or anchor
+                text = _beam_text(message.get("content") or "")
+                if not text:
+                    continue
+                key = str(message.get("id"))
+                # Split like the other two loaders: write_episode refuses a
+                # fact over MAX_FACT characters, and BEAM's assistant turns go
+                # well past it. Every piece keeps the same `key`, which is what
+                # gold cites, and gets its own `node`, because two facts
+                # sharing a target would supersede one another rather than
+                # coexist.
+                for part, piece in enumerate(chunks(text)):
+                    turns.append(Turn(
+                        key=key,
+                        node=f"turn-{key}.{part}",
+                        session=f"session-{position}",
+                        speaker=str(message.get("role") or "user"),
+                        when=anchor,
+                        text=piece,
+                    ))
+
+        raw = row.get("probing_questions") or "{}"
+        abilities = ast.literal_eval(raw) if isinstance(raw, str) else raw
+        by_key = {turn.key: turn.session for turn in turns}
+        questions = []
+        for ability, asked in sorted(abilities.items()):
+            for index, question in enumerate(asked or []):
+                gold = _beam_gold(question)
+                # Kept even when gold is empty, which LoCoMo's loader drops.
+                # There it means a question nobody wrote evidence for; here it
+                # means abstention, an ability BEAM measures on purpose and
+                # the one a memory store should be best at. score_question
+                # records its turn-keyed metrics as None rather than as a
+                # miss.
+                questions.append(Question(
+                    question_id=f"{conversation_id}:{ability}:{index}",
+                    question=str(question.get("question") or ""),
+                    category=ability,
+                    gold_turns=frozenset(gold & by_key.keys()),
+                    gold_sessions=frozenset(
+                        by_key[k] for k in gold if k in by_key
+                    ),
+                    answer=_beam_answer(question),
+                ))
+
+        if turns and questions:
+            yield Instance(
+                instance_id=conversation_id,
+                prefix=PREFIXES["beam"],
+                turns=tuple(turns),
+                questions=tuple(questions),
+            )
+
+
 DATASETS: dict[str, Callable[..., Iterator[Instance]]] = {
     "locomo": load_locomo,
     "longmemeval": load_longmemeval,
+    "beam": load_beam,
 }
 
 # Everything a benchmark question is likely to contain that says nothing about
@@ -443,6 +650,18 @@ def score_question(
     keysets = [source_turns(f) for f in returned]
     text = " ".join(f.get("fact") or "" for f in returned)
     wanted = content_words(question.answer) if question.answer else set()
+    # A question with no gold turn cannot be scored on turn-keyed metrics, and
+    # scoring it as a miss would be a number about the question rather than
+    # about retrieval. LoCoMo's loader drops its four such questions; BEAM's
+    # abstention ability is 10% of the benchmark BY DESIGN - the right answer
+    # is that the transcript does not say, so there is nothing to retrieve and
+    # nothing retrieval could have done better.
+    #
+    # Same mechanism as an unattributable backend: None, which `means` drops
+    # rather than averaging in. The judged pass still scores these, which is
+    # where an abstention question is answerable at all.
+    if not question.gold_turns:
+        attributed = False
     first = next(
         (i + 1 for i, keys in enumerate(keysets) if keys & question.gold_turns), None
     )
@@ -633,6 +852,15 @@ def run_backend(
         if backend.already_ingested(instance.group_id, len(instance.turns)):
             out.scopes_resumed += 1
         else:
+            # A scope holding SOME of this instance is the interrupted case
+            # the resume check describes, and it has to be emptied before it
+            # can be rewritten: writing a turn that is already there returns
+            # "unchanged", which ingest raises on. Without this, a killed run
+            # could not be resumed at all - it died on the first instance it
+            # had partly finished.
+            clear = getattr(backend, "clear", None)
+            if clear is not None:
+                clear(instance.group_id)
             out.turns_written += backend.ingest(instance, progress=progress)
             # Before the first question, not after the last instance. An async
             # backend has queued work and querying now scores an empty store.
@@ -839,7 +1067,7 @@ def render(out: Run) -> str:
         "recall@k is the share of a question's cited turns returned in the top k;",
         "session@k the share of its answer-bearing sessions represented there.",
         "",
-        "This is retrieval, not QA accuracy. Both benchmarks publish model-judged",
+        "This is retrieval, not QA accuracy. All three corpora publish model-judged",
         "accuracy and no model is called here, so these numbers are a CEILING on",
         "what any reader could answer from what came back, and are not comparable",
         "to a published LoCoMo or LongMemEval accuracy figure.",

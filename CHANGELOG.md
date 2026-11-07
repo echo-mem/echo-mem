@@ -9,6 +9,28 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**`eval-external beam` runs BEAM, the third corpus.** *Beyond a Million
+Tokens*, ICLR 2026: 100 conversations and 2,000 **human-written** questions at
+128K, 500K, 1M and 10M tokens, over ten memory abilities. It is the first
+corpus here whose questions were not derived from their own answers, and the
+first that reaches a scale where this store's lack of consolidation is the
+thing being measured rather than a caveat.
+
+Abstention questions are kept and are **not** scored as retrieval misses.
+There is nothing to retrieve, by design, so the turn-keyed metrics record
+`None` and print as a dash; scoring them 0.0 would have deflated every
+headline on this corpus by a tenth. The judged pass is where that ability is
+answerable at all.
+
+**An interrupted benchmark run can now actually be resumed.**
+`already_ingested` said a scope interrupted midway is "rewritten rather than
+trusted" and nothing made that true: ingest wrote every turn into a scope that
+still held some of them, and the first turn already present came back
+`unchanged`, which the backend raises on. So resume worked for a scope that
+had finished and failed for the one case it exists to handle. Found by running
+the same fixture twice.
+
+
 **Test coverage is measured, and gated.** `pytest --cov` runs in CI with
 `--cov-fail-under`, reporting **76.48%** of 6,806 statements and 2,096
 branches. Branch coverage rather than line coverage: a suite that executes
