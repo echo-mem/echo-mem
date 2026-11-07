@@ -1164,6 +1164,12 @@ def main(argv: list[str] | None = None) -> int:
                 # The others stay additive because they are still off.
                 ("without BM25", {"lexical_bm25": False}),
                 ("+ routed expansion", {"route_expansion": True}),
+                # The hop again, with its list worth less than a content
+                # channel's. Two weights rather than one, because a single
+                # arbitrary constant that happened to win would be a tuned
+                # number reported as a finding.
+                ("+ expansion at 0.5", {"graph_hops": 1, "expansion_weight": 0.5}),
+                ("+ expansion at 0.2", {"graph_hops": 1, "expansion_weight": 0.2}),
                 ("+ salience", {"use_salience": True}),
             ]
 
