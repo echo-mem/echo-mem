@@ -46,6 +46,24 @@ class EchoBackend:
 
         return already_ingested(self._conn, group_id, expected)
 
+    def clear(self, group_id: str) -> None:
+        """Remove a half-written scratch scope so it can be written again.
+
+        `already_ingested` says a scope interrupted midway is "rewritten
+        rather than trusted", and until now nothing made that true: ingest
+        wrote every turn into a scope that still held some of them, and the
+        first one already present came back as a restatement, which `ingest`
+        raises on. So the resume path worked for a scope that finished and
+        failed for the one case it exists to handle - a run killed partway,
+        which is exactly what happened to the first full LongMemEval attempt.
+
+        Only ever a benchmark scope: these are prefixed `locomo:`, `lme:` or
+        `beam:` and are written by this harness alone.
+        """
+        from echo_memory.eval.sweep import drop_scope
+
+        drop_scope(self._conn, group_id)
+
     def ingest(self, instance, progress: Callable[[str], None] | None = None) -> int:
         """One fact per turn, keyed so scoring can find it again.
 
