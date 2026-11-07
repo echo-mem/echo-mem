@@ -489,6 +489,95 @@ asynchronous, its `search` refuses the argument its `add` accepts, Zep creates
 a duplicate graph for a repeated name, and `metadata` survives extraction in
 both when the design had assumed it would not.
 
+## BEAM, the third corpus, 2026-11-07
+
+`eval-external beam <path>` runs [BEAM](https://github.com/mohammadtavakoli78/BEAM)
+(*Beyond a Million Tokens*, ICLR 2026) through the same harness as the other
+two: same scoring code, same scope-per-instance layout, same resume.
+
+**Why a third corpus, when two already cost days to run.** Three reasons, in
+order of how much they change what can be claimed here.
+
+1. **Its questions were written by people.** 2,000 of them, human validated,
+   over 100 conversations. Every number elsewhere on this page comes from
+   questions derived from their own answers, which is why the section above
+   says in capitals that they measure how easy that derivation is. BEAM is the
+   first corpus here where a score is about retrieval rather than about the
+   question generator.
+2. **It goes to 10M tokens.** The four scales are 128K, 500K, 1M and 10M. This
+   store's retrieval walks every active fact and there is no consolidation,
+   which this page has called a limitation without ever measuring it. At 10M
+   tokens it stops being a caveat and becomes the measurement.
+3. **Its ten abilities are the ones this design is for.** Contradiction
+   resolution, knowledge update, temporal reasoning and event ordering are
+   what a bi-temporal store that supersedes rather than deletes is supposed to
+   be good at, and LoCoMo barely tests them. Abstention - the answer being
+   that the transcript does not say - is the tenth, and it is the one a
+   retrieval-only harness cannot score at all.
+
+### What the published BEAM numbers are worth
+
+Two systems claim the top of this benchmark. [Mastra](https://mastra.ai/research/observational-memory-beam)
+reported 83.3% at 100K and 80.6% at 1M on 2026-10-29, describing them as the
+top published scores; [past.dev](https://www.prnewswire.com/news-releases/pastdev-introduces-frontier-memory-for-ai-agents-1-on-beam-the-largest-public-memory-benchmark-302899770.html)
+claims 92.08%, 90.65% and 85.03% at 100K, 1M and 10M.
+
+Both cannot be first, and the discrepancy is not a dispute about either run.
+Mastra's chart footer says **scores as published**, which means their own
+measurement beside other people's numbers from other harnesses, possibly with
+a different answering model. That is the exact comparison this file refuses to
+make, and the reason `eval-external --backend` exists: our side and theirs
+through one code path or neither.
+
+So BEAM numbers from here will be ours and ours only, with every competitor
+run through this harness or absent, and a sentence saying which.
+
+One number from the paper is worth repeating whoever measured it: a model
+given the **full history** in context scores at most **25.9%** at 1M tokens.
+That is the strongest available statement that a memory system is necessary at
+all, and it does not come from anyone selling one.
+
+### What is measured here, and what needs the judged pass
+
+Retrieval, as everywhere else on this page: did the cited turn come back.
+BEAM's gold evidence is in `source_chat_ids`, spelled three different ways
+across the ten abilities - a flat list of ids, a mapping whose values are
+lists, and strings like `"chat_id: 58"` - and the loader reads all three.
+
+**Abstention cannot be scored this way and is not scored as a miss.** There is
+no turn to retrieve, by design, so its turn-keyed metrics are recorded as
+`None` and print as a dash. Reporting 0.0 there would deflate every headline
+on this corpus by a tenth for a reason that has nothing to do with retrieval.
+`judge-external` is where abstention is answerable, because the judged pass
+can tell "the chat does not say" from a wrong answer.
+
+Two more abilities, `instruction_following` and `preference_following`, supply
+no gold answer at all: they are scored on whether a response COMPLIES rather
+than on what it says. Their rubric is used as the gold text, which is honest
+for the judged pass and close to meaningless for `answer_words@k`.
+
+### Getting the file
+
+The dataset is parquet on HuggingFace, CC BY-SA 4.0, and this harness reads
+JSON. In the benchmark virtualenv:
+
+```bash
+python - <<'EOF'
+from datasets import load_dataset
+import json
+rows = load_dataset("Mohammadta/BEAM", split="100K")
+json.dump([dict(r) for r in rows], open("beam-100k.json", "w"))
+EOF
+
+echo-memory eval-external beam beam-100k.json --json beam.json --results beam.jsonl
+echo-memory judge-external beam.jsonl --json beam-judged.json
+```
+
+Splits are `100K`, `500K` and `1M`; the 10M conversations are a separate
+dataset, `Mohammadta/BEAM-10M`. `tests/fixtures/beam_fixture.json` is a real
+row trimmed to three sessions and one question per ability, which is what the
+loader's tests run against.
+
 ## Reproducing any of it
 
 Point the two external benchmarks at a scratch database. They write real facts
