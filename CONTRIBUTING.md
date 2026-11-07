@@ -67,6 +67,21 @@ not `fix bug`. No AI-tool attribution in commit messages or co-author trailers.
   (PR #169). A review reads differently when "the author will see this" may not
   be true, and the honest version of that is worth more than the appearance of
   a human.
+- **Add a `CHANGELOG.md` entry, or say why there is none.** `changelog.yml`
+  fails a pull request that changes anything outside `tests/` and `.github/`
+  without touching the changelog. The rule is the one the file states at the
+  top: anything that changes what a user gets, what a number means, or what
+  the database looks like. Write it under `## Unreleased`, in the present,
+  rather than leaving it to be reconstructed from the git log at release time,
+  which is how six user-visible changes shipped unrecorded between 0.5.6 and
+  2026-10-30.
+
+  If a change genuinely has nothing a user can see, add the **`no changelog`**
+  label. That is the only way to skip the check, and it is deliberately a
+  label rather than a magic word in the commit message: it sits on the pull
+  request beside the check it turned off, so a reader can tell "nothing to
+  say" apart from "nobody looked".
+
 - **Rebase rather than merge `main` into your branch.** `git rebase --signoff
   origin/main` keeps the branch linear and, because `dco.yml` checks every
   commit rather than only the tip, avoids the one failure mode that catches
