@@ -9,6 +9,22 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Benchmark scopes are keyed on the dataset file, and the old ids do not
+match.** Every published corpus numbers its instances within a file, and all
+three ship more than one: BEAM restarts `conversation_id` at 1 in each of its
+four splits, LongMemEval publishes `_s`, `_m` and `_oracle` carrying the same
+`question_id` over haystacks of very different sizes, and LoCoMo's `sample_id`
+means nothing outside `locomo10.json`.
+
+Scoping on that id alone meant a run over one file overwrote the scopes of a
+run over another, and two runs at once wrote into the same `group_id` and
+corrupted each other's haystacks. Nothing raises when it happens: a haystack
+half overwritten by another file scores as a retrieval failure and reads as a
+result.
+
+Scopes now carry the file's digest, so the next benchmark run re-ingests once.
+
+
 **`eval-external beam` runs BEAM, the third corpus.** *Beyond a Million
 Tokens*, ICLR 2026: 100 conversations and 2,000 **human-written** questions at
 128K, 500K, 1M and 10M tokens, over ten memory abilities. It is the first
