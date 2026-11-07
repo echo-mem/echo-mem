@@ -9,6 +9,25 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Test coverage is measured, and gated.** `pytest --cov` runs in CI with
+`--cov-fail-under`, reporting **76.48%** of 6,806 statements and 2,096
+branches. Branch coverage rather than line coverage: a suite that executes
+every line while only ever taking one side of each `if` reports a much better
+number than it has earned.
+
+The first measurement is the argument for doing it. `forget`, `verify` and
+`retain` - the three commands that erase, attest and expire customer data -
+were the least covered code in the package at 6.6%, 8.6% and 9.8%. The modules
+underneath them are tested hard; what nothing exercised was the layer where
+`--confirm` lives. Twelve tests now drive those three through `main()`, and
+`docs/OPENSSF-BADGE.md` answers `test_most` Met with a number instead of
+listing it as one of three gaps.
+
+The competitor adapters sit at 0% and are deliberately not excluded from the
+figure. A coverage number that omits what is untested is not a coverage
+number.
+
+
 ## 0.5.7
 
 **Every read surface says what it handed over.** `query_memory`, `trace_cause`
