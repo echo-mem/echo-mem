@@ -62,6 +62,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
+from typing import Any
 
 from echo_memory.eval.backends import BackendUnavailable
 
@@ -85,7 +86,7 @@ class LettaBackend:
         # choosing what is being compared.
         self._model = model or os.environ.get("LETTA_MODEL", "")
         self._embedding = embedding or os.environ.get("LETTA_EMBEDDING", "")
-        self._client = None
+        self._client: Any = None
         self._agents: dict[str, str] = {}
 
     def check(self) -> None:
@@ -109,7 +110,16 @@ class LettaBackend:
             )
         base = os.environ.get(BASE_URL_VAR, "").strip() or DEFAULT_BASE_URL
         token = os.environ.get(TOKEN_VAR, "").strip()
-        self._client = Letta(base_url=base, token=token) if token else Letta(base_url=base)
+        # api_key, NOT token. The constructor takes
+        # (api_key, project_id, project, environment, base_url, timeout, ...)
+        # and `token=` raises TypeError, so this crashed the moment a token
+        # was set - which is the only way to reach Letta Cloud, which is the
+        # only Letta that serves this REST API. The adapter could never have
+        # connected. Found by mypy on the day it was added, against an SDK
+        # that had been installed and read while the adapter was written.
+        self._client = (
+            Letta(base_url=base, api_key=token) if token else Letta(base_url=base)
+        )
         # client.health() is a METHOD, not a resource with .retrieve(). Worth
         # being exact about: the first version called health.retrieve() and the
         # AttributeError was caught by the except below, so a coding mistake in

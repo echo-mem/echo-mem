@@ -21,6 +21,7 @@ MAX_HOPS that is at most six round trips, and the version a person can read
 is the version that stays correct."""
 
 import time
+from typing import Any
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger
@@ -251,7 +252,7 @@ def _maximal(chains: list[list[tuple[str, str]]]) -> list[list[tuple[str, str]]]
     ]
 
 
-def _render(chains, facts: dict[str, dict]) -> list[dict]:
+def _render(chains, facts: dict[str, dict]) -> list[list[dict]]:
     """A chain as a list of facts, anchor end first. The hint rides on each
     fact already - _fetch_facts returns causal_hint - so the walk does not
     restate it and the two cannot disagree."""
@@ -313,7 +314,7 @@ def trace_cause(
         wanted.update(edge for edge, _ in chain)
     facts = _fetch_facts(conn, sorted(wanted))
 
-    result = {
+    result: dict[str, Any] = {
         "anchors": matched,
         "causes": _render(causes, facts),
         "effects": _render(effects, facts),
