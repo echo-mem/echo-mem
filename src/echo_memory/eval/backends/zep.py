@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 from echo_memory.eval.backends import BackendUnavailable, _env
 
@@ -71,7 +72,7 @@ class ZepBackend:
     attributes_results = True
 
     def __init__(self):
-        self._client = None
+        self._client: Any = None
         #: group_id -> graph uuid, and group_id -> {episode uuid: turn key}.
         #: The second is rebuilt from the API on resume rather than kept only
         #: in memory, because a run that resumes in a new process still has to
