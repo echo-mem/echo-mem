@@ -188,3 +188,64 @@ def test_gold_cites_only_turns_the_loader_produced():
 
     assert cited, "no question in the fixture cites a turn"
     assert cited <= {t.key for t in instance.turns}
+
+
+# --- the 10M split, which is a different dataset with a different shape ---
+
+TEN_M = str(Path(__file__).parent.parent / "fixtures" / "beam_10m_fixture.json")
+
+
+def ten_m() -> object:
+    instances = list(load_beam(TEN_M))
+    assert len(instances) == 1
+    return instances[0]
+
+
+def test_the_10m_split_nests_two_levels_deeper():
+    """BEAM-10M is published as a separate dataset and does not share the
+    other splits' layout. A session is a mapping of `plan-N` to a list of
+    batches, a batch is `{batch_number, time_anchor, turns}`, and `turns` is a
+    list of LISTS of messages.
+
+    A loader that assumed the flat shape does not raise on this: `chat[0][0]`
+    on a dict raises KeyError, and anything more forgiving yields nothing and
+    reports a conversation with no turns, which scores as a clean zero.
+    """
+    raw = json.loads(Path(TEN_M).read_text())[0]["chat"]
+
+    assert isinstance(raw[0], dict), "the fixture is no longer the 10M shape"
+    assert all(k.startswith("plan-") for k in raw[0])
+    batch = next(b for v in raw[0].values() if v for b in v)
+    assert {"batch_number", "time_anchor", "turns"} <= set(batch)
+    assert isinstance(batch["turns"][0], list), "turns is a list of lists"
+
+    assert ten_m().turns, "the 10M shape produced no turns"
+
+
+def test_both_shapes_produce_the_same_kind_of_instance():
+    """The point of normalising in one place: everything after it - chunking,
+    keys, anchors, the gold intersection - is identical, and a second loader
+    would be a second thing to get wrong."""
+    for instance in (only(), ten_m()):
+        assert instance.prefix == "beam"
+        assert len(instance.questions) == 10
+        assert all(t.key and t.node and t.session for t in instance.turns)
+        assert all(q.answer for q in instance.questions)
+
+
+def test_a_batch_anchor_reaches_the_messages_under_it():
+    """At 10M the date is on the batch rather than on a message, so without
+    pushing it down the temporal ability would be unanswerable for a reason
+    that is ours rather than the benchmark's."""
+    assert all(t.when for t in ten_m().turns), "a 10M turn has no date"
+
+
+def test_plans_are_ordered_by_number_not_lexically():
+    """`plan-10` sorts before `plan-2` lexically. Order decides the sequence
+    facts are written in, and a conversation read out of order is a different
+    conversation to anything measuring event ordering."""
+    from echo_memory.eval.external import _plan_order
+
+    names = ["plan-1", "plan-10", "plan-2", "plan-9"]
+
+    assert sorted(names, key=_plan_order) == ["plan-1", "plan-2", "plan-9", "plan-10"]

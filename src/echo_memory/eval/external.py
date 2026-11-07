@@ -433,6 +433,57 @@ def _beam_text(content: str) -> str:
     return re.sub(r"\s*->->\s*[\d,]+\s*$", "", content).strip()
 
 
+def _plan_order(name: str) -> tuple[int, str]:
+    """`plan-10` sorts after `plan-9`, which a lexical sort gets wrong.
+
+    Ordering matters because it decides the order facts are written in, and a
+    conversation read out of order is a different conversation to anything
+    that reasons about event ordering - which is one of the ten abilities.
+    """
+    digits = re.findall(r"\d+", name)
+    return (int(digits[-1]) if digits else 0, name)
+
+
+def _beam_sessions(chat) -> list[list[dict]]:
+    """Both published shapes of `chat`, flattened to sessions of messages.
+
+    BEAM at 128K, 500K and 1M publishes a session as a list of messages.
+    BEAM-10M is a separate dataset and nests two levels deeper: a session is a
+    mapping of `plan-N` to a list of batches, and a batch is
+    `{batch_number, time_anchor, turns}` where `turns` is a list of LISTS of
+    messages.
+
+    Normalised here rather than in two loaders, because everything after this
+    point - the chunking, the keys, the anchors, the gold intersection - is
+    identical and a second copy of it is a second thing to get wrong. The
+    batch's own `time_anchor` is pushed onto any message that lacks one, since
+    at 10M that is where the date lives.
+    """
+    sessions: list[list[dict]] = []
+    for entry in chat or []:
+        if isinstance(entry, list):
+            sessions.append([m for m in entry if isinstance(m, dict)])
+            continue
+        if not isinstance(entry, dict):
+            continue
+        messages: list[dict] = []
+        for plan in sorted(entry, key=_plan_order):
+            for batch in entry.get(plan) or []:
+                if not isinstance(batch, dict):
+                    continue
+                anchor = batch.get("time_anchor")
+                for group in batch.get("turns") or []:
+                    for message in (group if isinstance(group, list) else [group]):
+                        if not isinstance(message, dict):
+                            continue
+                        if anchor and not message.get("time_anchor"):
+                            message = {**message, "time_anchor": anchor}
+                        messages.append(message)
+        if messages:
+            sessions.append(messages)
+    return sessions
+
+
 def load_beam(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance]:
     """BEAM, as a JSON array or JSONL of the rows published on HuggingFace.
 
@@ -450,6 +501,10 @@ def load_beam(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance
     `json.loads` raises on every row. `ast.literal_eval` reads it, and is
     safe on a literal in a way `eval` is not.
 
+    **`chat` has two shapes.** The 10M split is a separate dataset and nests
+    two levels deeper, a session being a mapping of `plan-N` to batches of
+    turn groups. `_beam_sessions` normalises both.
+
     **The time anchor is on the first message of a session and nowhere else.**
     Carried forward here, because `when` rides into every fact's text and a
     tenth of this benchmark is temporal reasoning. Without it, only the first
@@ -460,7 +515,7 @@ def load_beam(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance
     for row in instances_in(path, limit):
         conversation_id = str(row.get("conversation_id", ""))
         turns: list[Turn] = []
-        for position, session in enumerate(row.get("chat") or [], start=1):
+        for position, session in enumerate(_beam_sessions(row.get("chat")), start=1):
             anchor = ""
             for message in session:
                 # Sticky: each message inherits the last anchor seen in its
