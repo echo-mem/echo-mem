@@ -108,7 +108,39 @@ echo-memory eval-external locomo <path>       # LoCoMo, the corpus the published
 echo-memory eval-external longmemeval <path>  # LongMemEval, the same
 echo-memory calibrate              # is entity resolution trustworthy on your data
 echo-memory benchmark              # write, query and digest latency
+echo-memory judge                  # retrieval scored on questions written before the answers
+echo-memory judge-external         # QA accuracy for a finished eval-external run
 ```
+
+Operating a store, rather than using one:
+
+```bash
+echo-memory graph                  # a scope's graph, as text or JSON
+echo-memory merge                  # fold one node into another, once confirmed to be one entity
+echo-memory unmerge                # take back an alias a node absorbed from a different entity
+echo-memory reattribute            # set the project on facts written before projects were recorded
+echo-memory distil                 # read facts out of a session the harness already recorded
+echo-memory bootstrap              # import the work that already exists on this machine
+echo-memory analyse                # first run comprehension pass for an existing project
+echo-memory reconcile              # re-notice memory files the capture hook missed
+echo-memory pending                # memory files noticed but not yet in the graph
+echo-memory install-hooks          # register every capture hook in ~/.claude/settings.json
+echo-memory skill                  # print the usage instructions, for a client with no config file
+echo-memory trial                  # record and review v1a exit criteria observations
+```
+
+Answering for the data, which is the part a compliance review asks about:
+
+```bash
+echo-memory forget                 # erase facts outright, for a data subject's deletion request
+echo-memory retain                 # how long this scope keeps a fact, and enforcing it
+echo-memory verify                 # has any fact been changed behind this store's back
+```
+
+Those three are deliberately not MCP tools, and a test reads the published
+tool list so that adding one later fails. Irreversible deletion of a scope,
+one prompt injection away from any agent holding a key, is not a trade worth
+making.
 
 ### The seven MCP tools
 
