@@ -44,6 +44,21 @@ is ranked, not whether. `expansion_weight` therefore ships **off**, and
 `eval --ablate` scores two weights beside the unweighted hop so the next
 person to have this idea finds the experiment rather than repeating it.
 
+**The Letta benchmark adapter could never have connected.** It passed
+`token=` to a constructor whose parameter is `api_key=`, so it raised
+`TypeError` the moment a token was set, which is the only way to reach Letta
+Cloud, which is the only Letta that serves the REST API this adapter uses.
+Nothing caught it because running it needs a paid account, and it was written
+against an SDK that had been installed and read. A type checker found it on
+the first run.
+
+**mypy runs in CI.** Not strict mode: thirteen modules carry a baseline and
+`disallow_untyped_defs` is off, because a gate nobody can pass is a gate
+somebody deletes. The baseline only shrinks, so new code is checked from its
+first line. `_render` in `retrieval/causality.py` also had a return type that
+described one chain while returning several, which is the kind of thing a
+reader believes.
+
 
 ## 0.5.7
 

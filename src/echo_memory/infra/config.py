@@ -6,6 +6,7 @@ from these values plus the scope ("solo" | "shared") passed on each call.
 """
 
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -56,7 +57,12 @@ class Config:
         raise ConfigError(f'scope must be "solo" or "shared", got {scope!r}')
 
 
-def load_config(env: dict | None = None) -> Config:
+def load_config(env: Mapping[str, str] | None = None) -> Config:
+    # Mapping, not dict: the default is os.environ, which is an _Environ
+    # rather than a dict, and nothing here mutates it. Annotating the
+    # parameter as dict made every read of it an error, which is the type
+    # checker correctly pointing out that the signature described
+    # something the function is never given.
     env = env if env is not None else os.environ
     required = ["ECHO_MEMORY_USER_ID", "ECHO_MEMORY_AGENT_ID"]
     if not env.get("ECHO_MEMORY_DATABASE_URL_FILE"):
@@ -73,7 +79,7 @@ def load_config(env: dict | None = None) -> Config:
     )
 
 
-def _database_url(env: dict) -> str:
+def _database_url(env: Mapping[str, str]) -> str:
     """The connection string, from a file when one is named.
 
     `install` writes the URL - password inline - into config files and used to

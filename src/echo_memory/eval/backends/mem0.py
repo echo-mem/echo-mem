@@ -56,6 +56,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from typing import Any
 
 from echo_memory.eval.backends import BackendUnavailable, _env
 
@@ -72,7 +73,7 @@ class Mem0Backend:
 
     def __init__(self, infer: bool = True):
         self._infer = infer
-        self._client = None
+        self._client: Any = None
 
     def check(self) -> None:
         key = _env("MEM0_API_KEY")

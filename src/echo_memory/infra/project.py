@@ -20,6 +20,7 @@ process."""
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from pathlib import Path
 
 UNKNOWN = "unknown"
@@ -50,7 +51,7 @@ def _git_toplevel(cwd: str) -> str | None:
     return top or None
 
 
-def detect_project(cwd: str | None = None, env: dict | None = None) -> str:
+def detect_project(cwd: str | None = None, env: Mapping[str, str] | None = None) -> str:
     """The repo root's name, else the directory's name, else 'unknown'.
 
     The git remote is deliberately not consulted: it needs no network here but

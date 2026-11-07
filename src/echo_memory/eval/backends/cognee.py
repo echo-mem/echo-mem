@@ -57,6 +57,7 @@ from __future__ import annotations
 import os
 import time
 from collections.abc import Callable
+from typing import Any
 
 from echo_memory.eval.backends import BackendUnavailable, _env
 
@@ -74,8 +75,8 @@ class CogneeBackend:
     attributes_results = True
 
     def __init__(self):
-        self._cognee = None
-        self._search_type = None
+        self._cognee: Any = None
+        self._search_type: Any = None
         self._llm_config: dict = {}
         self._embedding_config: dict = {}
 
