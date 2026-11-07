@@ -314,6 +314,11 @@ LoCoMo in full, all ten conversations, 5,882 turns into an empty scratch
 database in **310 seconds** (18.9 turns/s), 1,982 questions scored. Dataset
 sha256 `79fa87e90f04081343b8c8debecb80a9a6842b76a7aa537dc9fdf651ea698ff4`.
 
+<!-- locomo-baseline: the run the README quotes. tests/unit/test_benchmark_claims.py
+     reads the overall row below and fails when the README stops agreeing with it.
+     Moving this comment to a later run is how the README's figures are updated;
+     editing the README alone will not pass. -->
+
 | Category | n | recall@1 | recall@10 | recall@30 | hit@10 | session@10 | MRR |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | **overall** | **1,982** | **0.341** | **0.643** | **0.725** | **0.700** | **0.907** | **0.485** |

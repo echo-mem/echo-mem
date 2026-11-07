@@ -281,7 +281,7 @@ somebody else's data. The two external rows are the ones to compare against anyt
 |---|---|---|
 | Context per recall vs injecting everything | **96.7% less** on a 325 fact store, hit@10 0.872 over 1,190 queries derived from their own answers, so read it as a token ratio with a floor attached rather than as accuracy | `echo-memory eval --context` |
 | The same saving across 8x of corpus growth | 75.5% at 32 facts rising to **96.4% at 261**, hit@10 0.900 to 0.946 | `echo-memory eval --context --sweep` |
-| LoCoMo retrieval, 1,982 questions, 5,882 turns | recall@10 **0.601**, hit@10 0.658, MRR 0.460, session@10 0.850 | `echo-memory eval-external locomo` |
+| LoCoMo retrieval, 1,982 questions, 5,882 turns | recall@10 **0.643**, hit@10 0.700, MRR 0.485, session@10 0.907 | `echo-memory eval-external locomo` |
 | LongMemEval retrieval, 90 questions, 15 per type | session@10 **0.937**, recall@10 0.727, MRR 0.428 | `echo-memory eval-external longmemeval --per-type 15` |
 | Lexical BM25 against `ts_rank` | **+0.0271** MRR on entity_pair [+0.0083, +0.0481] and on multihop [+0.0166, +0.0381], the other two shapes inside noise, none worse | `echo-memory eval --ablate`, the `without BM25` row with its sign reversed |
 | Server side model calls per write | **0** | `echo-memory benchmark` |
