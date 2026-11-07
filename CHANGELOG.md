@@ -9,6 +9,60 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+## 0.5.7
+
+**Every read surface says what it handed over.** `query_memory`, `trace_cause`
+and `get_audit_log` all deliver facts to an agent, and only the first recorded
+that it had. The three are now named in one place, `trial.reads.KINDS`, so a
+caller cannot add a fourth read path and silently account for nothing. The
+recording is the caller's job and the module says so: a second caller that
+imports the retrieval function directly does not inherit the MCP wrapper's
+side effects, which is how the hosted service reached 129,474 facts with zero
+recorded reads.
+
+`query_memory` also answers a graph hop as a third channel and reports
+`attributed` and `attribution_rate`, so a caller can tell how much of an answer
+carries provenance rather than assuming all of it does.
+
+**`echo-memory retain`: how long a scope keeps a fact.** Erasure answers a
+subject who asks to be forgotten. This is the standing rule that no
+deletion-on-request path answers: GDPR Article 5(1)(e) and the DPDP Act both
+require that data is not kept longer than its purpose needs. A policy records
+the duration, the purpose it serves and the person who decided, the last two
+being required columns because "we delete after 90 days" is not a compliance
+answer. Replacing a policy retires the old one rather than overwriting it.
+
+`retain --enforce` deletes what the policy no longer permits keeping, through
+`erasure.erase` rather than beside it, so a retention deletion leaves exactly
+the `erasure_event` record a subject request leaves. It removes the entity left
+with no facts and vacuums the pages, because a name with no facts is still
+personal data and a deleted tuple Postgres has not reclaimed is still readable.
+Dry run unless `--confirm`, and it refuses outright when no policy exists: an
+absent policy means nobody has decided, which is not the same as forever.
+
+**`echo-memory verify`: whether any fact has been changed behind the store's
+back.** Every fact now carries a digest over its own claims - the endpoint
+names, the relation, the text, the confidence, the causal type, `t_valid`,
+`agent_id`, the project and the session - chained to the previous attestation
+in the same scope. Changing a fact breaks its digest; deleting one breaks the
+chain. Until now all of that was believed because the database said so, and
+anyone who could write SQL could rewrite an `agent_id` with nothing afterwards
+able to tell.
+
+What it is worth depends on one of two things, and `verify` says which is in
+force on every run: `ECHO_MEMORY_ATTESTATION_KEY` makes each digest an HMAC, or
+a record of the chain head kept outside the database makes a silent rewrite
+impossible unkeyed. With neither it detects corruption and nothing more. It
+does not authenticate the author, it says nothing about the interval before a
+`--backfill`, and a missing fact is reconciled against `erasure_event` rather
+than assumed to be tampering.
+
+**Upgrading needs `init-db`, and skipping it now fails on write.** Migrations
+0029 and 0030 add the retention and attestation tables, and the write path
+inserts an attestation row, so a store running this code against an older
+schema stops rather than writing facts nothing can verify.
+
+
 **`writer_version` names the code, and old stores will say so.** The column
 exists to answer "which code wrote this fact" and recorded the installed
 distribution version instead, which in an editable checkout is frozen at `pip
