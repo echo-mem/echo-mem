@@ -27,6 +27,23 @@ The competitor adapters sit at 0% and are deliberately not excluded from the
 figure. A coverage number that omits what is untested is not a coverage
 number.
 
+**Reciprocal rank fusion takes weights, and the graph hop was measured with
+them.** Two earlier attempts to use graph expansion failed, and the diagnosis
+written down at the time was that the fusion was at fault rather than the
+walk: RRF gives every list's top slot the same value, so a list ordered by
+proximity to what the query already matched spends a top slot on a fact the
+query did not ask for.
+
+Half of that is now confirmed. At a weight of 0.2 the expansion costs
+**-0.0002 MRR** on entity_pair, where the unweighted hop costs -0.2409, with
+an interval of [-0.0070, +0.0068]. The damage can be dialled out entirely.
+
+The other half is not. Multi hop MRR still does not move outside noise, in
+the third attempt running. What a weight changes is how badly the second fact
+is ranked, not whether. `expansion_weight` therefore ships **off**, and
+`eval --ablate` scores two weights beside the unweighted hop so the next
+person to have this idea finds the experiment rather than repeating it.
+
 
 ## 0.5.7
 

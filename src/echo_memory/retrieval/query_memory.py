@@ -990,6 +990,7 @@ def query_memory(
     digest: bool = False, lexical_only: bool = False,
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
+    expansion_weight: float | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
     about: list[str] | None = None,
@@ -1097,6 +1098,7 @@ def query_memory(
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
         lists = [vector_ids, lexical_ids]
+        weights: list[float] | None = None
         # Routed, not configured. graph_hops=None asks the router; an explicit
         # 0 or 1 overrides it, which is what the harness needs to score the
         # router against always-on and always-off.
@@ -1153,6 +1155,15 @@ def query_memory(
                 neighbours = [e for e in neighbours if e in allowed]
             graph_ids = neighbours
             lists.append(neighbours)
+            # What a neighbour's top slot is worth against a match's top
+            # slot. None means the same, which is plain RRF and what the two
+            # failed attempts above both used. See fusion.py: the hypothesis
+            # this exists to test is that expansion failed because of the
+            # fusion rather than because of the walk, since the walk demonstrably
+            # finds the second fact - multihop recall@10 0.635 to 0.769 - and
+            # only ranks it badly.
+            if expansion_weight is not None:
+                weights = [1.0] * (len(lists) - 1) + [expansion_weight]
         # Salience last, over the candidates the content channels found, so
         # it can reorder an answer but never add to one. It is a prior on
         # facts, not a signal about this query.
@@ -1160,7 +1171,16 @@ def query_memory(
         if salient:
             by_content = sorted(content, key=content.get, reverse=True)
             lists.append(salience.rank(conn, group_id, by_content))
-        fused = reciprocal_rank_fusion(lists, k=k) if (hops or salient) else content
+            if weights is not None:
+                # Salience is a prior on facts rather than a signal about this
+                # query, so it gets the expansion's weight rather than a
+                # content channel's. Full weight here would reintroduce
+                # exactly the problem the weight exists to test.
+                weights.append(expansion_weight or 1.0)
+        fused = (
+            reciprocal_rank_fusion(lists, k=k, weights=weights)
+            if (hops or salient) else content
+        )
         by_score = sorted(fused, key=fused.get, reverse=True)
         # Diversify before truncating, not after: the point is to choose which
         # top_k, and slicing first throws away the candidates MMR would swap in.
