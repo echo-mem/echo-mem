@@ -64,4 +64,16 @@ jobs:
           done
 
       - name: Test (pytest, excluding LLM-quality evals)
-        run: pytest -m "not eval"
+        # --cov-fail-under is a ratchet, not a target. The floor is whatever
+        # was measured when it was last raised, so the number can only go up
+        # deliberately. It is NOT set to the current figure exactly: coverage
+        # of a suite that talks to a real database moves by a line or two with
+        # timing, and a gate that fails on noise gets removed rather than
+        # fixed.
+        #
+        # The point of the number is not the number. 998 tests was quoted as
+        # evidence in docs/COMPLIANCE.md and is evidence of effort rather than
+        # of reach; the first real measurement found the three commands that
+        # erase, verify and expire customer data sitting at 6.6%, 8.6% and
+        # 9.8%, which is the layer where --confirm lives.
+        run: pytest -m "not eval" --cov --cov-report=term --cov-fail-under=75
