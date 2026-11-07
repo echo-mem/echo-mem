@@ -244,6 +244,36 @@ DATASET_URLS = {
 }
 
 
+def scope_token(path: str) -> str:
+    """Eight characters of the dataset file's digest, to key its scopes on.
+
+    Every one of these corpora numbers its instances **within a file**, and
+    every one of them ships more than one file:
+
+    - BEAM restarts `conversation_id` at 1 in each of 128K, 500K, 1M and 10M
+    - LongMemEval publishes `_s`, `_m` and `_oracle` carrying the SAME
+      `question_id` over haystacks of very different sizes
+    - LoCoMo's `sample_id` is unique inside `locomo10.json` and says nothing
+      about any other file
+
+    So an instance id alone is not a scope. Without this, a run over one file
+    overwrites the scopes of a run over another, and two runs at the same time
+    fight over the same `group_id` and corrupt each other's haystacks.
+
+    Both happened on 2026-11-08, on BEAM. The symptom was a re-run reporting
+    "0 already present" for twenty scopes that had finished an hour earlier.
+    **Nothing raises.** A haystack half overwritten by another file scores as
+    a retrieval failure and reads as a result, which is the worst shape a
+    benchmark bug can take: it produces a number rather than an error.
+
+    The digest rather than the filename, because a file renamed is the same
+    corpus and a file edited is not, and that is exactly the distinction a
+    scope needs. It keeps the dataset prefix, which `foreign_facts` matches on
+    to refuse to run against a real store.
+    """
+    return fingerprint(path)[1][:8]
+
+
 LOCOMO_CATEGORIES = {
     1: "multi hop", 2: "temporal", 3: "open domain",
     4: "single hop", 5: "adversarial",
@@ -277,6 +307,7 @@ def check_flags(dataset: str, per_type: int) -> None:
 def load_locomo(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance]:
     """One instance per conversation, one question per `qa` entry."""
     check_flags("locomo", per_type)
+    token = scope_token(path)
     for sample in instances_in(path, limit):
         conversation = sample["conversation"]
         turns: list[Turn] = []
@@ -316,7 +347,7 @@ def load_locomo(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instan
                 answer="" if answer is None else str(answer),
             ))
         yield Instance(
-            instance_id=sample["sample_id"], prefix=PREFIXES["locomo"],
+            instance_id=f'{token}-{sample["sample_id"]}', prefix=PREFIXES["locomo"],
             turns=tuple(turns), questions=tuple(questions),
         )
 
@@ -330,6 +361,7 @@ def load_longmemeval(path: str, limit: int = 0, per_type: int = 0) -> Iterator[I
     first N of each of the six types, which is what a partial run has to be if
     its numbers are going to mean anything.
     """
+    token = scope_token(path)
     taken: dict[str, int] = {}
     for instance in instances_in(path, 0 if per_type else limit):
         kind = instance.get("question_type") or "unknown"
@@ -368,7 +400,7 @@ def load_longmemeval(path: str, limit: int = 0, per_type: int = 0) -> Iterator[I
             answer="" if answer is None else str(answer),
         )
         yield Instance(
-            instance_id=str(instance["question_id"]), prefix=PREFIXES["longmemeval"],
+            instance_id=f'{token}-{instance["question_id"]}', prefix=PREFIXES["longmemeval"],
             turns=tuple(turns), questions=(question,),
         )
 
@@ -512,8 +544,9 @@ def load_beam(path: str, limit: int = 0, per_type: int = 0) -> Iterator[Instance
     most directly would be unanswerable for a reason that is ours.
     """
     check_flags("beam", per_type)
+    token = scope_token(path)
     for row in instances_in(path, limit):
-        conversation_id = str(row.get("conversation_id", ""))
+        conversation_id = f"{token}-{row.get('conversation_id', '')}"
         turns: list[Turn] = []
         for position, session in enumerate(_beam_sessions(row.get("chat")), start=1):
             anchor = ""

@@ -56,7 +56,10 @@ def _fact(key: str, text: str = "something was said") -> dict:
 def test_locomo_turns_carry_their_dia_id_and_session():
     instance = next(load_locomo(LOCOMO))
 
-    assert instance.group_id == "locomo:fixture-conv-1"
+    # Prefixed by the dataset file's digest, so two files cannot share a
+    # scope. The instance's own id is still in there and still readable.
+    assert instance.group_id.startswith("locomo:")
+    assert instance.group_id.endswith("-fixture-conv-1")
     assert len(instance.turns) == 12
     assert instance.turns[0].key == "D1:1"
     assert instance.sessions["D2:3"] == "D2"
@@ -104,7 +107,8 @@ def test_longmemeval_gold_turns_come_from_has_answer():
     instances = list(load_longmemeval(LONGMEMEVAL))
 
     first = instances[0]
-    assert first.group_id == "lme:fixture-single-session-user"
+    assert first.group_id.startswith("lme:")
+    assert first.group_id.endswith("-fixture-single-session-user")
     assert first.questions[0].gold_turns == {"fixture_answer_1#0"}
     assert first.questions[0].gold_sessions == {"fixture_answer_1"}
 
@@ -510,3 +514,63 @@ def test_a_partly_written_scope_is_cleared_before_it_is_rewritten():
     # Capability-checked rather than required, because a competitor backend
     # cannot necessarily drop a scope it does not own.
     assert "if clear is not None" in source
+
+
+# --- a scope is only unique within a file --------------------------------
+
+
+def test_no_two_dataset_files_can_share_a_scope():
+    """The bug this exists for, found on an EC2 box on 2026-11-08.
+
+    Every one of these corpora numbers its instances **within a file**, and
+    every one ships more than one file: BEAM restarts `conversation_id` at 1
+    in each of its four splits, LongMemEval publishes `_s`, `_m` and
+    `_oracle` carrying the same `question_id` over very different haystacks,
+    and LoCoMo's `sample_id` means nothing outside `locomo10.json`.
+
+    So a run over one file overwrote the scopes of a run over another, and two
+    runs at once fought over the same `group_id`. **Nothing raises.** A
+    haystack half overwritten by another file scores as a retrieval failure
+    and reads as a result - a benchmark bug that produces a number instead of
+    an error.
+    """
+    from echo_memory.eval.external import load_beam
+
+    scopes = {
+        instance.group_id
+        for path in (FIXTURES / "beam_fixture.json", FIXTURES / "beam_10m_fixture.json")
+        for instance in load_beam(str(path))
+    }
+    tokens = {s.split(":")[1].rsplit("-", 1)[0] for s in scopes}
+
+    assert len(tokens) == 2, f"two different files produced the same scope token: {tokens}"
+
+
+def test_every_loader_keys_its_scopes_on_the_file():
+    """All three, not just the one the bug was found in. A fix applied to the
+    loader that happened to expose a class of bug leaves the other two
+    carrying it."""
+    import inspect
+
+    from echo_memory.eval import external
+
+    for name in ("load_locomo", "load_longmemeval", "load_beam"):
+        source = inspect.getsource(getattr(external, name))
+        assert "scope_token(path)" in source, f"{name} does not scope on the file"
+        assert "{token}-" in source, f"{name} computes a token and does not use it"
+
+
+def test_the_token_follows_the_contents_not_the_name(tmp_path):
+    """A file renamed is the same corpus and must resume; a file edited is a
+    different corpus and must not. That is exactly the distinction a digest
+    draws and a filename does not."""
+    from echo_memory.eval.external import scope_token
+
+    original = FIXTURES / "beam_fixture.json"
+    renamed = tmp_path / "something-else.json"
+    renamed.write_bytes(original.read_bytes())
+    edited = tmp_path / "edited.json"
+    edited.write_text(original.read_text().replace("conversation_id", "conversation_id ", 1))
+
+    assert scope_token(str(renamed)) == scope_token(str(original))
+    assert scope_token(str(edited)) != scope_token(str(original))

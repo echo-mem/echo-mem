@@ -51,7 +51,9 @@ def test_every_turn_in_the_file_reaches_the_store(migrated_db, embedder):
         written = external.ingest(conn, instance, embedder)
 
         assert written == len(instance.turns) == 12
-        assert _facts_in(conn, "locomo:fixture-conv-1") == 12
+        # The scope the loader chose, not a literal: scopes are keyed on the
+        # dataset file's digest so two files cannot overwrite each other.
+        assert _facts_in(conn, instance.group_id) == 12
 
 
 def test_a_long_turn_is_split_and_every_piece_is_stored(migrated_db, embedder):
@@ -132,7 +134,8 @@ def test_a_finished_scope_is_scored_again_but_not_rewritten(migrated_db, embedde
         assert second.turns_written == 0
         assert second.scopes_resumed == 1
         assert len(second.rows) == len(first.rows)
-        assert _facts_in(conn, "locomo:fixture-conv-1") == 12
+        scope = next(external.load_locomo(LOCOMO)).group_id
+        assert _facts_in(conn, scope) == 12
 
 
 def test_a_half_written_scope_is_rewritten_rather_than_trusted(migrated_db, embedder):
