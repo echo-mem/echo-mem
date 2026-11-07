@@ -424,13 +424,15 @@ They have now been worked through, one at a time, in
 criteria file permits N/A for that specific criterion, which was checked rather
 than assumed.
 
-Three are answered Unmet, all of them SUGGESTED, which do not block the badge:
+Two are answered Unmet, both SUGGESTED, which do not block the badge:
 
 | | why |
 |---|---|
-| `test_most` | coverage is not measured at all, so there is no number to claim |
 | `warnings_strict` | ruff near its defaults, and no type checker |
 | `dynamic_analysis` | no fuzzer and no sanitizer runs before a release |
+
+`test_most` was the third until 2026-11-07. Branch coverage is now measured
+at 76.48% and gated in CI, so it is Met with a number rather than argued.
 
 Each is a real gap, answered Unmet rather than argued into a Met. Two criteria,
 `know_secure_design` and `know_common_errors`, are assertions about the

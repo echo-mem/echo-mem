@@ -31,12 +31,16 @@ and still award the badge.
 
 The three Unmet answers are all SUGGESTED and all genuine:
 
-- **`test_most`** The project does not measure coverage at all: there is no pytest-cov, no coverage gate in CI, and therefore no number. 970 tests against a real database is not the same claim as branch coverage, and asserting "most" without measuring it would be exactly the unearned claim this project avoids elsewhere. SUGGESTED, so it does not block the passing badge.
 - **`warnings_strict`** ruff runs with close to its default rule set and a 100 character line length; there is no type checker, so no mypy or pyright strict mode. Honest answer is not maximally strict. SUGGESTED.
 - **`dynamic_analysis`** No fuzzer, no sanitizer and no dynamic analysis tool is applied before a release. For a pure Python project reading from PostgreSQL the usual candidates fit awkwardly, but nothing is being run and the answer is no. SUGGESTED.
 
 Each is a real gap, answered Unmet rather than argued into a Met, which is
 the whole reason this file exists.
+
+`test_most` was in this list until 2026-11-07 and is now Met: branch
+coverage is measured at **76.48%** and gated in CI. What it found on the
+first run is the part worth repeating - the three commands that erase,
+attest and expire customer data were the least covered code in the package.
 
 ## Basics
 
@@ -278,11 +282,15 @@ setuptools, build, pytest and ruff are all FLOSS.
 
 `pytest`, the standard invocation for Python.
 
-**`test_most`** `SUGGESTED` — **Unmet**
+**`test_most`** `SUGGESTED` — **Met**
 
 > It is SUGGESTED that the test suite cover most (or ideally all) the code branches, input fields, and functionality.
 
-The project does not measure coverage at all: there is no pytest-cov, no coverage gate in CI, and therefore no number. 970 tests against a real database is not the same claim as branch coverage, and asserting "most" without measuring it would be exactly the unearned claim this project avoids elsewhere. SUGGESTED, so it does not block the passing badge.
+**76.48% of statements and branches**, measured 2026-11-07 across 6,806 statements and 2,096 branches, with `--cov-fail-under` in CI so it cannot quietly fall. Branch coverage rather than line coverage, because a suite that executes every line while only ever taking one side of each `if` reports a much better number than it has earned, and the decisions are where this codebase has been wrong.
+
+The competitor adapters for Mem0, Zep, Letta and cognee sit at 0% and are **deliberately not excluded** from the measurement. They cannot run without SDKs that are not in this project's requirements, and omitting them would raise the headline figure by hiding exactly the code BENCHMARKS.md already labels unverified. A coverage number that excludes what is untested is not a coverage number.
+
+"Most" is claimed because it was measured, not asserted. The honest qualification is that 76% is not "ideally all", and the remaining quarter is concentrated in argparse wiring and those adapters.
 
 **`test_continuous_integration`** `SUGGESTED` — **Met**
 

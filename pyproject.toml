@@ -33,6 +33,7 @@ echo-memory = "echo_memory.cli.main:main"
 [project.optional-dependencies]
 dev = [
     "pytest>=8,<10",
+    "pytest-cov>=5,<8",
     "ruff>=0.6,<1",
     "build>=1,<2",
     "twine>=5,<8",
@@ -53,6 +54,31 @@ markers = [
     "eval: retrieval-quality evals against real data (reserved, not in use yet)",
 ]
 testpaths = ["tests"]
+
+[tool.coverage.run]
+# Measured against the installed package rather than the source tree, because
+# that is what the tests import and what a user runs. `branch` is on: a suite
+# that executes every line and only ever takes one side of each `if` reports
+# 100% while half the decisions are unexercised, and the decisions are where
+# the bugs in this codebase have been.
+source = ["echo_memory"]
+branch = true
+
+[tool.coverage.report]
+# Deliberately NOT omitting the competitor adapters, which sit at 0%. They
+# cannot be exercised without their SDKs, which are not in this project's
+# requirements because they pull mutually incompatible dependency trees - so
+# omitting them would raise the headline number by hiding exactly the code
+# BENCHMARKS.md already describes as unverified. A number that excludes what
+# is untested is not a coverage number.
+exclude_also = [
+    # A line that only runs under a type checker never runs under a test.
+    "if TYPE_CHECKING:",
+    # Re-raising after logging, where the test asserts on the raise.
+    "raise NotImplementedError",
+]
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 100
