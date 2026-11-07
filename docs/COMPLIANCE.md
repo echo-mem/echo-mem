@@ -175,21 +175,51 @@ Deployment secrets live in `/opt/echo-mem-cloud/.env` on the instance,
 readable by root, which is ordinary for Docker Compose and is the thing to
 replace first if this moves to a platform with a secret manager.
 
-### Two gaps, named rather than left to be found
+### Two gaps that were named here, now closed
 
-**No HSTS.** Plain HTTP redirects to HTTPS, but without
-`Strict-Transport-Security` a first visit over HTTP can have that redirect
-stripped by an active network attacker. It is a one line Caddy change and the
-only reason to be careful is that browsers cache it, so a short `max-age`
-comes first.
+Both were listed on this page as gaps before they were fixed, which is the
+order that makes a page like this worth reading.
 
-**No bucket policy denying non-TLS requests.** Uploads use HTTPS because the
-AWS SDK defaults to it, not because the bucket refuses anything else. A
-`Deny` on `aws:SecureTransport: false` would make it a property of the bucket
-rather than of the client.
+**HSTS**, added 2026-11-07. Plain HTTP already redirected to HTTPS, but a
+redirect is something an active network attacker can strip on a first visit,
+and that first visit is the one carrying a session cookie on the way back.
 
-Neither is exploitable from where the service stands today. Both are listed
-because a page that only lists what is right is not evidence of anything.
+```bash
+curl -sS -o /dev/null -D - https://app.echo-mem.com/healthz | grep -i strict
+# strict-transport-security: max-age=86400
+```
+
+`max-age` is deliberately one day rather than a year. Browsers **cache** this,
+so a wrong value cannot be withdrawn by editing the server: every visitor
+keeps enforcing it until their own copy expires. No `includeSubDomains` and no
+`preload`, for the same reason - both are far harder to take back than to add.
+It is raised once it has run unremarkably.
+
+**A bucket policy denying non-TLS requests**, added 2026-11-07. Uploads used
+HTTPS because the AWS SDK defaults to it, not because the bucket refused
+anything else. Now it is a property of the bucket:
+
+```bash
+aws s3api get-bucket-policy --bucket echomem-cloud-backups-190460274227
+# Deny s3:* when "aws:SecureTransport": "false"
+
+aws s3api list-objects-v2 --bucket echomem-cloud-backups-190460274227 \
+  --endpoint-url http://s3.ap-south-1.amazonaws.com
+# AccessDenied ... with an explicit deny in a resource-based policy
+```
+
+Checked in both directions rather than only the one that passes: the same
+call over HTTPS still lists the backups.
+
+### The gap that remains
+
+**The application still reaches Postgres over a plaintext connection**
+(`ssl = off`), on the Docker bridge, with 5433 filtered at the security group.
+Nothing leaves the host, so the exposure is an attacker who already has code
+execution on the instance - who at that point can read the data directory
+anyway. It is listed because a page that only lists what is right is not
+evidence of anything, and because "encrypted in transit" without this
+sentence would be a claim that is true of the edge and not of every hop.
 
 ## Retention and deletion
 

@@ -61,15 +61,36 @@ def test_the_page_says_facts_are_plaintext_rows():
     assert "no field level or column level encryption" in text.lower()
 
 
-def test_the_named_gaps_are_still_named():
-    """Two gaps are listed: no HSTS, and no bucket policy denying non-TLS. If
-    either is fixed, the fix includes deleting its paragraph - which this test
-    forces somebody to notice rather than leaving a page claiming a weakness
-    that is gone."""
+def test_the_page_does_not_still_claim_a_weakness_that_is_gone():
+    """This test did its job on 2026-11-07 and this is the result.
+
+    It used to assert that both gaps were named, so that fixing one would fail
+    here and force somebody to delete its paragraph. HSTS and the non-TLS
+    bucket deny both landed that day, and this failed, which is the only
+    reason the page was updated in the same change rather than left claiming
+    weaknesses the service no longer has.
+
+    Now it asserts the inverse, for the same reason: a page that still says
+    "No HSTS" after HSTS is live is as wrong as one that claims HSTS before
+    it is. Understating a security posture is believed rather than checked.
+    """
     text = flat(COMPLIANCE.read_text())
 
-    assert "No HSTS" in text
-    assert "No bucket policy denying non-TLS requests" in text
+    assert "No HSTS" not in text, "the page still says there is no HSTS"
+    assert "No bucket policy denying non-TLS requests" not in text
+    # The fixes, stated with the command that shows each one.
+    assert "strict-transport-security: max-age=" in text.lower()
+    assert "aws:SecureTransport" in text
+
+
+def test_the_gap_that_remains_is_still_named():
+    """One is left: the application reaches Postgres in plaintext. It has to
+    stay on the page until it is not true, because "encrypted in transit"
+    without this sentence is a claim about the edge rather than every hop."""
+    text = flat(COMPLIANCE.read_text())
+
+    assert "ssl = off" in text
+    assert "plaintext connection" in text
 
 
 # --- the half that is code -----------------------------------------------
