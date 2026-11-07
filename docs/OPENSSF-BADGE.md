@@ -31,7 +31,7 @@ and still award the badge.
 
 The three Unmet answers are all SUGGESTED and all genuine:
 
-- **`warnings_strict`** ruff runs with close to its default rule set and a 100 character line length; there is no type checker, so no mypy or pyright strict mode. Honest answer is not maximally strict. SUGGESTED.
+- **`warnings_strict`** mypy runs in CI as of 2026-11-07, but not in strict mode: `disallow_untyped_defs` is off and thirteen modules are still in a baseline. Closer than it was, and not yet maximally strict, which is what the criterion asks for. SUGGESTED.
 - **`dynamic_analysis`** No fuzzer, no sanitizer and no dynamic analysis tool is applied before a release. For a pure Python project reading from PostgreSQL the usual candidates fit awkwardly, but nothing is being run and the answer is no. SUGGESTED.
 
 Each is a real gap, answered Unmet rather than argued into a Met, which is
@@ -334,13 +334,13 @@ CI is a required status check on main, so a ruff finding blocks the merge rather
 
 **`warnings_strict`** `SUGGESTED` — **Unmet**
 
-> It is SUGGESTED that projects be maximally strict with warnings in the software produced by the project, where practical.
+> It is SUGGESTED that the project be maximally strict with warnings in the software produced by the project, where practical.
 
-ruff runs with close to its default rule set and a 100 character line length; there is no type checker, so no mypy or pyright strict mode. Honest answer is not maximally strict. SUGGESTED.
+ruff runs at close to its default rule set with a 100 character line length, and since 2026-11-07 **mypy runs in CI** on every pull request, configured in `pyproject.toml`.
 
-## Security
+It is not strict mode, so the answer is still Unmet rather than argued into a Met. `disallow_untyped_defs` and `disallow_incomplete_defs` are both off, because turning them on would produce roughly 400 errors about functions written before there was a checker, and a gate nobody can pass is a gate somebody deletes. Thirteen modules carry `ignore_errors` as a baseline.
 
-### Secure development knowledge
+The baseline **only shrinks**. Anything not named in it is checked, so a new module is checked from its first line and cannot join the back catalogue by accident. `server.py` and `retrieval/query_memory.py` hold 21 of the 61 remaining errors between them and are the code every read goes through, so they are the two worth doing first.
 
 **`know_secure_design`** `MUST` — **Met**
 

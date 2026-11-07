@@ -37,6 +37,19 @@ jobs:
       - name: Lint (ruff)
         run: ruff check .
 
+      - name: Types (mypy)
+        # Configured in pyproject, including the list of modules that do not
+        # check yet. That list only shrinks, so anything new is checked from
+        # its first line and cannot join the back catalogue by accident.
+        #
+        # Worth having on the first run alone: it found that the Letta adapter
+        # passed `token=` to a constructor that takes `api_key=`, so it raised
+        # TypeError the moment a token was set - which is the only way to
+        # reach Letta Cloud, which is the only Letta that serves this API. The
+        # adapter had never connected and nothing else could have noticed,
+        # because running it needs a paid account.
+        run: mypy
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
