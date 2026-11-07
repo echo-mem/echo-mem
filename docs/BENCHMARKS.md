@@ -517,3 +517,72 @@ at first.
 
 The most useful contribution to this repository is a measurement that disagrees
 with one of these.
+
+## Weighting the expansion rather than routing it, 2026-11-07
+
+Two earlier attempts to use the graph hop failed: always on cost **-0.142 MRR**
+on entity_pair, and routing it per query cut that damage by about 80% while
+still gaining nothing on multi hop. The diagnosis written down at the time was
+that the problem is the **fusion** rather than the walk - reciprocal rank
+fusion gives every list's top slot the same value, 1/(k+1), so a list ordered
+by proximity to what the query already matched spends a top slot on a fact the
+query did not ask for.
+
+That diagnosis is testable: give the expansion list a weight. `fusion` now
+takes one, `query_memory` takes `expansion_weight`, and `eval --ablate` scores
+two of them beside the unweighted hop.
+
+This author's store, `shared` scope, n=80 per shape, 2026-11-07:
+
+| shape | measure | shipping | hop at 1.0 | at 0.5 | at 0.2 |
+|---|---|---:|---:|---:|---:|
+| entity_pair | MRR | 0.811 | 0.570 | 0.653 | **0.811** |
+| entity_pair | ΔMRR | — | -0.2409 | -0.1578 | **-0.0002** |
+| prose | MRR | 0.988 | 0.847 | 0.893 | 0.969 |
+| prose | ΔMRR | — | -0.1406 | -0.0950 | -0.0187 |
+| entity_single | ΔMRR | — | -0.0260 ? | -0.0263 ? | -0.0098 ? |
+| multihop | recall@10 | 0.562 | **0.675** | 0.613 | 0.588 |
+| multihop | ΔMRR | — | -0.0137 ? | -0.0223 | -0.0051 ? |
+
+`?` marks an interval containing zero. The entity_pair interval at 0.2 is
+`[-0.0070, +0.0068]`, which is as close to "no effect" as this harness can
+report.
+
+### What this establishes
+
+**The weight is a dial between the two effects, and the damage can be dialled
+out entirely.** At 1.0 the hop costs a quarter of a point of MRR on
+entity_pair and raises multi hop recall@10 by 0.113. At 0.2 it costs nothing
+measurable anywhere and raises multi hop recall@10 by 0.026. So the first half
+of the diagnosis was right: the harm came from the fusion treating an
+expansion list as an equal ranker, and it goes away when it stops.
+
+### What it does not establish, which is the part that matters
+
+**It still does not turn expansion into an MRR gain on the shape it was built
+for.** Three attempts now - always on, routed, weighted - and multi hop MRR
+has not moved outside noise in any of them. The second fact is found and
+ranked badly, and weighting changes how badly rather than whether.
+
+**Whether +0.026 recall@10 at zero MRR cost is worth having is not answered
+here.** The harness bootstraps an interval for ΔMRR and not for Δrecall@10, so
+the one number that might justify turning this on is the one without an
+interval. Until that exists, turning it on would be choosing a configuration
+on a point estimate, which is what the salience and routing experiments were
+careful not to do.
+
+So `expansion_weight` ships **off**, like every other change to what a query
+returns that the eval has not endorsed, and it is kept with its numbers so the
+next person to have this idea finds the experiment rather than repeating it.
+
+### The obvious next step
+
+Give the ablation table a bootstrapped interval on Δrecall@10. It is the same
+paired resample already used for ΔMRR over a different per case statistic, and
+it would decide this question rather than leaving it open.
+
+A second one worth naming: every number above comes from questions derived
+from their own answers on a 411 fact store. LoCoMo's multi hop split is 282
+questions nobody derived, and it already scores this system at MRR 0.360 with
+recall@10 0.361, so it has far more room to show a recall gain than this store
+does. Running the three weights there is the real test.
