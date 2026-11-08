@@ -9,6 +9,35 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**The ablation table reports an interval for recall@10, and it changes what
+several past experiments mean.** Until now `compare` bootstrapped the
+per-case reciprocal ranks and nothing else, so every row carried an interval
+for ΔMRR and a bare point estimate for Δrecall@10 - the metric most retrieval
+changes here actually move.
+
+On the multihop shape at n=120 that was the difference between "no effect"
+and a result:
+
+| configuration | ΔR@10 | 95% CI | ΔMRR |
+|---|---|---|---|
+| + graph hop | **+0.1083** | [+0.017, +0.200] | +0.0034 ? |
+| + routed expansion | **+0.0917** | [+0.008, +0.167] | +0.0131 ? |
+| + expansion at 0.2 | **+0.0667** | [+0.025, +0.117] | +0.0041 ? |
+
+`?` marks an interval containing zero. Every one of those rows was read as
+noise on the strength of its ΔMRR interval, and every one moves recall@10 by
+an amount whose interval is clear of zero.
+
+`docs/BENCHMARKS.md` asked, in the weighted-expansion section, whether a small
+recall gain at no MRR cost was worth having and answered "not answered,
+because the harness bootstraps an interval for ΔMRR and not for Δrecall@10".
+It is answered now, on this store: at weight 0.2, **+0.0667 [+0.025, +0.117]**
+recall@10 with ΔMRR inside noise.
+
+`Result` keeps the per-case rank for this. `hits_at` counts the same thing and
+cannot be resampled: a bootstrap needs the per-case values, not their total.
+
+
 **Benchmark scopes are keyed on the dataset file, and the old ids do not
 match.** Every published corpus numbers its instances within a file, and all
 three ship more than one: BEAM restarts `conversation_id` at 1 in each of its
