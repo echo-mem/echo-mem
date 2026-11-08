@@ -209,17 +209,19 @@ def compare(baseline: Result, variant: Result, resamples: int = BOOTSTRAP_RESAMP
     # moving MRR by +0.003, and the rerank moved it 0.570 to 0.720. Reporting
     # an interval for the metric that did not move, and a bare point estimate
     # for the one that did, is the shape of a result nobody can act on.
+    def hits(result: Result, k: int) -> list[float]:
+        return [0.0 if r is None else float(r <= k) for r in result.ranks]
+
+    before: list[float]
+    after: list[float]
     if at is None:
-        series = (baseline.reciprocal_ranks, variant.reciprocal_ranks)
+        before, after = baseline.reciprocal_ranks, variant.reciprocal_ranks
     else:
-        series = tuple(
-            [0.0 if r is None else float(r <= at) for r in result.ranks]
-            for result in (baseline, variant)
-        )
-        if len(series[0]) != len(series[1]):
+        before, after = hits(baseline, at), hits(variant, at)
+        if len(before) != len(after):
             raise ValueError("compare needs both configurations scored on the same cases")
 
-    diffs = [v - b for v, b in zip(series[1], series[0], strict=True)]
+    diffs = [v - b for v, b in zip(after, before, strict=True)]
     if not diffs:
         return {"delta": 0.0, "low": 0.0, "high": 0.0, "significant": False}
 
