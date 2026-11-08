@@ -600,6 +600,11 @@ ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
     "1", "true", "yes",
 )
 
+# Whether the fused candidates are reordered by similarity to the query before
+# being truncated. Off until the eval says otherwise, like every other change
+# to what a query returns.
+RERANK = os.environ.get("ECHO_MEMORY_RERANK", "").lower() in ("1", "true", "yes")
+
 
 def needs_expansion(conn, group_id: str, query: str) -> bool:
     """Whether this question needs a second fact to answer it.
@@ -990,6 +995,7 @@ def query_memory(
     digest: bool = False, lexical_only: bool = False,
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
+    rerank: bool | None = None,
     expansion_weight: float | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
@@ -1182,6 +1188,34 @@ def query_memory(
             if (hops or salient) else content
         )
         by_score = sorted(fused, key=fused.get, reverse=True)
+
+        # Reciprocal rank fusion sees rank POSITION and nothing else. That is
+        # its virtue - it needs no comparable scores - and it is the single
+        # mechanism behind three failed experiments: the graph hop (-0.142 MRR
+        # on entity_pair), routing it per query (-0.0002 on the shape it was
+        # built for), and session expansion (-0.107 hit@10 on BEAM 100K). Each
+        # added a list, each list was ordered by something that was not the
+        # query, and each spent a top slot worth 1/(k+1) on a fact nothing had
+        # scored.
+        #
+        # So look at the content once more at the end. The fusion decides
+        # which candidates are in play, which is what it is good at, and
+        # cosine to the query decides their order, which it cannot do at all.
+        # Cheap: the embeddings are already stored and already indexed, and
+        # this scores at most LIST_DEPTH of them.
+        reranking = RERANK if rerank is None else rerank
+        if reranking and query_embedding is not None and by_score:
+            pool = by_score[:LIST_DEPTH]
+            scored = _missing_similarity(conn, group_id, query_embedding, pool)
+            # A candidate the vector channel already scored keeps that score;
+            # one only the lexical channel or an expansion found gets the
+            # number computed here. Ties fall back to the fused order rather
+            # than to an arbitrary one, so a rerun ranks the same.
+            order = {edge_id: i for i, edge_id in enumerate(pool)}
+            by_score = sorted(
+                pool,
+                key=lambda e: (-(similarity.get(e, scored.get(e, 0.0))), order[e]),
+            ) + by_score[LIST_DEPTH:]
         # Diversify before truncating, not after: the point is to choose which
         # top_k, and slicing first throws away the candidates MMR would swap in.
         ranked_ids = (
