@@ -37,6 +37,22 @@ recall@10 with ΔMRR inside noise.
 `Result` keeps the per-case rank for this. `hits_at` counts the same thing and
 cannot be resampled: a bootstrap needs the per-case values, not their total.
 
+**The embedding model is selectable, and it is the ceiling.** `LocalEmbedder`
+has described `all-MiniLM-L6-v2` as "a placeholder default pending real
+quality tuning, not a considered final choice" since the first commit. On
+this author's store its embeddings have an effective rank of **43 of 384** by
+participation ratio, with half the variance in nineteen dimensions and a
+shared mean direction of norm 0.416. Anisotropy that severe is why unrelated
+facts score as similar, and it is what `recall@1` of 0.087 on BEAM's 1M split
+looks like from the outside.
+
+`ECHO_MEMORY_EMBEDDING_MODEL` selects another one. **No default changes.**
+
+Bounded by the schema on purpose: the embedding column is `vector(384)`, so
+an unknown name is refused with the list of known 384-dimension models
+*before* a few hundred megabytes are downloaded, and the loaded model's real
+width is checked as well.
+
 
 **Benchmark scopes are keyed on the dataset file, and the old ids do not
 match.** Every published corpus numbers its instances within a file, and all
