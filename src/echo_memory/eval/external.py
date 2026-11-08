@@ -90,10 +90,37 @@ KS = (1, 5, 10, 20, 30)
 # <date>: ") is added after chunking, which is what the headroom is for.
 MAX_FACT = 3500
 
+#: What the embedding model can actually read. `all-MiniLM-L6-v2` truncates at
+#: 256 word pieces, which is about 1,500 characters, and every other 384
+#: dimension model in `KNOWN_384` is the same or smaller. MAX_FACT was chosen
+#: for `write_episode`'s refusal limit and nothing has ever compared the two.
+#:
+#: They disagree by more than a factor of two, and the consequence is silent:
+#: a 3,000 character turn is stored whole, embedded to its first ~1,500, and
+#: the back half can never be retrieved by the vector channel because the
+#: model never saw it. BEAM's turns are median 1,226 characters and p90 3,226,
+#: so this is most of its long ones.
+#:
+#: 1,100 rather than 1,500: the chunker cuts at a paragraph or sentence
+#: boundary and `embedding_text` prepends both entity names, so a chunk has to
+#: leave room for both without pushing the tail past the window.
+EMBED_WINDOW = 1100
 
-def chunks(text: str, size: int = MAX_FACT) -> list[str]:
+
+def chunks(text: str, size: int = EMBED_WINDOW) -> list[str]:
     """Split on a paragraph or sentence boundary where there is one nearby, so
-    a chunk is still something a reader could act on."""
+    a chunk is still something a reader could act on.
+
+    The default is the EMBEDDING window, not `write_episode`'s refusal limit.
+    Those are different numbers and chunking to the larger one stores text the
+    vector channel can never retrieve: the model reads the first 256 word
+    pieces and the rest is invisible to it.
+
+    It also decides what a returned fact COSTS. BEAM at 30 facts returned
+    65,729 characters, about 16,400 tokens, because a returned unit was a
+    whole 2,200 character turn of which a line or two was relevant. Smaller
+    units mean the same evidence at a fraction of the context.
+    """
     if len(text) <= size:
         return [text]
     out = []
@@ -109,7 +136,14 @@ def chunks(text: str, size: int = MAX_FACT) -> list[str]:
         ]
         cut = max(candidates, default=0)
         if cut < size // 2:
-            cut = size
+            # No sentence or paragraph boundary in the back half of the
+            # window. Fall back to the last SPACE rather than to the window
+            # edge: cutting mid word leaves half a token in each chunk, which
+            # is a word neither the embedder nor BM25 can match. Latent until
+            # the window shrank to the embedding limit and started landing
+            # inside words.
+            space = window.rfind(' ')
+            cut = space + 1 if space > size // 2 else size
         out.append(text[:cut].strip())
         text = text[cut:].strip()
     if text:
