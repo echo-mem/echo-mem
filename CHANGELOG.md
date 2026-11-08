@@ -53,6 +53,35 @@ an unknown name is refused with the list of known 384-dimension models
 *before* a few hundred megabytes are downloaded, and the loaded model's real
 width is checked as well.
 
+**The fusion never looked at the content again, and that was three failures
+in one.** Reciprocal rank fusion sees rank position and nothing else, so every
+list it is handed gets a top slot worth `1/(k+1)` whoever produced it. The
+graph hop (-0.142 MRR on entity_pair), routing it per query (-0.0002 on the
+shape it was built for) and session expansion (-0.107 hit@10 on BEAM 100K) all
+added a list ordered by something that was not the query, and all three lost.
+
+`query_memory(rerank=True)` reorders the fused candidates by similarity to the
+query before truncating. The fusion still chooses which candidates are in
+play, which is what it is good at; cosine decides their order, which it cannot
+do at all. The embeddings are already stored and indexed, so this scores at
+most `LIST_DEPTH` of them.
+
+Measured on this author's store, n=200 per shape:
+
+| shape | shipping | + rerank | + rerank + hop |
+|---|---|---|---|
+| entity_pair MRR | 0.741 | **0.848** | 0.848 |
+| multihop MRR | 0.176 | 0.209 | **0.221** |
+| multihop recall@10 | 0.570 | 0.680 | **0.720** |
+
+Intervals clear of zero on both: +0.1063 [+0.0622, +0.1501] and +0.0444
+[+0.0270, +0.0618].
+
+It also **rescues the graph hop**. Alone the hop costs -0.215 MRR on
+entity_pair; with the rerank that damage is gone and multi hop gains, because
+the hop was always finding the second fact and ranking it badly. Still off by
+default until BEAM confirms it on questions nobody derived.
+
 
 **Benchmark scopes are keyed on the dataset file, and the old ids do not
 match.** Every published corpus numbers its instances within a file, and all

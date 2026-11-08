@@ -1170,6 +1170,10 @@ def main(argv: list[str] | None = None) -> int:
                 # number reported as a finding.
                 ("+ expansion at 0.5", {"graph_hops": 1, "expansion_weight": 0.5}),
                 ("+ expansion at 0.2", {"graph_hops": 1, "expansion_weight": 0.2}),
+                # Look at the content once more at the end. The fusion
+                # chooses the candidates, cosine to the query orders them.
+                ("+ rerank", {"rerank": True}),
+                ("+ rerank + hop", {"rerank": True, "graph_hops": 1}),
                 ("+ salience", {"use_salience": True}),
             ]
 
