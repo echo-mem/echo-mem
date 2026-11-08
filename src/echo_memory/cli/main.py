@@ -1170,6 +1170,12 @@ def main(argv: list[str] | None = None) -> int:
                 # number reported as a finding.
                 ("+ expansion at 0.5", {"graph_hops": 1, "expansion_weight": 0.5}),
                 ("+ expansion at 0.2", {"graph_hops": 1, "expansion_weight": 0.2}),
+                # The rest of the conversation the best results came from.
+                # Weighted and unweighted, because an expansion list that
+                # arrives worth as much as a content channel is what cost the
+                # graph hop -0.142 MRR.
+                ("+ session expansion", {"expand_sessions": True}),
+                ("+ sessions at 0.3", {"expand_sessions": True, "expansion_weight": 0.3}),
                 ("+ salience", {"use_salience": True}),
             ]
 

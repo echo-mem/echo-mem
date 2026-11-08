@@ -249,3 +249,42 @@ def test_plans_are_ordered_by_number_not_lexically():
     names = ["plan-1", "plan-10", "plan-2", "plan-9"]
 
     assert sorted(names, key=_plan_order) == ["plan-1", "plan-2", "plan-9", "plan-10"]
+
+
+def test_two_splits_do_not_share_a_scope():
+    """BEAM numbers conversations from 1 **within each split**, so
+    `conversation_id` 1 is a different conversation in 100K, 500K, 1M and 10M.
+
+    Scoping on it alone means a 500K run silently overwrites a 100K scope, and
+    two runs over different splits at the same time fight over the same
+    group_id and corrupt each other's haystacks. Both happened on an EC2 box
+    on 2026-11-08: a re-run reported "0 already present" for scopes that had
+    finished an hour before, which is what exposed it.
+
+    Nothing raises when it happens. A corrupted haystack scores as a retrieval
+    failure and looks like a result.
+    """
+    small = next(iter(load_beam(FIXTURE)))
+    ten = next(iter(load_beam(TEN_M)))
+
+    assert small.instance_id != ten.instance_id
+    assert small.group_id != ten.group_id
+
+
+def test_the_scope_still_matches_the_prefix_that_guards_a_real_store():
+    """`foreign_facts` refuses to run when the database holds anything outside
+    `beam:%`. A scope that stopped matching it would disable the one guard
+    standing between a benchmark and somebody's real memory."""
+    for path in (FIXTURE, TEN_M):
+        instance = next(iter(load_beam(path)))
+        assert instance.group_id.startswith(f"{PREFIXES['beam']}:")
+
+
+def test_the_same_file_always_scopes_the_same_way():
+    """Resume depends on it. A scope id that moved between runs would make
+    every finished instance look unwritten, re-ingesting a corpus that is
+    already there - which at 10M is hours."""
+    first = [i.group_id for i in load_beam(FIXTURE)]
+    second = [i.group_id for i in load_beam(FIXTURE)]
+
+    assert first == second

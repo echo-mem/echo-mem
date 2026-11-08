@@ -447,6 +447,83 @@ def _vector_candidates(
 
 
 
+# How many of the best-ranked facts seed the session expansion. Small on
+# purpose: every seed drags in a whole conversation, and the fifth-ranked
+# fact's conversation is already a long way from the question.
+SESSION_SEEDS = 3
+
+
+def _session_candidates(
+    conn, group_id: str, seed_edge_ids: list[str], limit: int, as_of: int | None = None
+) -> list[str]:
+    """The rest of the conversation the best-ranked facts came from.
+
+    Measured on BEAM 100K, 2026-11-08, over 400 questions people wrote:
+
+        ability                  session@10   hit@10     gap
+        instruction_following         0.975    0.100   0.875
+        preference_following          0.974    0.308   0.667
+        event_ordering                0.828    0.256   0.571
+        summarization                 0.894    0.528   0.367
+
+    The right conversation came back 94.5% of the time overall and the right
+    line in it 62.1% of the time. For instruction following those numbers are
+    97.5% and 10%: retrieval is not lost, it arrives and then picks the wrong
+    lines. Four abilities, 160 of 400 questions, sit in that state.
+
+    The reason is visible in the questions. "Have I been following the
+    approach I said I would?" does not quote the instruction it is asking
+    about, so nothing in the instruction's own text resembles the question,
+    while every turn discussing the topic does. Similarity ranking cannot
+    close that, and no amount of a larger k fixes a ranking that puts the
+    answer below everything about its subject.
+
+    What can is this: the session is already found. A conversation is a unit
+    somebody wrote in one sitting, `write_episode` has always taken one, and
+    every fact records it in `provenance.session_id`. If the query matched a
+    fact in a session, the rest of that session is where an unquoted
+    instruction, a stated preference, or the turn before an event lives.
+
+    Ordered by the seed they came from, like the graph hop, and by edge id
+    within a seed - arbitrary as relevance and FIXED, so a rerun scores the
+    same thing twice.
+    """
+    if not seed_edge_ids:
+        return []
+    live = live_clause("f", as_of)
+    rows = conn.execute(
+        f"""WITH seeds AS (
+                SELECT e.id AS seed,
+                       (e.properties -> '"provenance"'::agtype
+                          ->> '"session_id"'::agtype) AS session
+                  FROM {GRAPH}."FACT" e
+                 WHERE e.id = ANY(SELECT unnest(%s::text[])::graphid)
+            )
+            SELECT seeds.seed::text, f.id::text
+              FROM seeds
+              JOIN {GRAPH}."FACT" f
+                ON (f.properties -> '"provenance"'::agtype
+                      ->> '"session_id"'::agtype) = seeds.session
+             WHERE (f.properties ->> '"group_id"'::agtype) = %s
+               AND seeds.session IS NOT NULL
+               AND {live}""",
+        ([str(i) for i in seed_edge_ids], group_id),
+    ).fetchall()
+
+    order = {edge_id: i for i, edge_id in enumerate(seed_edge_ids)}
+    found: dict[str, int] = {}
+    for seed, edge_id in rows:
+        member = str(edge_id)
+        if member in order:
+            # A seed is already in the content lists. Re-ranking a fact
+            # against itself is what the fusion is for.
+            continue
+        rank = order[str(seed)]
+        if member not in found or rank < found[member]:
+            found[member] = rank
+    return [e for e, _ in sorted(found.items(), key=lambda kv: (kv[1], int(kv[0])))][:limit]
+
+
 def _graph_candidates(
     conn, group_id: str, seed_edge_ids: list[str], limit: int, as_of: int | None = None
 ) -> list[str]:
@@ -597,6 +674,14 @@ USE_SALIENCE = os.environ.get("ECHO_MEMORY_SALIENCE", "").lower() in ("1", "true
 # returns, and the hop it turns on is the one measured at -0.142 MRR when it
 # was on for everybody.
 ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
+    "1", "true", "yes",
+)
+
+# Whether a query also returns the rest of the conversation its best results
+# came from. Off until the eval says otherwise, like every other change to
+# what a query returns. The measurement that motivates it is in
+# _session_candidates and in docs/BENCHMARKS.md.
+EXPAND_SESSIONS = os.environ.get("ECHO_MEMORY_EXPAND_SESSIONS", "").lower() in (
     "1", "true", "yes",
 )
 
@@ -991,6 +1076,7 @@ def query_memory(
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
     expansion_weight: float | None = None,
+    expand_sessions: bool | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
     about: list[str] | None = None,
@@ -1099,6 +1185,27 @@ def query_memory(
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
         lists = [vector_ids, lexical_ids]
         weights: list[float] | None = None
+
+        def expand_with(candidates: list[str]) -> None:
+            """Add an expansion list, at the expansion weight if one is set.
+
+            A function because there are three callers now and the first
+            version built `weights` inside the graph hop's branch, so a
+            session expansion with no hop left it None and the weight silently
+            did nothing. The two ablation rows printed identical numbers,
+            which is what caught it: a weighted and an unweighted
+            configuration that agree to three decimals are not two
+            configurations.
+            """
+            nonlocal weights
+            lists.append(candidates)
+            if expansion_weight is None:
+                return
+            if weights is None:
+                # Everything already in `lists` is a content channel and keeps
+                # full weight; only expansions are discounted.
+                weights = [1.0] * (len(lists) - 1)
+            weights.append(expansion_weight)
         # Routed, not configured. graph_hops=None asks the router; an explicit
         # 0 or 1 overrides it, which is what the harness needs to score the
         # router against always-on and always-off.
@@ -1154,32 +1261,35 @@ def query_memory(
                 allowed = set(only)
                 neighbours = [e for e in neighbours if e in allowed]
             graph_ids = neighbours
-            lists.append(neighbours)
-            # What a neighbour's top slot is worth against a match's top
-            # slot. None means the same, which is plain RRF and what the two
-            # failed attempts above both used. See fusion.py: the hypothesis
-            # this exists to test is that expansion failed because of the
-            # fusion rather than because of the walk, since the walk demonstrably
-            # finds the second fact - multihop recall@10 0.635 to 0.769 - and
-            # only ranks it badly.
-            if expansion_weight is not None:
-                weights = [1.0] * (len(lists) - 1) + [expansion_weight]
-        # Salience last, over the candidates the content channels found, so
-        # it can reorder an answer but never add to one. It is a prior on
-        # facts, not a signal about this query.
+            expand_with(neighbours)
+        # The rest of the conversation the best results came from. Separate
+        # from the graph hop because it answers a different failure: the hop
+        # looks for a second fact about the same ENTITY, this looks for the
+        # turn next to one that matched. On BEAM the second failure is far
+        # the larger - session@10 0.945 against hit@10 0.621 - and it is
+        # concentrated in the abilities where the question does not quote
+        # what it asks about.
+        sessions_on = EXPAND_SESSIONS if expand_sessions is None else expand_sessions
+        if sessions_on:
+            seeds = sorted(content, key=content.get, reverse=True)[:SESSION_SEEDS]
+            members = _session_candidates(
+                conn, group_id, seeds, LIST_DEPTH, as_of=as_of
+            )
+            if only is not None:
+                allowed = set(only)
+                members = [e for e in members if e in allowed]
+            expand_with(members)
+
         salient = USE_SALIENCE if use_salience is None else use_salience
         if salient:
             by_content = sorted(content, key=content.get, reverse=True)
-            lists.append(salience.rank(conn, group_id, by_content))
-            if weights is not None:
-                # Salience is a prior on facts rather than a signal about this
-                # query, so it gets the expansion's weight rather than a
-                # content channel's. Full weight here would reintroduce
-                # exactly the problem the weight exists to test.
-                weights.append(expansion_weight or 1.0)
+            # Salience is a prior on facts rather than a signal about this
+            # query, so it is discounted like an expansion rather than
+            # trusted like a content channel.
+            expand_with(salience.rank(conn, group_id, by_content))
         fused = (
             reciprocal_rank_fusion(lists, k=k, weights=weights)
-            if (hops or salient) else content
+            if (hops or salient or sessions_on) else content
         )
         by_score = sorted(fused, key=fused.get, reverse=True)
         # Diversify before truncating, not after: the point is to choose which
