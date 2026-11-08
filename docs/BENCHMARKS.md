@@ -578,6 +578,59 @@ dataset, `Mohammadta/BEAM-10M`. `tests/fixtures/beam_fixture.json` is a real
 row trimmed to three sessions and one question per ability, which is what the
 loader's tests run against.
 
+## Expanding to the session, measured and rejected, 2026-11-08
+
+BEAM 100K said the failure was not finding the conversation. The right
+session came back **94.5%** of the time and the right line in it **62.1%**;
+on instruction following, 97.5% and 10.0%:
+
+| ability | session@10 | hit@10 | gap |
+|---|---:|---:|---:|
+| instruction_following | 0.975 | 0.100 | 0.875 |
+| preference_following | 0.974 | 0.308 | 0.667 |
+| event_ordering | 0.828 | 0.256 | 0.571 |
+| summarization | 0.894 | 0.528 | 0.367 |
+
+The reason is in the questions. "Have I been following the approach I said I
+would?" never quotes the instruction it asks about, so the instruction's own
+text resembles the question less than every turn discussing the topic does.
+A larger `k` cannot fix a ranking that puts the answer below everything about
+its subject.
+
+So the obvious move was to return the rest of the conversation.
+`write_episode` has always taken a session and every fact records it in
+`provenance.session_id`, so nothing new had to be stored.
+
+**It made every split worse.** Same questions, same haystack, resumed rather
+than re-ingested, so the only difference between the columns is the query:
+
+| split | hit@10 off | hit@10 on | delta |
+|---|---:|---:|---:|
+| 100K | 0.621 | 0.514 | **-0.107** |
+| 500K | 0.593 | 0.562 | -0.031 |
+| 1M | 0.549 | 0.521 | -0.028 |
+
+Including on instruction following, the ability it was built for: 0.100 to
+0.030.
+
+### Why, and what three failures finally located
+
+A BEAM session is sixty turns or more. Expanding returns up to `LIST_DEPTH`
+of them ordered by edge id, and reciprocal rank fusion hands that list a top
+slot worth `1/(k+1)` exactly like a content channel's. The session was
+already being found; adding fifty of its turns does not help *pick* the line,
+it displaces the lines that were already right.
+
+That is the third expansion to fail for one reason - always on, routed per
+query, and now by session. The three together are what located it: **the
+fusion never looks at the content again.** Any list ordered by something
+other than the query spends a top slot on a fact nothing scored. The answer
+is not a fourth list; it is to look at the content once more at the end,
+which is what the rerank does.
+
+`expand_sessions` ships off and is kept with its numbers, like salience and
+routed expansion, so the next person to have this idea finds the experiment.
+
 ## Reproducing any of it
 
 Point the two external benchmarks at a scratch database. They write real facts

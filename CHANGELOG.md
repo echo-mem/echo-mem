@@ -9,6 +9,22 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Session expansion: measured, rejected, kept with its numbers.** BEAM said
+the right conversation comes back 94.5% of the time and the right line in it
+62.1%, so returning the rest of the conversation looked obvious. It made
+every split worse - `hit@10` -0.107 at 100K, -0.031 at 500K, -0.028 at 1M -
+including on instruction following, the ability it was built for.
+
+A BEAM session is sixty turns or more, and reciprocal rank fusion gives that
+list a top slot worth the same as a content channel's. The session was
+already being found; adding fifty of its turns displaces the lines that were
+right.
+
+Off by default, with its numbers in `docs/BENCHMARKS.md`, like salience and
+routed expansion. Three expansions have now failed for one reason, and the
+three together are what located it.
+
+
 **Benchmark scopes are keyed on the dataset file, and the old ids do not
 match.** Every published corpus numbers its instances within a file, and all
 three ship more than one: BEAM restarts `conversation_id` at 1 in each of its
