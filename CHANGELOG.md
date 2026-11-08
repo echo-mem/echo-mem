@@ -9,6 +9,35 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**The embedder never saw half the text.** `all-MiniLM-L6-v2` truncates its
+input at 256 word pieces, about 1,500 characters. The benchmark loaders
+chunked at `MAX_FACT = 3500`, which is `write_episode`'s refusal limit and
+has nothing to do with the embedding window. Nothing had ever compared the
+two numbers.
+
+The consequence is silent. A 3,000 character turn is stored whole, embedded
+to its first ~1,500, and the back half can never be retrieved by the vector
+channel because the model never read it. BEAM's turns are median 1,226
+characters with p90 3,226, so this is most of its long ones, and it explains
+the shape of those results: `session@10` 0.945 against `hit@10` 0.621 is what
+"the turn is findable through its neighbours but its own tail is invisible"
+looks like.
+
+Chunking is now bounded by `EMBED_WINDOW = 1100`. On a BEAM conversation that
+turns 32 stored turns into 66 retrievable units, median 850 characters, every
+one inside the window, with the text unchanged.
+
+It cuts the context cost at the same time: a returned unit was a 2,200
+character turn of which a line or two was relevant, so thirty of them cost
+about 16,400 tokens. At this size the same thirty cost about a third of that.
+
+**The chunker also cut mid word.** When no sentence or paragraph boundary fell
+in the back half of the window it cut at the window edge, leaving half a token
+in each chunk - a word neither the embedder nor BM25 can match. Latent while
+the window was 3,500 characters and the fixtures had boundaries; the moment it
+shrank it started landing inside words. It falls back to the last space now.
+
+
 **Benchmark scopes are keyed on the dataset file, and the old ids do not
 match.** Every published corpus numbers its instances within a file, and all
 three ship more than one: BEAM restarts `conversation_id` at 1 in each of its
