@@ -137,6 +137,13 @@ class Result:
     cases: int = 0
     hits_at: dict[int, int] = field(default_factory=lambda: {1: 0, 3: 0, 5: 0, 10: 0})
     reciprocal_ranks: list[float] = field(default_factory=list)
+    #: The rank each case became answerable at, or None when it never did.
+    #: `hits_at` counts the same thing and cannot be resampled: a bootstrap
+    #: needs the per-case values, not their total. Kept beside the reciprocal
+    #: ranks rather than derived from them, because 1/rank loses the
+    #: difference between "rank 11" and "never" once both round to 0.0 at the
+    #: k being asked about.
+    ranks: list[float | None] = field(default_factory=list)
     returned_chars: list[int] = field(default_factory=list)
     empty: int = 0
     shape: str = SHAPE_ENTITY_PAIR
@@ -172,6 +179,7 @@ class Result:
 
 
 def compare(baseline: Result, variant: Result, resamples: int = BOOTSTRAP_RESAMPLES,
+            at: int | None = None,
             seed: int = 7) -> dict:
     """Is variant actually different from baseline, or is it noise?
 
@@ -195,8 +203,23 @@ def compare(baseline: Result, variant: Result, resamples: int = BOOTSTRAP_RESAMP
     if len(baseline.reciprocal_ranks) != len(variant.reciprocal_ranks):
         raise ValueError("compare needs both configurations scored on the same cases")
 
-    diffs = [v - b for v, b in zip(variant.reciprocal_ranks, baseline.reciprocal_ranks,
-                                   strict=True)]
+    # Which per-case series to resample. MRR was the only one for a long time,
+    # and it is the wrong one for several of the changes measured against this
+    # harness: the graph hop moved multihop recall@10 from 0.635 to 0.769 while
+    # moving MRR by +0.003, and the rerank moved it 0.570 to 0.720. Reporting
+    # an interval for the metric that did not move, and a bare point estimate
+    # for the one that did, is the shape of a result nobody can act on.
+    if at is None:
+        series = (baseline.reciprocal_ranks, variant.reciprocal_ranks)
+    else:
+        series = tuple(
+            [0.0 if r is None else float(r <= at) for r in result.ranks]
+            for result in (baseline, variant)
+        )
+        if len(series[0]) != len(series[1]):
+            raise ValueError("compare needs both configurations scored on the same cases")
+
+    diffs = [v - b for v, b in zip(series[1], series[0], strict=True)]
     if not diffs:
         return {"delta": 0.0, "low": 0.0, "high": 0.0, "significant": False}
 
@@ -381,8 +404,10 @@ def run(conn, group_id: str, embedder, cases: list[Case], name: str, **kwargs) -
         rank = max(at.values()) if len(at) == len(needed) else None
         if rank is None:
             result.reciprocal_ranks.append(0.0)
+            result.ranks.append(None)
             continue
         result.reciprocal_ranks.append(1.0 / rank)
+        result.ranks.append(float(rank))
         for k in result.hits_at:
             if rank <= k:
                 result.hits_at[k] += 1
@@ -499,22 +524,28 @@ def render(results: list[Result]) -> str:
         lines.append(f"{shape}  ({SHAPE_NOTES[shape]})")
         head = (
             f"  {'configuration':<26}{'R@1':>7}{'R@3':>7}{'R@10':>7}"
-            f"{'MRR':>8}{'ΔMRR':>9}{'95% CI':>20}{'tokens':>9}"
+            f"{'ΔR@10':>9}{'95% CI':>19}"
+            f"{'MRR':>7}{'ΔMRR':>9}{'95% CI':>19}"
         )
         lines.append(head)
         lines.append("  " + "-" * (len(head) - 2))
         for r in group:
-            if r is baseline:
-                delta_cell, ci_cell = f"{'—':>9}", f"{'baseline':>20}"
-            else:
-                c = compare(baseline, r)
-                delta_cell = f"{c['delta']:>+9.4f}"
+            def cells(c):
+                if c is None:
+                    return f"{'—':>9}", f"{'baseline':>19}"
                 marker = "" if c["significant"] else " ?"
-                ci_cell = f"[{c['low']:>+7.4f},{c['high']:>+7.4f}]{marker:>2}"
+                return (
+                    f"{c['delta']:>+9.4f}",
+                    f"[{c['low']:>+6.3f},{c['high']:>+6.3f}]{marker:>2}",
+                )
+
+            hit_delta, hit_ci = cells(None if r is baseline else compare(baseline, r, at=10))
+            mrr_delta, mrr_ci = cells(None if r is baseline else compare(baseline, r))
             lines.append(
                 f"  {r.name:<26}"
                 f"{r.recall(1):>7.3f}{r.recall(3):>7.3f}{r.recall(10):>7.3f}"
-                f"{r.mrr:>8.3f}{delta_cell}{ci_cell:>20}{r.mean_tokens:>9,}"
+                f"{hit_delta}{hit_ci:>19}"
+                f"{r.mrr:>7.3f}{mrr_delta}{mrr_ci:>19}"
             )
         lines.append(
             f"  n={baseline.cases}, SE(MRR)≈{baseline.mrr_stderr:.3f}, "
