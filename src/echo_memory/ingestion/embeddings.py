@@ -2,7 +2,6 @@
 tool contract "architecture pivot" note). Swappable behind the Embedder
 protocol if local quality proves insufficient later."""
 
-import os
 import threading
 from typing import Protocol
 
@@ -45,62 +44,14 @@ class Embedder(Protocol):
         ...
 
 
-#: The schema's vector width, from migration 0001. A model of any other size
-#: cannot be stored without a migration, so the choice of model is bounded by
-#: this number until one exists.
-EMBEDDING_DIM = 384
-
-#: Models known to produce `EMBEDDING_DIM` vectors, so a typo is caught before
-#: a download rather than after an insert. Not a ranking: which is best on
-#: this data is a measurement, and `eval --ablate` is where it is made.
-KNOWN_384 = frozenset({
-    "all-MiniLM-L6-v2",
-    "all-MiniLM-L12-v2",
-    "BAAI/bge-small-en-v1.5",
-    "thenlper/gte-small",
-    "intfloat/e5-small-v2",
-})
-
-MODEL_ENV = "ECHO_MEMORY_EMBEDDING_MODEL"
-
-
 class LocalEmbedder:
-    """The local sentence embedding model, selectable by environment.
+    """all-MiniLM-L6-v2 (384-dim). A placeholder default pending real quality
+    tuning (see MATHS.local.md's open questions), not a considered final
+    choice. Lazy-loads the model so importing this module never triggers a
+    download; only calling embed() does."""
 
-    The default is `all-MiniLM-L6-v2`, and this docstring has described it as
-    "a placeholder default pending real quality tuning, not a considered final
-    choice" since the first commit. It is now measurably the ceiling: on this
-    author's store its embeddings have an **effective rank of 43 of 384** by
-    participation ratio, with half the variance in nineteen dimensions and a
-    shared mean direction of norm 0.416. Anisotropy that severe is why
-    unrelated facts score as similar, and it is what `recall@1` of 0.087 on
-    BEAM's 1M split looks like from the outside.
-
-    So the model is a parameter now, which costs nothing and makes the
-    comparison runnable. It is deliberately **not** a free-form one: the
-    schema stores `vector(384)`, so a 768-dimension model inserts nothing and
-    fails at the database rather than at the choice. `KNOWN_384` is checked
-    first and an unknown name is refused with the list, rather than
-    downloading a few hundred megabytes before finding out.
-
-    Lazy-loads, so importing this module never triggers a download; only
-    calling embed() does.
-    """
-
-    DEFAULT_MODEL = "all-MiniLM-L6-v2"
-    dimension = EMBEDDING_DIM
-
-    @property
-    def MODEL_NAME(self) -> str:
-        name = os.environ.get(MODEL_ENV, "").strip() or self.DEFAULT_MODEL
-        if name not in KNOWN_384:
-            raise ValueError(
-                f"{MODEL_ENV}={name!r} is not a model this schema can store. "
-                f"The embedding column is vector({EMBEDDING_DIM}), so the "
-                f"model has to produce that width. Known: "
-                f"{', '.join(sorted(KNOWN_384))}."
-            )
-        return name
+    MODEL_NAME = "all-MiniLM-L6-v2"
+    dimension = 384
 
     def __init__(self):
         self._model = None
@@ -123,18 +74,7 @@ class LocalEmbedder:
                 # default; an MCP stdio server's stderr is meant for structured
                 # JSON logs (see infra/logging.py), not this library's own
                 logging.getLogger("sentence_transformers").setLevel(logging.WARNING)
-                model = SentenceTransformer(self.MODEL_NAME)
-                width = model.get_sentence_embedding_dimension()
-                if width != EMBEDDING_DIM:
-                    # Belt and braces: KNOWN_384 is a list somebody maintains
-                    # and the model is the thing that actually decides. A
-                    # mismatch caught here is a clear error; caught by the
-                    # database it is an insert failing on every write.
-                    raise ValueError(
-                        f"{self.MODEL_NAME} produces {width}-dimension "
-                        f"vectors and the schema stores {EMBEDDING_DIM}"
-                    )
-                self._model = model
+                self._model = SentenceTransformer(self.MODEL_NAME)
         return self._model
 
     def warm(self) -> None:
