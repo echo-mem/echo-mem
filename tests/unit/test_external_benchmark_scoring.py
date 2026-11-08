@@ -24,6 +24,7 @@ import pytest
 from echo_memory.eval.external import (
     DATASET_URLS,
     DATASETS,
+    EMBED_WINDOW,
     KS,
     MAX_FACT,
     PREFIXES,
@@ -177,12 +178,26 @@ def test_it_prefers_a_paragraph_or_sentence_boundary():
 
 
 def test_a_boundary_too_far_back_is_ignored():
-    """Falling back to a hard cut matters: one 4,000 character line with a full
-    stop at character 3 must not produce a 3 character chunk and loop."""
+    """Falling back to a hard cut matters: one long line with a full stop at
+    character 3 must not produce a 3 character chunk and loop."""
     pieces = chunks("ab. " + "x" * 8_000)
 
-    assert all(len(p) <= MAX_FACT for p in pieces)
-    assert len(pieces) == 3
+    assert all(len(p) <= EMBED_WINDOW for p in pieces)
+    assert len(pieces) == 8
+
+
+def test_a_chunk_never_ends_mid_word():
+    """Cutting at the window edge leaves half a token in each chunk, and half
+    a word is one neither the embedder nor BM25 can match. Latent while the
+    window was 3,500 characters and the fixtures had boundaries; the moment it
+    shrank to the embedding limit it started landing inside words."""
+    text = " ".join("filler" for _ in range(400))
+
+    pieces = chunks(text)
+
+    assert " ".join(pieces).split() == text.split()
+    for piece in pieces:
+        assert piece.split()[0] == "filler" and piece.split()[-1] == "filler"
 
 
 # --- scoring one question -------------------------------------------------
