@@ -117,11 +117,18 @@ def get_audit_log(conn, group_id: str, since: str | None = None) -> dict:
 
 
 def get_fact_history(conn, group_id: str, fact_id: str) -> dict:
-    """Every audit entry that mentions this fact_id, whether as the subject
-    of a `created`/`entity_resolved` entry or as either side of a
+    """At most MAX_ENTRIES audit entries that mention this fact_id, whether as
+    the subject of a `created`/`entity_resolved` entry or as either side of a
     `fact_superseded` pair (see the CEO plan's `echo-memory why` spec: reads
     audit_entry rows for that fact's edge, not a full multi-hop supersession
-    chain across every fact this one ever descended from or led to)."""
+    chain across every fact this one ever descended from or led to).
+
+    Unlike a feed, a fact history is a chain: the creation is the anchor the
+    rest hangs off. When more than MAX_ENTRIES rows exist we keep the
+    *oldest* entries and set `truncated` true (exactly MAX_ENTRIES is not
+    truncated). Dropping the newest restatements is better than hiding the
+    creation or punching a hole in the middle.
+    """
     rows = conn.execute(
         f"""
         SELECT {_AUDIT_COLUMNS}
@@ -135,7 +142,13 @@ def get_fact_history(conn, group_id: str, fact_id: str) -> dict:
         -- superseded is worse than no history. id is a SERIAL and
         -- monotonic within a transaction, so it is the real order.
         ORDER BY "timestamp" ASC, id ASC
+        LIMIT %s
         """,
-        (group_id, fact_id),
+        # One extra row: LIMIT MAX_ENTRIES alone cannot tell "exactly the
+        # cap" from "there is more", and truncated must be exact at the
+        # boundary (same as get_audit_log).
+        (group_id, fact_id, MAX_ENTRIES + 1),
     ).fetchall()
-    return {"entries": [_row_to_entry(row) for row in rows]}
+    truncated = len(rows) > MAX_ENTRIES
+    entries = [_row_to_entry(row) for row in rows[:MAX_ENTRIES]]
+    return {"entries": entries, "truncated": truncated}
