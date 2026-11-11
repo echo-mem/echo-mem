@@ -9,6 +9,62 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Memory can cross an organisational boundary, as a signed file rather than an
+API.** `echo-memory exchange` builds a redacted bundle from one scope, signs
+it, and on the other side verifies it and writes its facts into a quarantine
+scope that ordinary retrieval is not given. There is no endpoint one store
+calls on another, no shared trust root, and no live protocol.
+
+An imported fact is somebody else's claim and is treated as one. It lands at
+`confidence: inferred` whatever the exporter called it, carries content class
+`imported-untrusted` and trust state `unverified`, and becomes readable only
+when a named verifier promotes the bundle. `readable_scopes` is the only
+function that hands out an import scope and it hands out promoted ones, so a
+caller building its list from there cannot include a quarantined bundle by
+accident.
+
+Four decisions worth stating because each of them is a way this could have
+been worse:
+
+- **Redaction runs before signing.** The signature covers what was actually
+  sent, so a recipient verifying it is verifying the bundle they received
+  rather than one redacted afterwards - and a carrier that strips claims from
+  a signed bundle cannot be mistaken for the exporter having done it.
+  `exchange export` prints the audit, counted by the rule that removed each
+  claim, before anything is written.
+- **`verify` takes its trust anchors as an argument and has no default.** A
+  verifier that reads its anchors from the same place the bundle came from is
+  not verifying anything. An empty anchor set refuses every bundle, including
+  a correctly signed one.
+- **The signature algorithm comes from the anchor, never from the bundle.** An
+  ed25519 anchor is a public key, published by design. If the bundle chose,
+  anyone holding that key could use it as an HMAC shared secret and sign as
+  its owner; there is a test for exactly that forgery.
+- **An imported fact gets a new local `graphid`.** An AGE graphid is unique
+  per database rather than globally, so two deployments will issue the same
+  one for unrelated facts. The origin survives as
+  `provenance.origin = "<deployment_id>:<original_fact_id>"`, and nothing
+  joins on it. An attestation chain is also per scope, so an imported fact
+  cannot carry the origin's; the manifest records the exporter's chain head
+  instead, for comparison against one they published somewhere the importer's
+  database cannot reach.
+
+A replayed `bundle_id` is refused, because a bundle is a file and a file gets
+replayed - and the second import would write every fact again as new local
+nodes nothing afterwards could tell apart. Signature, digest and replay are
+all checked before the first row is written, and the writes are one
+transaction, so a bundle holding one fact this store cannot accept is refused
+whole rather than leaving a subset nobody can identify.
+
+**Revoking a bundle cannot recall facts already returned into an agent's
+context.** They are in that conversation's history, in whatever the agent
+wrote from them, and in anything downstream that kept the output. That is a
+property of having handed data over rather than a gap, no further work here
+would change it, and `exchange export` says so before it writes a bundle,
+which is the last point at which the decision is still yours.
+
+None of these is an MCP tool. `migration 0035` adds `bundle_registry`.
+
 **The ablation table reports an interval for recall@10, and it changes what
 several past experiments mean.** Until now `compare` bootstrapped the
 per-case reciprocal ranks and nothing else, so every row carried an interval
