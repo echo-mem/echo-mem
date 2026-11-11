@@ -254,6 +254,57 @@ tool list so adding either later fails loudly: irreversible deletion one
 prompt injection away from any agent holding a key is not a trade worth
 making.
 
+### What erasure does with the verification and event records
+
+Five tables arrived after this path was written, and they are split the same
+way the rest of it splits: what is content is deleted, and what is a record
+that something happened is kept with its prose stripped.
+
+| Table | What happens |
+|---|---|
+| `fact_evidence` | deleted. It is a pointer |
+| `evidence` | deleted, but only a row nothing points at any more |
+| `fact_verification` | the row stays. `method`, `detail` and `scope` are stripped |
+| `event_inbox` | the row stays. `event_id` is kept, the envelope is replaced with `{"redacted": true, "event_type": ...}`, and the erased edges are removed from `applied_edge_ids` |
+| `bundle_registry` | untouched. See below |
+
+**An evidence row is many to many**, so one artefact can back a claim about the
+subject and a claim about somebody else. Deleting it on the strength of the
+first would take away a surviving fact's provenance, so a row is removed only
+once nothing cites it. There is a test over exactly that pair.
+
+**A verification row survives an erasure on purpose, still carrying the
+`edge_id` of a fact that is gone.** Two reasons, and both are the same
+reasoning `audit_entry` already gets. The row is the record that a claim was
+checked, by whom and when, which is what makes the chain over it mean anything.
+And deleting it would break `verification_attestation` the way deleting a fact
+breaks `fact_attestation`, which this module deliberately does not repair: a
+visible gap that can be reconciled against `erasure_event` is more honest than
+a rewritten chain. So `method`, `detail` and `scope` go, because free text is
+where personal data goes, and the row stays.
+
+**An inbox row survives for a different reason: `event_id` is the only thing
+stopping a replay.** Delete it and the reporter's next retry is accepted as a
+new event, which would rewrite exactly what was just erased. So the key stays,
+the envelope goes, because once the edges are gone the payload is the last copy
+of what a reporter sent.
+
+Both survivals mean an auditor finds a row pointing at a fact that no longer
+exists, and that is the intended reading rather than a loose end: it says an
+erasure happened here, and `erasure_event` says when, who asked and under which
+ticket.
+
+**Stripping a verification changes its digest, so the verification chain then
+reports that link as `altered`.** Measured rather than inferred: a scope whose
+chain reported clean before an erasure reported one `altered` link afterwards,
+with nothing `vanished` and no broken links. That is erasure doing its job and
+is the same thing `verify` already reports for a legitimately rewritten fact.
+It is worth knowing before somebody reads it as tampering, and worth knowing in
+one other respect: **`echo-memory verify` does not read this chain.** It covers
+`fact_attestation` only, so the verification chain is checked by calling
+`trust.chain_report` from Python, and nothing reconciles its findings against
+`erasure_event` automatically.
+
 ### What this does not do
 
 **There is no default policy.** A scope with no policy keeps its facts, and
@@ -267,31 +318,16 @@ and without `--confirm` it only reports what would go. When enforcement runs
 is an operational choice, so it belongs in whatever invokes it rather than in
 a column here.
 
-**Erasure does not reach the tables the intelligence platform added.**
-`forget` removes a fact from the graph, its embeddings, the lexical statistics,
-the eval and read records and the audit text. It does not delete from
-`evidence`, `fact_evidence`, `fact_verification`, `verification_attestation`,
-`event_inbox` or `bundle_registry`, so a fact erased after it was verified
-leaves behind rows carrying its `edge_id` and whatever free text a reporter put
-in `evidence.uri`, `evidence.detail`, `fact_verification.method`,
-`fact_verification.detail` or an inbox envelope's payload.
+**`bundle_registry` is out of scope, deliberately.** An export or import row
+describes a *bundle*: its id, the peer it went to or came from, a redaction
+policy id, a fact count and a digest. It is not about a subject, and it is the
+record that answers "what did we send them" once the file is gone, so erasing
+it would remove the evidence of the transfer rather than the subject's data.
 
-Those fields are written by machines reporting their own artefacts rather than
-by an agent composing a sentence about a person, so they are much less likely
-to hold personal data than fact text is. That is a difference in likelihood and
-not a guarantee. **A deployment that puts personal data in an evidence detail
-or an event payload has to treat those tables as in scope for a deletion
-request and clear them by hand.** This is stated rather than fixed because the
-fix is a code change and this page is a description of the code as it stands.
-
-An operator can see what is there:
-
-```sql
-SELECT count(*) FROM public.evidence WHERE group_id = :scope;
-SELECT count(*) FROM public.fact_verification WHERE group_id = :scope;
-SELECT count(*) FROM public.event_inbox WHERE group_id = :scope;
-SELECT count(*) FROM public.bundle_registry WHERE group_id = :scope;
-```
+The consequence belongs to the operator rather than to this code. **A
+deployment that puts personal data in a redaction policy id or a peer account
+name has to handle that itself**, because nothing here can tell such a string
+from the label it is meant to be.
 
 ## Whether provenance can be trusted
 

@@ -264,6 +264,14 @@ which is the likely state of a new install, because `evidence_backed` is never
 derived from evidence existing. The `lesson_candidates` log line carries
 `supporting` and `evidence_rows` for exactly this.
 
+**An erased event keeps its `event_id` and loses its envelope.**
+`echo-memory forget` replaces an applied event's envelope with
+`{"redacted": true, "event_type": ...}` and drops the erased edges from
+`applied_edge_ids`, and leaves the row itself. The key has to survive: it is
+the only thing stopping the reporter's next retry from being accepted as a new
+event and rewriting what was just erased. The envelope does not, because once
+the edges are gone the payload is the last copy of what the reporter sent.
+
 **There is still no inference provider.** `infra/provider.py` ships
 `NullProvider`, `load({})` returns it, and `ECHO_MEMORY_INFERENCE_PROVIDER` set
 to anything other than the explicit off values raises rather than falling back.
@@ -729,17 +737,24 @@ accepts one, and nothing passes it.
 way to change its behaviour, which is deliberate: per call trust gating would
 let a caller turn suppression off.
 
-**Erasure does not reach these tables.** `echo-memory forget` deletes a fact
-from the graph, its embeddings and the lexical statistics, and redacts the
-audit text. It does not delete from `evidence`, `fact_evidence`,
-`fact_verification`, `verification_attestation`, `event_inbox` or
-`bundle_registry`. A fact erased after it was verified leaves rows carrying its
-`edge_id` and whatever free text a reporter put in `evidence.uri`,
-`evidence.detail`, `fact_verification.method` or an inbox envelope's payload.
-Those are machine written fields rather than prose about a person, which makes
-them less likely to hold personal data than fact text, and that is a
-difference in likelihood rather than a guarantee. See the erasure section of
-`docs/COMPLIANCE.md`.
+**An erasure strips a verification rather than deleting it.**
+`echo-memory forget` reaches these tables, split the way the rest of the
+erasure path splits. `fact_evidence` goes, being a pointer. An `evidence` row
+goes once nothing else cites it, because evidence is many to many and deleting
+one a surviving fact still points at would take away that fact's provenance. A
+`fact_verification` row **stays**, with `method`, `detail` and `scope`
+stripped: deleting it would break `verification_attestation` the way deleting a
+fact breaks `fact_attestation`, and the row is the record that makes the chain
+over it mean anything. So after an erasure a verification survives carrying the
+`edge_id` of a fact that is gone, which is what lets an auditor reconcile the
+gap against `erasure_event` rather than wonder about it.
+
+**And that makes the chain report the link as `altered`.** `method` and `scope`
+are both in `COVERED`, so stripping them changes the digest. Measured: a scope
+reporting clean before an erasure reported one `altered` link afterwards, with
+nothing `vanished` and no broken links. `bundle_registry` is left untouched on
+purpose, because a bundle row describes a transfer rather than a subject. See
+the erasure section of `docs/COMPLIANCE.md`.
 
 ---
 
