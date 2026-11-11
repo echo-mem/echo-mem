@@ -9,6 +9,67 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Two keys that were global are now scoped, so one tenant can no longer take
+an identifier from another.** `event_inbox.event_id` and
+`bundle_registry.bundle_id` were both deployment-wide primary keys, which made
+the idempotency namespace shared by every scope on the installation.
+
+Measured: scope A enqueues `deploy-abc1234` and is accepted; scope B enqueues
+the same id and is told `duplicate: true`, which is the answer that means stop
+retrying. The row stays A's, so B's event is never applied and B is never told
+- and the envelope's own guidance is to build ids from the reporter's run
+(`deploy-{commit}-{env}`), which makes two customers deploying one open source
+commit ordinary rather than contrived. On the bundle side the refusal read
+"bundle '<id>' was already imported here on <timestamp> and is 'quarantined'",
+handing one account another account's import date, direction and trust state;
+it also meant a partner could not send one bundle to two accounts, and one
+account could not import a bundle into two of its own memories.
+
+Migrations `0037` and `0038` widen both keys onto `group_id`. Both are
+widenings - the old key was unique over the narrow column, so no existing pair
+can collide - and both downgrades are lossy and say so. What is unchanged is
+the half the keys were right about: a replay into the *same* scope is still
+refused, with a test of its own so that widening cannot quietly lose it. An
+ambiguous bundle id is refused by `promote`, `revoke` and `reject` rather than
+guessed, and `echo-memory exchange` gains `--group-id` for naming one.
+
+**A bundle now has a size.** Nothing bounded one: a ten million claim file was
+read whole into memory, hashed, held as a list of dicts, and written fact by
+fact inside one transaction holding the scope's advisory lock. `MAX_FACTS`
+10,000, `MAX_BLOB_BYTES` 16 MiB and `MAX_MANIFEST_BYTES` 64 KiB are refused in
+`bundle.parse` before the bytes they bound are read, and again in
+`import_bundle`, which is public and which nothing makes a caller parse first.
+The fact ceiling is a lock-hold budget rather than a memory one: imported facts
+measured at 16.9 ms each, so 10,000 is about 2.8 minutes of held lock with an
+in-process embedder and more with a network one. For scale, this project's own
+largest live scope holds 1,485 facts. The declared `fact_count` and the real
+parsed count are both checked, because a manifest claiming ten facts in a blob
+of ten thousand attacks exactly the reader that trusts the cheap number.
+
+**An inbox now has a depth.** `MAX_PENDING_PER_SCOPE`, 100, settable with
+`ECHO_MEMORY_MAX_PENDING_EVENTS`. Before it, 200 events from one actor into one
+scope were 200 accepted pending rows with no limit anywhere;
+`MAX_PAYLOAD_BYTES` bounds one event at 64 KiB, which bounds a row and not a
+queue. This bounds the queue rather than the rate and says so in the refusal -
+the drain is what relieves it, so the caller's correct response is to wait. It
+is a backstop for self-hosted deployments and for anything calling `enqueue`
+directly; the hosted door rate limits with the credential that knows who is
+calling. Counted on pending rows alone, so an applied history is not a lifetime
+quota.
+
+**Evidence text is flagged like fact text.** An evidence `uri` carrying an
+injection in a query parameter, and a `detail` map carrying one under a
+`summary` key, round tripped verbatim and nothing flagged either field.
+Evidence is the one surface built to be read by an operator deciding whether to
+verify a claim, so it is where an injected sentence reaches a decision maker,
+and it was the only one of the three text surfaces - fact, lesson, evidence -
+without a flag. `trust.evidence.for_fact` now returns an `instruction_like`
+list naming the paths, `echo-memory trust show` prints a warning against each,
+and the context block reports them under `instruction_like_evidence`. The
+detector and its pattern list are unchanged, so neither measured rate moves.
+The text is still stored and shown verbatim: an attacker's URL is evidence of
+the attack, and truncating it would destroy what the operator needs.
+
 **Every tool count and licence claim in the documentation now fails a test
 when it drifts, including on pages nothing used to read.** Two guards, both
 asserting the absence of the wrong thing rather than the presence of the

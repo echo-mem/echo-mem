@@ -67,6 +67,59 @@ _logger = get_logger("exchange.bundle")
 #: older importer can ignore.
 FORMAT_VERSION = 1
 
+#: How many claims one bundle may carry.
+#:
+#: The bound that matters is not memory, it is the scope's advisory lock.
+#: `import_bundle` writes every fact through `write_episode` inside ONE
+#: transaction, by necessity - a failure part way has to leave neither a
+#: registry row nor a partial scope - and `write_episode` takes that lock as
+#: its first statement. So a bundle's fact count is a duration this import
+#: holds a scope against every other writer in it.
+#:
+#: Measured on 2026-11-12 against the test database: 200 imported facts in
+#: 3.39s, 16.9 ms each, with an in-process hash embedder on a nearly empty
+#: graph. Both of those flatter the number. A network embedder is several
+#: times slower per call, and `write_episode`'s entity resolution does a
+#: vector search per endpoint, which gets slower as the scope fills. So
+#: 10,000 claims is about 2.8 minutes of held lock at best and plausibly three
+#: times that in a real deployment, and 10 million - which nothing refused
+#: before this - is a lock held for days and a list of dicts nothing bounded.
+#:
+#: 10,000 is a backstop and not a quota. For scale: this project's own largest
+#: live scope holds 1,485 facts, so the ceiling is roughly seven times the
+#: biggest thing that exists to export. A partner with more than that to send
+#: splits the bundle, which also gives each half its own signature, digest and
+#: promotion decision - a better shape than one file nobody can review.
+MAX_FACTS = 10_000
+
+#: How many bytes the facts blob may be. 16 MiB.
+#:
+#: This one IS memory. The caller reads the whole blob before `parse` sees it,
+#: `parse` then holds it as a list of dicts, and `import_bundle` holds that
+#: list for the length of the transaction - so the resident cost is several
+#: times this number, and the blob is the only input an outside organisation
+#: chooses the size of.
+#:
+#: Measured, so the interaction with MAX_FACTS is stated rather than left to be
+#: discovered: a realistic exported claim canonicalises to 400 bytes, so 16 MiB
+#: is about 42,000 of them and MAX_FACTS always binds first. A claim at
+#: `importer.MAX_STRING_LEN` on its fact text AND both endpoint names is
+#: 12,299 bytes, and 16 MiB is 1,364 of those - so a bundle whose claims
+#: average over about 1.6 KiB is refused below MAX_FACTS. That is the right way
+#: round: the pathological bundle is the one that hits the memory bound early.
+MAX_BLOB_BYTES = 16 * 1024 * 1024
+
+#: How many bytes the manifest may be. 64 KiB.
+#:
+#: The manifest is a fixed set of scalar fields plus two small maps, and it is
+#: read before anything else, so this is the cheapest refusal in the file.
+#: Measured: a fully populated signed manifest - long account and deployment
+#: ids, a chain head, an ed25519 signature - is 681 bytes, so 64 KiB is about
+#: 96 times anything legitimate. The same number and the same argument as
+#: `events.envelope.MAX_PAYLOAD_BYTES`, which bounds the other thing an
+#: outsider hands this store.
+MAX_MANIFEST_BYTES = 64 * 1024
+
 #: Every field of an exported claim, in the order the format documents them.
 #: `agent_id` is absent: it is present only when a policy keeps it, and a
 #: format that listed it would imply it is normally there.
@@ -182,7 +235,38 @@ class Manifest:
                 f"manifest is missing {', '.join(required)}"
             )
         known = {k: v for k, v in body.items() if k in cls.__dataclass_fields__}
-        return cls(**known)
+        manifest = cls(**known)
+        _check_fact_count(manifest.fact_count)
+        return manifest
+
+
+def _check_fact_count(count) -> None:
+    """Refuse a declared count before the blob behind it is looked at.
+
+    On the MANIFEST, which is the first thing read and the smallest. A sender
+    claiming 10 million claims is refused in the time it takes to parse 681
+    bytes, without the blob being walked, hashed or held - which is the whole
+    point of putting the ceiling on the declaration as well as on the facts.
+
+    A count that is not an integer is a malformed manifest rather than an
+    oversized one, and is refused as one: `fact_count` is compared against a
+    parsed length and against `len(facts)` in the importer, and a string that
+    happened to compare would be a worse failure than this.
+    """
+    if isinstance(count, bool) or not isinstance(count, int):
+        raise BundleError(
+            f"manifest fact_count is a {type(count).__name__}, expected an "
+            f"integer"
+        )
+    if count < 0:
+        raise BundleError(f"manifest fact_count is {count}, which is not a count")
+    if count > MAX_FACTS:
+        raise BundleError(
+            f"manifest declares {count} facts, over the {MAX_FACTS} limit. "
+            f"This store refuses the bundle rather than importing a prefix of "
+            f"it: a partner with more to send splits it, which also gives each "
+            f"half its own signature and its own promotion decision."
+        )
 
 
 def _check_version(version) -> None:
@@ -320,7 +404,34 @@ def parse(manifest_bytes: bytes, facts_bytes: bytes) -> tuple[Manifest, list[dic
     call `sign.verify` has checked that the file is internally consistent,
     which an attacker who rewrote both halves can also arrange. `importer`
     verifies first and parses second, deliberately in that order.
+
+    ## The size refusals come first, and that order is the point
+
+    Nothing bounded a bundle before this: a 10 million claim file was read
+    whole into memory, hashed, held as a list of dicts and written inside one
+    transaction holding the scope's advisory lock. So the ceilings are checked
+    before the work they would bound - the manifest's length before it is
+    parsed, its declared `fact_count` before the blob is touched, the blob's
+    length before it is split, and the parsed count before anything is
+    returned. A bundle over the limit costs this function two `len()` calls.
+
+    The declared count and the real one are BOTH checked against the ceiling,
+    and then against each other by the caller. A manifest claiming 10 facts in
+    a blob of 10,000 is an attack on exactly the reader that trusts the cheap
+    number, which is why the cheap number is not the only one checked.
     """
+    if len(manifest_bytes) > MAX_MANIFEST_BYTES:
+        raise BundleError(
+            f"manifest is {len(manifest_bytes)} bytes, over the "
+            f"{MAX_MANIFEST_BYTES} limit"
+        )
+    if len(facts_bytes) > MAX_BLOB_BYTES:
+        raise BundleError(
+            f"facts blob is {len(facts_bytes)} bytes, over the "
+            f"{MAX_BLOB_BYTES} limit. Nothing has been parsed: the length is "
+            f"checked before the blob is split, because reading it is the cost "
+            f"this refuses."
+        )
     try:
         body = json.loads(manifest_bytes)
     except json.JSONDecodeError as e:
@@ -340,10 +451,21 @@ def parse(manifest_bytes: bytes, facts_bytes: bytes) -> tuple[Manifest, list[dic
             f"have been mixed up."
         )
 
-    facts = []
+    facts: list[dict] = []
     for n, line in enumerate(facts_bytes.splitlines(), start=1):
         if not line.strip():
             continue
+        # Counted as they are built rather than after. `from_dict` already
+        # refused an oversized DECLARED count, so reaching this means the
+        # manifest lied about how many claims the blob holds - and the whole
+        # reason to check the real count too is that the cheap one is the
+        # sender's word. Refusing mid-loop is what keeps the list bounded.
+        if len(facts) >= MAX_FACTS:
+            raise BundleError(
+                f"facts blob holds more than the {MAX_FACTS} limit, while the "
+                f"manifest declares {manifest.fact_count}. Stopped at line "
+                f"{n} rather than reading the rest."
+            )
         try:
             fact = json.loads(line)
         except json.JSONDecodeError as e:

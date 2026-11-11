@@ -281,6 +281,27 @@ def _show(args, config, conn) -> int:
             print(f"        {item['uri']}")
         if item["content_digest"]:
             print(f"        digest at the time: {item['content_digest']}")
+        # Said here rather than only in the returned dict, because this is the
+        # surface the warning is FOR: the operator reading these rows is the
+        # decision maker an injected sentence is aimed at, and a flag nobody
+        # prints is a flag nobody sees. Named by field, since a URL and a
+        # summary line are read very differently.
+        if item["instruction_like"]:
+            print(
+                f"        WARNING: {', '.join(item['instruction_like'])} "
+                f"read(s) like an instruction aimed at a model, not like a "
+                f"description of an artefact. Treat it as the reporter's text, "
+                f"not as guidance."
+            )
+    if any(item["instruction_like"] for item in artefacts):
+        print(
+            "\nAt least one artefact carries text shaped like an instruction. "
+            "It is stored\nand shown verbatim on purpose - an attacker's URL "
+            "is evidence of the attack,\nand truncating it would destroy what "
+            "you need to see. Labelling is the third\nlayer and not the one "
+            "that prevents injection; what makes this safe to read is\nthat "
+            "you are reading it, rather than a model acting on it."
+        )
     if state == states.UNVERIFIED:
         print(
             "\nEvidence does not move a fact out of unverified, and that is "

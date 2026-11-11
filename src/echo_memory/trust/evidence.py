@@ -37,6 +37,7 @@ import uuid
 from datetime import datetime
 
 from echo_memory.infra.logging import get_logger
+from echo_memory.retrieval import envelope as context_envelope
 
 _logger = get_logger("evidence")
 
@@ -142,6 +143,35 @@ def for_fact(conn, group_id: str, edge_id: str) -> list[dict]:
     Ordered by `received_at` rather than `occurred_at` because the latter is
     nullable, and a sort on a column that is null for human corrections puts
     them wherever the planner feels like.
+
+    ## instruction_like
+
+    Each row carries the paths inside it whose text reads like an attempt to
+    redirect a model, from `retrieval.envelope.instruction_like` - the same
+    detector a retrieved fact's text goes through, and the same list of
+    shapes. Empty list for an ordinary row.
+
+    Computed here, in the reader, rather than at `record`. Two reasons, and
+    the first is the load-bearing one: the shapes are revised as misses are
+    measured, so a flag stored at write time is a flag taken by whatever
+    version was installed that day, and a revision would silently not apply to
+    anything already in the table. The second is that a flag is advice to the
+    caller and not a property of the artefact - nothing is refused or altered
+    on the strength of it.
+
+    Why evidence needs it: this is the one surface built to be READ BY AN
+    OPERATOR deciding whether to verify a claim, so it is the surface where an
+    injected sentence reaches a decision maker. Measured before this existed:
+    an evidence row whose `uri` carried an injection in a query parameter and
+    whose `detail` carried the same sentence under a `summary` key round
+    tripped verbatim through `record`, `link` and `for_fact`, and nothing in
+    trust/ or retrieval/ flagged either field. It was the only one of the
+    three text surfaces - fact, lesson, evidence - with no flag on it.
+
+    The text is still stored and returned verbatim. An attacker's URL is
+    evidence of the attack, and truncating it would destroy the thing the
+    operator needs; labelling is the third layer, and `retrieval/envelope.py`
+    says in its own docstring that it is not the one that prevents injection.
     """
     rows = conn.execute(
         """SELECT e.id, e.kind, e.uri, e.content_digest, e.detail,
@@ -153,15 +183,27 @@ def for_fact(conn, group_id: str, edge_id: str) -> list[dict]:
             ORDER BY e.received_at DESC, e.id""",
         (group_id, edge_id),
     ).fetchall()
-    return [
-        {
+    out = []
+    for row in rows:
+        item = {
             "evidence_id": row[0], "kind": row[1], "uri": row[2],
             "content_digest": row[3], "detail": row[4],
             "reporter_agent": row[5], "reporter_run": row[6],
             "occurred_at": row[7], "received_at": row[8], "linked_at": row[9],
         }
-        for row in rows
-    ]
+        # `uri` and `detail` only. `reporter_agent` and `reporter_run` are
+        # bound by the caller from its own credential rather than sent as
+        # content, `kind` is a closed set checked against KINDS, and
+        # `content_digest` is a hash - so these two are the whole free-text
+        # surface and flagging the others would be noise an operator learns
+        # to skip.
+        marks = context_envelope.instruction_like_fields(item["uri"], path="uri")
+        marks += context_envelope.instruction_like_fields(
+            item["detail"], path="detail"
+        )
+        item["instruction_like"] = marks
+        out.append(item)
+    return out
 
 
 def count_for(conn, group_id: str, edge_ids: list[str]) -> dict[str, int]:

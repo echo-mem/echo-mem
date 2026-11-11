@@ -10,7 +10,7 @@ half cheap enough to be safe.
 
 Three functions and a state change:
 
-    enqueue  one INSERT, idempotent on event_id
+    enqueue  one INSERT, idempotent on (group_id, event_id)
     pending  what is waiting
     drain    the single writer, applying events one at a time
     mark     the state change, with what it created or why it did not
@@ -26,6 +26,7 @@ nothing. That distinction is why `rejected` carries an error string.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -69,14 +70,50 @@ DRAIN_LOCK = "echo_memory|graph|drain"
 #: transaction holding the graph lock for an unbounded time.
 DEFAULT_LIMIT = 100
 
+#: How deep ONE SCOPE's unapplied backlog may get before `enqueue` refuses.
+#:
+#: This bounds the QUEUE, not the rate. Nothing here counts events per second
+#: or per reporter, and a caller that drains between bursts may send any number
+#: of events - the ceiling is on how many may be waiting at once. It is a
+#: backstop rather than a rate limiter, and the two are not interchangeable:
+#: the hosted door has the credential and therefore the only thing that can
+#: identify a caller, so the rate belongs there (echo_cloud.ratelimit). What is
+#: left for the engine is the case cloud cannot cover - a self-hosted
+#: deployment, and anything calling `enqueue` directly.
+#:
+#: The drain is what relieves it. A refused reporter's correct response is to
+#: wait, not to retry harder, which is why the message says so.
+#:
+#: 100, which is DEFAULT_LIMIT: one drain pass deep. Measured before this
+#: existed: 200 events from one actor into one scope were 200 accepted pending
+#: rows with no limit anywhere, and `MAX_PAYLOAD_BYTES` bounds one event at
+#: 64 KiB, which bounds a ROW and not a queue - so the old ceiling was 12.8 MB
+#: per 200 calls and nothing stopped the 201st. A backlog deeper than one
+#: drain pass means the drain is not keeping up, and on a single-writer graph
+#: every event accepted past that point delays every OTHER reporter behind it.
+#: Accepting more would be storing a promise this deployment is already failing
+#: to keep.
+#:
+#: Per scope rather than per deployment, deliberately. A deployment-wide
+#: ceiling would let one reporter fill the inbox and refuse every other
+#: customer on the graph, which is the denial this bound exists to prevent,
+#: moved one level up.
+MAX_PENDING_PER_SCOPE = int(os.environ.get("ECHO_MEMORY_MAX_PENDING_EVENTS", "100"))
+
 
 class InboxError(Exception):
-    """A caller asked for something the inbox cannot do: an unknown state, or
-    a drain with no apply function."""
+    """A caller asked for something the inbox cannot do: an unknown state, a
+    drain with no apply function, or an event into a scope whose backlog is
+    already at MAX_PENDING_PER_SCOPE."""
 
 
 def enqueue(conn, group_id: str, envelope: Envelope) -> dict:
     """Record an event for the drain to apply. Returns whether it was new.
+
+    Raises `InboxError` when this scope's PENDING backlog is already at
+    `MAX_PENDING_PER_SCOPE`; see that constant for why the bound is on the
+    queue rather than on the rate, and why the drain is what clears it. A
+    duplicate id is checked by the INSERT and is not an error - read on.
 
     A duplicate is NOT an error, and this is the one thing about this function
     worth being firm about. A CI system that times out waiting for a response
@@ -91,13 +128,52 @@ def enqueue(conn, group_id: str, envelope: Envelope) -> dict:
     mean the same thing to the reporter - the event is in the inbox, stop
     sending it. The row is left exactly as it was, including its state: a
     replay of an event that already applied must not reopen it as pending.
+
+    "The same event" means the same id IN THIS SCOPE. The conflict target is
+    the composite key migration 0037 widened it to, and that is a tenancy
+    boundary rather than a detail: on the global key, scope B sending an id
+    scope A had used got `duplicate: true` - the one answer that means stop
+    retrying - while A kept the row, so one tenant could silence another's
+    reporting and the refusal itself disclosed that A had used the id. The
+    envelope docstring recommends ids derived from the reporter's own run
+    ("deploy-{commit}-{env}"), which makes that collision ordinary.
     """
+    # Before the INSERT, because the point of a ceiling is that the row is
+    # never written. Counting `pending` only, so an applied history does not
+    # become a lifetime quota: a scope that filled its inbox a year ago and had
+    # it drained would otherwise be locked out forever, and told to wait for a
+    # drain that had already run.
+    #
+    # Not a serialisable count. Two concurrent enqueues into one scope can each
+    # see room and both land, so the real ceiling is the limit plus however
+    # many callers raced - which is correct for a backstop and would be the
+    # wrong trade to fix, since the alternative is a lock on the one path whose
+    # whole purpose is to be safe at any concurrency (see DRAIN_LOCK).
+    waiting = conn.execute(
+        """SELECT count(*) FROM public.event_inbox
+            WHERE group_id = %s AND state = %s""",
+        (group_id, PENDING),
+    ).fetchone()[0]
+    if waiting >= MAX_PENDING_PER_SCOPE:
+        _logger.warning(
+            "event_refused_backlog",
+            extra={"group_id": group_id, "event_id": envelope.event_id,
+                   "pending": waiting},
+        )
+        raise InboxError(
+            f"this scope has {waiting} events waiting to be applied, at the "
+            f"ceiling of {MAX_PENDING_PER_SCOPE}. The event was NOT recorded. "
+            f"This bounds the queue rather than the rate: a drain relieves it, "
+            f"and nothing here will accept more until one runs. Retrying "
+            f"immediately will be refused again."
+        )
+
     row = conn.execute(
         """
         INSERT INTO public.event_inbox
             (event_id, group_id, event_type, schema_version, envelope, occurred_at)
         VALUES (%s, %s, %s, %s, %s::jsonb, %s)
-        ON CONFLICT (event_id) DO NOTHING
+        ON CONFLICT (group_id, event_id) DO NOTHING
         RETURNING event_id
         """,
         (
@@ -165,6 +241,7 @@ def pending(conn, *, limit: int = DEFAULT_LIMIT) -> list[dict]:
 
 def mark(
     conn,
+    group_id: str,
     event_id: str,
     state: str,
     *,
@@ -173,6 +250,12 @@ def mark(
 ) -> None:
     """Move an event to a terminal state, recording what it created or why it
     did not.
+
+    `group_id` is required and is half the key. Since 0037 an `event_id` is
+    unique only within a scope, so an UPDATE on the id alone would mark every
+    scope's event of that name - one reporter's rejection landing on another
+    tenant's pending row. The drain reads the group off the inbox ROW and
+    passes it back here, which is the same source the row was written from.
 
     `applied_edge_ids` is set rather than appended. An event applies once; if
     it is ever re-applied after a restore, what the second attempt created is
@@ -188,22 +271,27 @@ def mark(
         """UPDATE public.event_inbox
               SET state = %s, processed_at = now(), error = %s,
                   applied_edge_ids = %s
-            WHERE event_id = %s""",
-        (state, error, edge_ids, event_id),
+            WHERE group_id = %s AND event_id = %s""",
+        (state, error, edge_ids, group_id, event_id),
     )
 
 
-def _count_attempt(conn, event_id: str) -> None:
+def _count_attempt(conn, group_id: str, event_id: str) -> None:
     """Increment attempts, outside whatever savepoint the apply runs in.
 
     Outside on purpose. An apply that raises rolls its savepoint back, and if
     the counter were inside it the rollback would also undo the record that it
     had been tried - so an event failing forever would read as an event nobody
     had touched.
+
+    Keyed on the pair for the reason `mark` is: counting an attempt against
+    every scope that happens to share the id would make `attempts` say that a
+    reporter had been retried when nobody had touched its event.
     """
     conn.execute(
-        "UPDATE public.event_inbox SET attempts = attempts + 1 WHERE event_id = %s",
-        (event_id,),
+        """UPDATE public.event_inbox SET attempts = attempts + 1
+            WHERE group_id = %s AND event_id = %s""",
+        (group_id, event_id),
     )
 
 
@@ -275,8 +363,8 @@ def drain(
         # Read inside the lock, not before it. A list gathered outside would be
         # a list another drain may already have applied.
         for event in pending(conn, limit=limit):
-            event_id = event["event_id"]
-            _count_attempt(conn, event_id)
+            event_id, group_id = event["event_id"], event["group_id"]
+            _count_attempt(conn, group_id, event_id)
             try:
                 with conn.transaction():
                     # Re-parsed from the stored envelope rather than handed to
@@ -292,14 +380,14 @@ def drain(
                     # failure and not the reporter's, and the backlog is
                     # exactly when a drain matters.
                     envelope = parse(event["envelope"], now=event["occurred_at"])
-                    result = apply(conn, event["group_id"], envelope)
+                    result = apply(conn, group_id, envelope)
                     # Inside the savepoint with the writes it describes, so the
                     # two cannot disagree. A mark that committed while its facts
                     # rolled back would be an `applied` row naming edges that
                     # are not in the graph, and a reconciliation reading it
                     # would conclude the facts had been deleted.
                     edge_ids = [str(e) for e in (result or {}).get("edge_ids") or []]
-                    mark(conn, event_id, APPLIED, edge_ids=edge_ids)
+                    mark(conn, group_id, event_id, APPLIED, edge_ids=edge_ids)
                 applied.append(event_id)
             except Exception as e:  # noqa: BLE001
                 # Caught broadly and recorded, which is right here and wrong
@@ -308,12 +396,12 @@ def drain(
                 # graph. The error text is kept so the reporter can be told
                 # what was wrong instead of being left to guess from silence.
                 reason = f"{type(e).__name__}: {e}"
-                mark(conn, event_id, REJECTED, error=reason)
+                mark(conn, group_id, event_id, REJECTED, error=reason)
                 rejected.append({"event_id": event_id, "error": reason})
                 _logger.warning(
                     "event_rejected",
                     extra={
-                        "group_id": event["group_id"],
+                        "group_id": group_id,
                         "event_id": event_id,
                         "event_type": event["event_type"],
                         "error": reason,

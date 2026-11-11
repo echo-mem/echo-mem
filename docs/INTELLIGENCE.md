@@ -126,7 +126,7 @@ The envelope's four load bearing fields:
 
 | Field | Why |
 |---|---|
-| `event_id` | idempotency. A CI run that times out cannot know whether the first call landed, so the second returns `duplicate: true` rather than an error. 8 to 128 characters of letters, digits, dot, colon, underscore or hyphen |
+| `event_id` | idempotency, within your scope. A CI run that times out cannot know whether the first call landed, so the second returns `duplicate: true` rather than an error. Another account using the same id is not your problem: the inbox key is `(group_id, event_id)`. 8 to 128 characters of letters, digits, dot, colon, underscore or hyphen |
 | `occurred_at` | replay protection, with `MAX_AGE`. A naive timestamp is refused rather than assumed UTC |
 | `actor.agent` | attribution. Bound to the credential by the caller, never read out of the payload |
 | `schema_version` | so the drain refuses what it does not understand instead of reading a familiar looking field out of an unfamiliar envelope |
@@ -135,6 +135,17 @@ Limits, all in `events/envelope.py`: `MAX_PAYLOAD_BYTES` 64 KiB,
 `MAX_CLOCK_SKEW` 15 minutes ahead, `MAX_AGE` 7 days. `scope` names a memory and
 `solo` or `shared`; a `group_id` key in it is **refused**, not stripped,
 because a caller that believes it may name a group id may name somebody else's.
+
+One more in `events/inbox.py`: `MAX_PENDING_PER_SCOPE`, 100, settable with
+`ECHO_MEMORY_MAX_PENDING_EVENTS`. `enqueue` refuses an event into a scope whose
+**pending** backlog is already at it. This bounds the queue and not the rate -
+nothing here counts events per second, and a reporter that drains between
+bursts may send any number - so it is a backstop for self-hosted deployments
+and for anything calling `enqueue` directly, while the hosted door rate limits
+with the credential that knows who is calling. 100 is `drain`'s
+`DEFAULT_LIMIT`: one drain pass deep, past which the drain is not keeping up
+and every further event delays every other reporter on the single writer graph.
+Counted on `pending` alone, so an applied history is not a lifetime quota.
 
 ### The drain
 
@@ -1005,10 +1016,16 @@ echo-memory exchange import --manifest b.manifest.json --facts b.facts.ndjson \
   --trust-file ./partner.anchors --deployment-id acme-prod   # dry run
 echo-memory exchange import ... --confirm
 
-echo-memory exchange promote <bundle-id> --verifier-id ayush --confirm
+echo-memory exchange promote <bundle-id> --verifier ayush --confirm
 echo-memory exchange revoke <bundle-id> --reason "partner withdrew the claim"
-echo-memory exchange reject <bundle-id> --verifier-id ayush --reason "..."
+echo-memory exchange reject <bundle-id> --verifier ayush --reason "..."
 echo-memory exchange list --state quarantined
+
+# --group-id only when two scopes hold one bundle id, which is possible since
+# 0038. An ambiguous id is refused rather than guessed: promoting the wrong
+# account's import is not visible afterwards.
+echo-memory exchange promote <bundle-id> --verifier ayush \
+  --group-id acct:a:memory:main:import:<bundle-id> --confirm
 ```
 
 Which commands need `--confirm` is asymmetric on purpose:
@@ -1039,6 +1056,19 @@ manifest carries `content_digest`, and the digest covers the facts, so one
 signature over a small object transitively covers however many facts the bundle
 holds. An importer has to do both checks, because a valid signature over a
 manifest paired with somebody else's facts blob proves nothing.
+
+Three ceilings, refused in `bundle.parse` before the bytes they bound are read
+and again in `import_bundle`:
+
+| Limit | Value | What it bounds |
+|---|---|---|
+| `MAX_FACTS` | 10,000 | the scope's advisory lock. Every fact is written inside one transaction, measured at 16.9 ms each, so ~2.8 minutes at the ceiling and more with a network embedder |
+| `MAX_BLOB_BYTES` | 16 MiB | memory. The blob is read whole, then held as a list of dicts for the length of the transaction |
+| `MAX_MANIFEST_BYTES` | 64 KiB | the first thing read. A fully populated signed manifest measures 681 bytes |
+
+The declared `fact_count` and the real parsed count are both checked against
+`MAX_FACTS`: a manifest claiming 10 facts in a blob of 10,000 is an attack on
+exactly the reader that trusts the cheap number.
 
 Four things never leave, and three of them are rules of the format rather than
 policy choices a bundle can make:
@@ -1114,13 +1144,25 @@ that forgery.
 
 ### Importing
 
-`importer.import_bundle` checks three things **before the first row is
+`importer.import_bundle` checks four things **before the first row is
 written**, because a refusal after a partial write leaves facts behind that
 nothing will clean up:
 
+0. the size, against `bundle.MAX_FACTS`. First, because the digest below is
+   recomputed over every claim, so on a huge bundle the safety checks are
+   themselves the denial of service
 1. the signature, against the `trusted_keys` the caller supplied
 2. the content digest, recomputed from the claims themselves
-3. the `bundle_id`, against what has already been imported
+3. the `bundle_id` **and this import's scope**, against what that scope has
+   already imported
+
+The replay refusal is per scope, not per deployment. Two accounts on one
+deployment may each import the same partner bundle, and one account may import
+it into two of its own memories; what is still refused is the same bundle into
+the same scope twice, which would write every fact again as new local nodes
+that nothing afterwards could tell apart. `bundle_registry`'s key is
+`(group_id, bundle_id)` for that reason: on the old global key the refusal
+disclosed another account's import timestamp, direction and trust state.
 
 Then, inside one transaction, it registers the bundle as `quarantined` and
 writes each fact through `write_episode`, one episode per fact, at
@@ -1311,8 +1353,21 @@ from echo_memory.retrieval import envelope
 
 envelope.instruction_like(text)   # bool
 envelope.flagged(facts)           # the fact_ids whose text reads as an instruction
-envelope.describe(facts, content_class=envelope.MEMORY, trust_summary=None)
+envelope.instruction_like_fields(value)   # the paths inside a nested value
+envelope.flagged_evidence(rows)   # the evidence_ids carrying those shapes
+envelope.describe(facts, content_class=envelope.MEMORY, trust_summary=None,
+                  evidence=None)
 ```
+
+The same detector runs over evidence. `trust.evidence.for_fact` returns an
+`instruction_like` list per row naming the paths - `uri`, `detail.summary`,
+`detail.log.lines[1]` - and `echo-memory trust show` prints a warning against
+each. Evidence is the one surface built to be read by an **operator** deciding
+whether to verify a claim, so it is where an injected sentence reaches a
+decision maker, and it was the only one of the three text surfaces (fact,
+lesson, evidence) with no flag on it. The text is still stored and shown
+verbatim: an attacker's URL is evidence of the attack, and truncating it would
+destroy what the operator needs.
 
 Three content classes: `memory`, `derived-inferred`, `imported-untrusted`. The
 block carries a `handling` sentence shipped in the response rather than only in
@@ -1445,6 +1500,8 @@ database: a key stored next to what it protects protects nothing.
 | engine `0033_event_inbox` | `event_inbox` |
 | engine `0034_decision_vocabulary` | three partial indexes for the reserved node types |
 | engine `0035_bundle_registry` | `bundle_registry` |
+| engine `0037_event_inbox_scoped_key` | widens `event_inbox`'s key to `(group_id, event_id)` |
+| engine `0038_bundle_registry_scoped_key` | widens `bundle_registry`'s key to `(group_id, bundle_id)`, drops the redundant `bundle_registry_group_idx` |
 | cloud `0020_agent_identity` | `agent`, `agent_run`, and `api_key.agent_ref`, `expires_at`, `capabilities`, with a backfill |
 
 Nothing in this set drops or rewrites a column. `api_key.agent_id` survives
