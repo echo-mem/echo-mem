@@ -96,6 +96,45 @@ class ImportRefused(Exception):
     """
 
 
+def _segment(name: str, what: str) -> str:
+    """One piece of an import scope, checked for the delimiter it sits between.
+
+    A colon is this format's separator AND a legal character in an account id,
+    a memory name and a bundle id, so a name carrying one supplies its own
+    separators. That is not a cosmetic problem: `readable_scopes` selects on
+    `starts_with(group_id, quarantine_prefix(account, memory))`, so a memory
+    called `main:import:x:memory:other` produces
+
+        acct:A:memory:main:import:x:memory:other:import:b
+
+    which starts with the prefix for memory `main` and is therefore returned
+    to a reader of `main` as one of ITS promoted imports. One segment earlier
+    the same trick crosses accounts: an account id of
+    `victim:memory:main:import:pad` puts its own promoted scope in
+    `readable_scopes(conn, "victim", "main")`. Measured both, against a real
+    database, before this check existed.
+
+    Refused rather than escaped or replaced. An escape would make two
+    different names produce the same scope on the way in and different ones on
+    the way out, and silently repairing a name is how a function stops being
+    able to tell a typo from a value it minted itself - the same call
+    `echo_cloud.tenancy._segment` makes, and this is deliberately the same
+    rule as the `_KEY` and `_BUNDLE` checks there rather than a second
+    opinion about what a safe name is.
+    """
+    text = str(name)
+    if ":" in text:
+        raise ImportRefused(
+            f"an import scope's {what} must not contain ':', which is this "
+            f"format's separator: {text!r} would supply its own segments and "
+            f"land the bundle in a scope prefix-matching another "
+            f"{'account' if what == 'account' else 'memory'}'s imports."
+        )
+    if not text.strip():
+        raise ImportRefused(f"an import scope needs a {what}")
+    return text
+
+
 def quarantine_prefix(account: str, memory: str) -> str:
     """The prefix every import scope for this memory shares.
 
@@ -104,8 +143,15 @@ def quarantine_prefix(account: str, memory: str) -> str:
     blind the moment either copy changed, and it would go blind silently -
     `readable_scopes` would return an empty list and look like a memory with
     no imports rather than a reader that cannot see them.
+
+    Both halves are checked here rather than at the call sites, because this
+    is the one place the shape is derived and therefore the one place that
+    knows what a segment is. See `_segment`.
     """
-    return f"acct:{account}:memory:{memory}:import:"
+    return (
+        f"acct:{_segment(account, 'account')}"
+        f":memory:{_segment(memory, 'memory')}:import:"
+    )
 
 
 def quarantine_group_id(account: str, memory: str, bundle_id: str) -> str:
@@ -119,8 +165,13 @@ def quarantine_group_id(account: str, memory: str, bundle_id: str) -> str:
 
     Per bundle rather than per peer, so that revoking one bundle cannot take
     another bundle's facts with it and promoting one cannot carry another in.
+
+    The bundle id is the one segment an outside organisation chooses, since it
+    arrives in a signed manifest, so it is checked for the separator with the
+    other two. A bundle id may hold anything else a text column can: it is a
+    key and a suffix, never a prefix, so it cannot reach past itself.
     """
-    return quarantine_prefix(account, memory) + bundle_id
+    return quarantine_prefix(account, memory) + _segment(bundle_id, "bundle_id")
 
 
 # --- the registry -------------------------------------------------------
