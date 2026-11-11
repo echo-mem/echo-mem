@@ -727,6 +727,18 @@ accepts one, and nothing passes it.
 way to change its behaviour, which is deliberate: per call trust gating would
 let a caller turn suppression off.
 
+**Erasure does not reach these tables.** `echo-memory forget` deletes a fact
+from the graph, its embeddings and the lexical statistics, and redacts the
+audit text. It does not delete from `evidence`, `fact_evidence`,
+`fact_verification`, `verification_attestation`, `event_inbox` or
+`bundle_registry`. A fact erased after it was verified leaves rows carrying its
+`edge_id` and whatever free text a reporter put in `evidence.uri`,
+`evidence.detail`, `fact_verification.method` or an inbox envelope's payload.
+Those are machine written fields rather than prose about a person, which makes
+them less likely to hold personal data than fact text, and that is a
+difference in likelihood rather than a guarantee. See the erasure section of
+`docs/COMPLIANCE.md`.
+
 ---
 
 ## 5. Context intelligence

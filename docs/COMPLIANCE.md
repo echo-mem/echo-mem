@@ -267,6 +267,32 @@ and without `--confirm` it only reports what would go. When enforcement runs
 is an operational choice, so it belongs in whatever invokes it rather than in
 a column here.
 
+**Erasure does not reach the tables the intelligence platform added.**
+`forget` removes a fact from the graph, its embeddings, the lexical statistics,
+the eval and read records and the audit text. It does not delete from
+`evidence`, `fact_evidence`, `fact_verification`, `verification_attestation`,
+`event_inbox` or `bundle_registry`, so a fact erased after it was verified
+leaves behind rows carrying its `edge_id` and whatever free text a reporter put
+in `evidence.uri`, `evidence.detail`, `fact_verification.method`,
+`fact_verification.detail` or an inbox envelope's payload.
+
+Those fields are written by machines reporting their own artefacts rather than
+by an agent composing a sentence about a person, so they are much less likely
+to hold personal data than fact text is. That is a difference in likelihood and
+not a guarantee. **A deployment that puts personal data in an evidence detail
+or an event payload has to treat those tables as in scope for a deletion
+request and clear them by hand.** This is stated rather than fixed because the
+fix is a code change and this page is a description of the code as it stands.
+
+An operator can see what is there:
+
+```sql
+SELECT count(*) FROM public.evidence WHERE group_id = :scope;
+SELECT count(*) FROM public.fact_verification WHERE group_id = :scope;
+SELECT count(*) FROM public.event_inbox WHERE group_id = :scope;
+SELECT count(*) FROM public.bundle_registry WHERE group_id = :scope;
+```
+
 ## Whether provenance can be trusted
 
 Every fact records its author, its session, the version of the package that
