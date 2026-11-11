@@ -192,6 +192,14 @@ def score_scopes(
     """
     if not isinstance(group_ids, (list, tuple)) or not group_ids:
         raise ValidationError("score_scopes needs at least one group_id")
+    if len(set(group_ids)) != len(group_ids):
+        # Refused for the same reason query_across refuses it, one step
+        # earlier. A scope scored twice is chosen twice, and a scope chosen
+        # twice votes twice in the fusion and silently doubles its weight.
+        raise ValidationError(
+            f"group_ids must be distinct; a repeated scope would be chosen "
+            f"twice and vote twice in the fusion. Got {list(group_ids)}"
+        )
     terms = prompt_terms(query or "")
     if not terms:
         return [

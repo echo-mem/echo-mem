@@ -224,3 +224,15 @@ def test_a_query_with_no_searchable_terms_costs_no_queries():
 def test_max_scopes_must_be_positive():
     with pytest.raises(ValidationError):
         choose([_score("a", 0.9)], max_scopes=0)
+
+
+def test_a_repeated_scope_is_refused_before_it_is_scored():
+    """query_across refuses duplicates because a scope that votes twice
+    silently doubles its weight in the fusion. Refusing here too means the
+    caller is told at the step that would have chosen it twice."""
+    conn = _StubConn([(1, 1), (1, 1)])
+
+    with pytest.raises(ValidationError, match="distinct"):
+        select(conn, ["mine", "mine"], "deploy branch policy")
+
+    assert conn.calls == 0
