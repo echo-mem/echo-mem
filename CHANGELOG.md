@@ -341,7 +341,30 @@ than anyone's choice; with no SDK configured its record costs 0.044 us and
 nothing leaves the process. `ECHO_MEMORY_OTEL=0` turns it off. Label keys
 that would carry fact, entity or query text are replaced with a visible
 marker rather than dropped, and a label whose value varies per call cannot
-grow the registry without bound.
+grow the registry without bound. **Nothing calls it yet** - there is no
+`counter()` or `timer()` in `src/`, only in its tests - so an operator running
+a collector gets nothing from this engine today, and the 0.044 us figure is
+the cost of a call that would be made rather than one that is. Which writes
+and reads deserve a counter is a separate judgement from what a counter may
+record, and the module docstring now says so where a reader would otherwise
+infer it is instrumented. `infra/provider.py` gets the same note for the same
+reason: nothing consults `load()`, so a named provider is ignored rather than
+refused.
+
+**The one agtype decoder is for the Cypher path only, and had reached a
+projection that is not one.** Collapsing the four copies into
+`infra.db.agtype_str` reached `ingestion/neighbourhood.py`, whose only read is
+a per-property `->>` projection - and `->>` returns the real text, where
+`RETURN e.fact` returns a JSON encoded scalar. So the decoder was being run
+over a value that was already decoded, which rewrites anything that happens to
+be valid JSON: the stored fact `"ship it"` came back without its quotes, and a
+literal backslash-n came back as a newline. That is the same data fidelity bug
+the single decoder was written to fix, reintroduced by the fix, on the one call
+site that never had it - and migration 0036 had stated the distinction in the
+same commit. Fixed, with a test that writes a quoted fact and a quoted entity
+name and reads both back through the write path's suggestion. `agtype_str` now
+names which callers are on which side, and `retrieval/across.py` stops
+stripping quotes off a group id for the same reason.
 
 **Migration 0036 adds no index, and records what was checked.** Every table
 was listed against its indexes and the nine with only a primary key were each

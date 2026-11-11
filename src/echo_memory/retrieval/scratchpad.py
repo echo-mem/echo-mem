@@ -75,6 +75,17 @@ def scratchpad(
     Returns dicts shaped like `query_memory`'s facts, so a caller can put the
     two together without knowing which produced which.
     """
+    # A second copy of query_memory.live_clause, and the only reason it is a
+    # copy is the parameter style: that one interpolates the instant as an
+    # integer because its statements bind positionally and psycopg allows
+    # positional or named in one statement but not both. This statement is
+    # named throughout, so it binds `as_of` instead - which is the better form
+    # and the reason not to just call the other one.
+    #
+    # The two predicates must agree, and today they do, boundaries included:
+    # `t_valid <= as_of` and `t_invalid > as_of`, so a fact retired exactly at
+    # the instant is excluded by both. A change to one is a change to what
+    # "the past" means and has to reach the other.
     live = (
         "(e.properties ->> '\"t_invalid\"'::agtype) IS NULL"
         if as_of is None

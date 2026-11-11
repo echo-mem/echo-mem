@@ -195,3 +195,35 @@ def test_adjacency_does_not_reach_into_another_scope(conn):
     ]
 
     assert _adjacent(conn, "user:someone-else:shared", node_ids) == set()
+
+
+# A fact and an entity name that are each, on their own, valid JSON. Both
+# arrive from `_endpoints`, which projects per property with `->>`, and that
+# operator returns real text rather than an encoded scalar - so decoding it
+# as JSON strips the quotes the writer actually stored.
+#
+# This is the data fidelity bug the single agtype decoder was written to fix,
+# arriving from the other side. The decoder belongs on the Cypher path, which
+# hands back `"a\nb"` for a two-line fact; migration 0036 states the same
+# distinction from the performance end. Applying it to a `->>` projection
+# undoes the fidelity it exists to protect.
+QUOTED_NAME = '"retry policy"'
+QUOTED_FACT = '"the idempotency key is dropped"'
+
+
+def test_a_quoted_fact_and_name_come_back_with_their_quotes(conn):
+    embedder = VectorEmbedder({
+        QUOTED_FACT: REFERENCE,
+        NEW_FACT: NEAR,
+        QUOTED_NAME: REFERENCE,
+        "payment gateway": REFERENCE,
+        "checkout session": NEAR,
+        "idempotency key": NEAR,
+    })
+    _write(conn, embedder, QUOTED_NAME, "payment gateway", QUOTED_FACT)
+
+    second = _write(conn, embedder, "checkout session", "idempotency key", NEW_FACT, "s2")
+
+    suggested = {r["name"]: r["because"] for r in second["related_entities"]}
+    assert QUOTED_NAME in suggested, suggested
+    assert suggested[QUOTED_NAME] == QUOTED_FACT

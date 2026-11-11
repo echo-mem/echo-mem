@@ -93,6 +93,13 @@ def _verify_scope(conn, edge_ids: list[str], allowed: list[str]) -> None:
     Reads group_id off the edge table rather than through Cypher, for the same
     reason _graph_candidates does: an unbound MATCH expands every FACT edge in
     the database before filtering.
+
+    The projection is compared raw. `->>` returns the real text, so there is
+    nothing to decode, and a third hand-rolled decoder here would be the
+    fourth copy of the one infra.db.agtype_str exists to replace - which is
+    for the Cypher path and would be wrong on this one. Stripping quotes was
+    worse than useless: it could only ever turn an authorised group id into an
+    unauthorised one and fail a read that should have succeeded.
     """
     if not edge_ids:
         return
@@ -104,9 +111,9 @@ def _verify_scope(conn, edge_ids: list[str], allowed: list[str]) -> None:
     ).fetchall()
     permitted = set(allowed)
     stray = [
-        (edge_id, str(gid).strip('"'))
+        (edge_id, str(gid))
         for edge_id, gid in rows
-        if str(gid).strip('"') not in permitted
+        if str(gid) not in permitted
     ]
     if stray:
         raise ScopeViolation(

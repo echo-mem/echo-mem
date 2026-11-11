@@ -25,9 +25,23 @@ than raised: telemetry must not be able to fail a write.
 ## Why aggregate instead of a line per observation
 
 A log line per increment makes a six fact write cost dozens of stderr writes
-and ties write latency to whatever is reading the pipe. So the hot path touches
-a dict under a lock, and `emit()` writes one line when an operator or a
-scheduled call asks for one.
+and ties write latency to whatever is reading the pipe. So an instrumented path
+would touch a dict under a lock, and `emit()` writes one line when an operator
+or a scheduled call asks for one.
+
+## Nothing in this package calls it yet
+
+Said plainly because the paragraph above reads like a description of the write
+path, and it is not: there is no `counter()` or `timer()` call anywhere in
+`src/`, only in `tests/unit/test_metrics.py`. An operator who runs a collector
+today gets nothing from this engine, and the 0.044 us figure below is the cost
+of a call that would be made, not one that is.
+
+The facility landed before the call sites on purpose - deciding WHICH writes
+and reads are worth a counter is a separate judgement from deciding what a
+counter may record, and the second one is the one with a privacy argument
+behind it. But a module that looks instrumented and is not is worse than an
+absent one, so this note stays until the call sites exist.
 
 ## Why no percentiles
 

@@ -37,7 +37,6 @@ somebody.
 from __future__ import annotations
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
-from echo_memory.infra.db import agtype_str
 
 # Enough for an agent to notice a word it should have used, few enough that the
 # response does not become something to skim. Suggestions past the fifth have
@@ -58,14 +57,22 @@ MAX_FACTS_CONSULTED = 3
 
 
 def _clean(value) -> str:
-    """AGE returns strings as JSON encoded agtype.
+    """The stored text, unchanged, with an absent property as "".
 
-    Delegates rather than stripping quotes, because this one decodes fact text
-    as well as entity names and a fact is where free-form content lives. See
-    infra.db.agtype_str: four copies of this had drifted, and the two that
-    handled facts returned every escape sequence literally.
+    Deliberately NOT infra.db.agtype_str, which is the decoder for the Cypher
+    path. `_endpoints` below projects each property with `->>`, and the two
+    reads return different things: `->>` hands back the real text, while
+    `RETURN e.fact` hands back a JSON encoded scalar, so a two-line fact
+    arrives as the six characters `"a\\nb"` there and as two lines here.
+    Migration 0036 states the same distinction from the performance end.
+
+    Decoding this one as JSON looks harmless and is not. A fact or an entity
+    name that is itself valid JSON gets rewritten: the text `"ship it"` loses
+    both quotes, and a literal backslash-n becomes a newline. That is the
+    fidelity bug the single decoder was written to fix, reintroduced on the
+    one call site that never had it.
     """
-    return agtype_str(value) or ""
+    return "" if value is None else str(value)
 
 
 def _endpoints(conn, edge_ids: list[str]) -> list[dict]:

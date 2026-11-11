@@ -331,7 +331,7 @@ self hosting gets all of it.
 
 | | |
 |---|---|
-| **Collective learning** | A validated door CI runs, deploys and test suites report through, a single writer behind it, and lessons derived at read time. A lesson is never stored: retire one supporting outcome and it stops being produced |
+| **Collective learning** | A validated door for what CI runs, deploys and test suites report, a single writer behind it, and lessons derived at read time. A lesson is never stored: retire one supporting outcome and it stops being produced |
 | **Knowledge networks** | `query_across` asks several scopes and fuses one ranked answer. With one scope the answer is byte identical to `query_memory` |
 | **Agent identity** | A registry of the agents an account has, and runs recording what changed underneath one. Cloud only, because the engine has no concept of a principal |
 | **Trust and verification** | Six states, append only, with their own tamper evident chain. Only `rejected` removes a fact from an answer, and only a verifier can set it. `echo-memory trust` is where a verifier sets one |
@@ -341,6 +341,14 @@ self hosting gets all of it.
 Two of these are off until an operator turns them on. `ECHO_MEMORY_TRUST_RETRIEVAL` and
 `ECHO_MEMORY_LESSONS` default off, as does the graph wide write gate behind
 `ECHO_MEMORY_MAX_GRAPH_WRITERS`, which costs 2.6x write throughput when on.
+
+**What "in the engine" means, exactly.** Each of these is a Python API plus its tables,
+and `echo-memory exchange` is the only one with a command. This release still registers
+exactly 7 MCP tools, with the names and parameters 0.5.7 had, so nothing above reaches an
+agent until something calls it: your own code, a future command, or the hosted service.
+The event door in particular is an acceptance policy and an inbox, not a socket; a CI job
+cannot post to the engine. `docs/INTELLIGENCE.md` names the entry point, or the absence of
+one, per capability.
 
 [`docs/INTELLIGENCE.md`](docs/INTELLIGENCE.md) is the guide: the API for each, what it
 costs, every environment variable, and a section per capability on what it does not do.

@@ -88,6 +88,13 @@ from echo_memory.retrieval.query_memory import query_memory
 # Roughly 4 characters per token for English prose. The same constant the read
 # accounting uses; exactness does not matter because it is only ever compared
 # against itself across configurations.
+# A third independent copy of this number: trial/reads.py has the one the read
+# accounting uses and retrieval/routing.py has the one the token budget uses.
+# Not imported from either, because importing a constant from trial/ into
+# retrieval/ inverts the layering and that call belongs with whoever owns it.
+# tests/unit/test_token_constant_is_one_number.py asserts the three agree,
+# since two of these numbers in different tokens would make every token figure
+# in BENCHMARKS.md a comparison nobody could see was invalid.
 CHARS_PER_TOKEN = 4
 
 DEFAULT_TOP_K = 10
@@ -494,8 +501,8 @@ def render_context_saving(results: list[Result], facts: int, whole: int) -> str:
         ),
         "",
         (
-            f"A token is {CHARS_PER_TOKEN} characters, the constant the read "
-            "accounting uses."
+            f"A token is {CHARS_PER_TOKEN} characters, the same number the "
+            "read accounting and the token budget use."
         ),
         "Fact text only: no framing, no ids, no formatting either side would add.",
     ]
