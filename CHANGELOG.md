@@ -86,6 +86,43 @@ rather than implying a guarantee that is not there.
 
 Migrations 0031 and 0032. Nothing on the read path consumes these yet.
 
+**`echo-memory trust`: the command that records a verification, which nothing
+could do.** `trust/verify.record` shipped with migration 0032 and had no
+caller. No CLI command, no HTTP route, no console page, and correctly no MCP
+tool, so the only way to set a trust state was to import the module and write
+Python. The one reachable command named `verify` checks the attestation chain
+and has nothing to do with trust states, which made the gap look filled.
+
+The effect reached further than the feature. `intelligence/lessons.py` counts
+only outcomes whose state is `verified` or `evidence_backed`, and neither is
+ever derived - `evidence_backed` is recorded by a verifier like any other
+state, deliberately, so that a reporter cannot promote its own outcome by
+attaching its own deploy log. With nothing able to record either, every scope
+in every deployment held zero supporting outcomes, and `lessons.candidates`
+returned an empty list indistinguishable from a scope whose outcomes genuinely
+disagree.
+
+`trust show` is one fact's state, every check it has ever had, and its
+evidence. `trust list` is the scope by state. `trust verify`, `trust dispute`
+and `trust reject` record the three states an authorised verifier sets on
+purpose. `trust evidence` records an artefact and links it. `trust lessons` is
+what the scope currently supports and, when that is nothing, which of the
+three bars was not cleared and the command that fixes it.
+
+There is no `--confirm`, because nothing here deletes: `fact_verification` is
+append only and a wrong call is corrected by recording the right one, with the
+mistake left readable. `--verifier` is required instead, and an empty one
+refused, including on `dispute` - a verification nobody can be identified by
+is one nobody can be held to, and it would still count towards a lesson.
+`--expires` requires a timezone offset, for the reason the event envelope
+refuses a naive instant: expiry is judged against the database's clock, and
+24ms of container skew has already turned three days into four here.
+
+Not an MCP tool, and `tests/integration/test_erasure.py` reads the live
+registry so that registering one later fails. Verification is the only thing
+in this store that decides WHICH facts a read returns rather than the order
+they come back in.
+
 **Outcomes can be reported by machines, and conclusions are derived from them
 rather than stored.** Until now this store could record that a decision was
 made and never that it worked. The half that was missing arrives as two new

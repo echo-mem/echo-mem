@@ -28,6 +28,7 @@ from echo_memory.cli import (
     reattribute_cmd,
     retain,
     stop_gate,
+    trust,
     unmerge,
     verify,
 )
@@ -321,6 +322,17 @@ def _add_project_parsers(sub) -> None:
     # these is an MCP tool: handing an organisation's memory to another
     # organisation is a person's decision, not a step in an agent's loop.
     exchange.add_parser(sub)
+
+    # Same shape and the same rule, one notch stronger. Verification decides
+    # WHICH facts a read returns rather than their order, so a tool for it
+    # would let any agent holding a key promote its own claims - the elevation
+    # events.envelope.REQUIRES_VERIFY exists to deny.
+    #
+    # Not to be confused with `verify` directly below, which checks the
+    # attestation chain. The collision is unfortunate and the names are both
+    # already right for what they do: one asks whether the store has been
+    # tampered with, the other records that a human checked a claim.
+    trust.add_parser(sub)
 
     rt = sub.add_parser(
         "retain", help="how long this scope keeps a fact, and enforcing it"
@@ -793,6 +805,7 @@ _PROJECT_COMMANDS = {
     "distil": distil.run,
     "forget": forget.run,
     "exchange": exchange.run,
+    "trust": trust.run,
     "retain": retain.run,
     "verify": verify.run,
     "merge": merge.run,

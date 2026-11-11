@@ -466,6 +466,12 @@ def test_no_tool_published_over_mcp_can_grant_trust_or_export():
         # Trust: setting a state, or approving the rules that set one.
         "verify", "verify_fact", "record_verification", "set_verification",
         "reject_fact", "dispute_fact", "approve_policy",
+        # The names `cli/trust.py` introduces. Added here rather than only in
+        # test_cli_trust.py so that this list stays the one place to read for
+        # "what must never be a tool", and so that deleting that file cannot
+        # also delete the guard.
+        "trust", "trust_verify", "trust_reject", "trust_dispute",
+        "trust_evidence", "trust_lessons", "record_evidence", "link_evidence",
         # Exchange: sending, accepting, or making an import readable.
         "export", "export_bundle", "import", "import_bundle",
         "promote", "promote_bundle", "revoke", "revoke_bundle", "exchange",
