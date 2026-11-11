@@ -37,6 +37,8 @@ from echo_memory.events.envelope import (
     Envelope,
     parse,
 )
+from echo_memory.infra import graphlock
+from echo_memory.infra.db import GRAPH_NAME
 from echo_memory.infra.logging import get_logger
 
 _logger = get_logger("event_inbox")
@@ -262,7 +264,14 @@ def drain(
     rejected: list[dict] = []
 
     with conn.transaction():
-        conn.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (DRAIN_LOCK,))
+        # The same 64 bit key graphlock uses for the graph wide gate, so the
+        # drain and an operator running a bulk ingest under that gate contend
+        # with each other rather than running concurrently while both believe
+        # they are the single writer.
+        conn.execute(
+            "SELECT pg_advisory_xact_lock(%s::bigint)",
+            (graphlock.lock_key("graph", GRAPH_NAME),),
+        )
         # Read inside the lock, not before it. A list gathered outside would be
         # a list another drain may already have applied.
         for event in pending(conn, limit=limit):

@@ -57,6 +57,7 @@ import json
 import os
 from dataclasses import dataclass, field
 
+from echo_memory.infra import graphlock
 from echo_memory.infra.logging import get_logger
 
 _logger = get_logger("vattest")
@@ -259,9 +260,16 @@ def attest(conn, group_id: str, verification_id: int) -> str:
     the two locks already in this codebase, so that recording a verification
     and writing an episode do not wait on each other.
     """
+    # 64 bit, via graphlock.lock_key, rather than hashtext. hashtext returns
+    # int4, so two scopes collide at a rate of about 1.2% per ten thousand -
+    # which is not a corruption risk but does falsify the sentence above: two
+    # colliding group_ids WOULD block each other, silently, looking like
+    # ordinary latency. This chain is new, so nothing deployed holds the old
+    # key and there is no transition to manage. The two older locks in this
+    # package deliberately stay on hashtext; see graphlock.lock_key.
     conn.execute(
-        "SELECT pg_advisory_xact_lock(hashtext(%s))",
-        (LOCK_PREFIX + group_id,),
+        "SELECT pg_advisory_xact_lock(%s::bigint)",
+        (graphlock.lock_key("verify", group_id),),
     )
     seq, prev = head(conn, group_id)
     key_id, material = current()
