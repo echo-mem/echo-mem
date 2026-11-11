@@ -26,6 +26,7 @@ nothing. That distinction is why `rejected` carries an error string.
 from __future__ import annotations
 
 import json
+import os
 from collections.abc import Callable
 from typing import Any
 
@@ -69,14 +70,50 @@ DRAIN_LOCK = "echo_memory|graph|drain"
 #: transaction holding the graph lock for an unbounded time.
 DEFAULT_LIMIT = 100
 
+#: How deep ONE SCOPE's unapplied backlog may get before `enqueue` refuses.
+#:
+#: This bounds the QUEUE, not the rate. Nothing here counts events per second
+#: or per reporter, and a caller that drains between bursts may send any number
+#: of events - the ceiling is on how many may be waiting at once. It is a
+#: backstop rather than a rate limiter, and the two are not interchangeable:
+#: the hosted door has the credential and therefore the only thing that can
+#: identify a caller, so the rate belongs there (echo_cloud.ratelimit). What is
+#: left for the engine is the case cloud cannot cover - a self-hosted
+#: deployment, and anything calling `enqueue` directly.
+#:
+#: The drain is what relieves it. A refused reporter's correct response is to
+#: wait, not to retry harder, which is why the message says so.
+#:
+#: 100, which is DEFAULT_LIMIT: one drain pass deep. Measured before this
+#: existed: 200 events from one actor into one scope were 200 accepted pending
+#: rows with no limit anywhere, and `MAX_PAYLOAD_BYTES` bounds one event at
+#: 64 KiB, which bounds a ROW and not a queue - so the old ceiling was 12.8 MB
+#: per 200 calls and nothing stopped the 201st. A backlog deeper than one
+#: drain pass means the drain is not keeping up, and on a single-writer graph
+#: every event accepted past that point delays every OTHER reporter behind it.
+#: Accepting more would be storing a promise this deployment is already failing
+#: to keep.
+#:
+#: Per scope rather than per deployment, deliberately. A deployment-wide
+#: ceiling would let one reporter fill the inbox and refuse every other
+#: customer on the graph, which is the denial this bound exists to prevent,
+#: moved one level up.
+MAX_PENDING_PER_SCOPE = int(os.environ.get("ECHO_MEMORY_MAX_PENDING_EVENTS", "100"))
+
 
 class InboxError(Exception):
-    """A caller asked for something the inbox cannot do: an unknown state, or
-    a drain with no apply function."""
+    """A caller asked for something the inbox cannot do: an unknown state, a
+    drain with no apply function, or an event into a scope whose backlog is
+    already at MAX_PENDING_PER_SCOPE."""
 
 
 def enqueue(conn, group_id: str, envelope: Envelope) -> dict:
     """Record an event for the drain to apply. Returns whether it was new.
+
+    Raises `InboxError` when this scope's PENDING backlog is already at
+    `MAX_PENDING_PER_SCOPE`; see that constant for why the bound is on the
+    queue rather than on the rate, and why the drain is what clears it. A
+    duplicate id is checked by the INSERT and is not an error - read on.
 
     A duplicate is NOT an error, and this is the one thing about this function
     worth being firm about. A CI system that times out waiting for a response
@@ -101,6 +138,36 @@ def enqueue(conn, group_id: str, envelope: Envelope) -> dict:
     envelope docstring recommends ids derived from the reporter's own run
     ("deploy-{commit}-{env}"), which makes that collision ordinary.
     """
+    # Before the INSERT, because the point of a ceiling is that the row is
+    # never written. Counting `pending` only, so an applied history does not
+    # become a lifetime quota: a scope that filled its inbox a year ago and had
+    # it drained would otherwise be locked out forever, and told to wait for a
+    # drain that had already run.
+    #
+    # Not a serialisable count. Two concurrent enqueues into one scope can each
+    # see room and both land, so the real ceiling is the limit plus however
+    # many callers raced - which is correct for a backstop and would be the
+    # wrong trade to fix, since the alternative is a lock on the one path whose
+    # whole purpose is to be safe at any concurrency (see DRAIN_LOCK).
+    waiting = conn.execute(
+        """SELECT count(*) FROM public.event_inbox
+            WHERE group_id = %s AND state = %s""",
+        (group_id, PENDING),
+    ).fetchone()[0]
+    if waiting >= MAX_PENDING_PER_SCOPE:
+        _logger.warning(
+            "event_refused_backlog",
+            extra={"group_id": group_id, "event_id": envelope.event_id,
+                   "pending": waiting},
+        )
+        raise InboxError(
+            f"this scope has {waiting} events waiting to be applied, at the "
+            f"ceiling of {MAX_PENDING_PER_SCOPE}. The event was NOT recorded. "
+            f"This bounds the queue rather than the rate: a drain relieves it, "
+            f"and nothing here will accept more until one runs. Retrying "
+            f"immediately will be refused again."
+        )
+
     row = conn.execute(
         """
         INSERT INTO public.event_inbox

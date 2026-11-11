@@ -23,9 +23,9 @@ behaviour instead:
      silently swallowed another scope's genuine event, which was dropped,
      reported to its sender as `duplicate: true`, and never applied. Migration
      0037 widened the key to (group_id, event_id).
-  2. Nothing bounds how many events one reporter may enqueue. 200 events from
-     one actor into one scope are 200 rows, all pending, all accepted. Still
-     open at this commit.
+  2. Nothing bounded how many events one reporter could enqueue. 200 events
+     from one actor into one scope were 200 rows, all pending, all accepted.
+     `inbox.MAX_PENDING_PER_SCOPE` is now a ceiling on the backlog.
   3. Evidence `uri` and `detail` were free text that no reader passed through
      `instruction_like`, so the one surface that carries an attacker's URL
      into an operator's view was the one surface with no flag on it.
@@ -264,6 +264,93 @@ def test_a_replay_within_one_scope_is_still_refused_and_still_says_so(migrated_d
         (event_id,),
     ).fetchall()
     assert rows == [(OURS, "pending")], "a retry wrote a second row"
+
+
+def test_a_flooding_reporter_is_bounded(migrated_db):
+    """One scope's pending backlog has a ceiling, and the 201st event is
+    refused rather than queued.
+
+    `MAX_PENDING_PER_SCOPE` bounds the QUEUE and not the rate: nothing here
+    counts events per second, and a reporter that drains between bursts may
+    send any number. What it stops is one actor's unapplied backlog growing
+    without limit, which on the graph's single drain delays every other
+    reporter behind it.
+
+    The refusal names the ceiling and says the drain relieves it, because the
+    caller's correct response is to wait rather than to retry harder."""
+    conn = connect(migrated_db)
+    accepted = 0
+    refused = None
+    for n in range(200):
+        try:
+            inbox.enqueue(conn, OURS, _envelope(
+                events.OUTCOME_OBSERVED, f"flood-{n:08d}",
+                decision="d", outcome=f"o-{n}", sign="success"))
+            accepted += 1
+        except inbox.InboxError as e:
+            refused = str(e)
+            break
+
+    assert accepted == inbox.MAX_PENDING_PER_SCOPE, accepted
+    assert refused is not None, "200 events from one reporter were all accepted"
+    assert str(inbox.MAX_PENDING_PER_SCOPE) in refused
+    assert "drain" in refused
+
+    waiting = conn.execute(
+        "SELECT count(*) FROM public.event_inbox WHERE state = 'pending'"
+    ).fetchone()[0]
+    assert waiting < 200, f"{waiting} events from one reporter are queued"
+    assert waiting == inbox.MAX_PENDING_PER_SCOPE
+
+
+def test_the_ceiling_counts_pending_and_not_history(migrated_db, embedder):
+    """A scope that filled its inbox and had it drained can send again.
+
+    This is the bug the obvious implementation has: counting every row for the
+    scope would make the ceiling a lifetime quota, so a reporter that sent
+    MAX_PENDING_PER_SCOPE events a year ago - all of them applied - would be
+    locked out forever and the error would tell it to wait for a drain that
+    had already run. Counted on `state = 'pending'` for that reason, and
+    asserted here rather than left to the predicate's wording."""
+    conn = connect(migrated_db)
+    for n in range(inbox.MAX_PENDING_PER_SCOPE):
+        inbox.enqueue(conn, OURS, _envelope(
+            events.OUTCOME_OBSERVED, f"filled-{n:08d}",
+            decision="d", outcome=f"o-{n}", sign="success"))
+    with pytest.raises(inbox.InboxError, match="waiting to be applied"):
+        inbox.enqueue(conn, OURS, _envelope(
+            events.OUTCOME_OBSERVED, "one-too-many",
+            decision="d", outcome="o-x", sign="success"))
+
+    drained = inbox.drain(
+        conn, limit=inbox.MAX_PENDING_PER_SCOPE,
+        apply=lambda c, g, env: outcomes.apply(c, g, env, embedder),
+    )
+    assert drained["processed"] == inbox.MAX_PENDING_PER_SCOPE, drained
+
+    after = inbox.enqueue(conn, OURS, _envelope(
+        events.OUTCOME_OBSERVED, "after-the-drain",
+        decision="d", outcome="o-after", sign="success"))
+    assert after["accepted"] is True
+
+
+def test_one_scopes_backlog_does_not_bound_another_scopes(migrated_db):
+    """The ceiling is per scope, which is the only version of it that is not
+    itself a cross-tenant channel.
+
+    A deployment-wide ceiling would let one reporter fill the inbox and refuse
+    every other customer on the graph, which is the denial the bound exists to
+    prevent, moved one level up."""
+    conn = connect(migrated_db)
+    for n in range(inbox.MAX_PENDING_PER_SCOPE):
+        inbox.enqueue(conn, OURS, _envelope(
+            events.OUTCOME_OBSERVED, f"filled-{n:08d}",
+            decision="d", outcome=f"o-{n}", sign="success"))
+
+    theirs = inbox.enqueue(conn, THEIRS, _envelope(
+        events.OUTCOME_OBSERVED, "their-first-event",
+        decision="d", outcome="o-theirs", sign="success"))
+    assert theirs["accepted"] is True
 
 
 def test_a_poisoned_outcome_chain_from_one_reporter_yields_no_lesson(
