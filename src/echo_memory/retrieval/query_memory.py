@@ -616,6 +616,48 @@ ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
 # to what a query returns.
 RERANK = os.environ.get("ECHO_MEMORY_RERANK", "").lower() in ("1", "true", "yes")
 
+# Whether verification state is allowed to affect a read, and whether derived
+# lessons enter as a channel. Both default OFF, which is not timidity: every
+# existing store has no verification rows at all, so turning these on by
+# default would change nothing for anybody except by adding two queries per
+# read. They become worth defaulting on when a store has verifications in it,
+# which is a decision for a release note rather than for this constant.
+#
+# The split between them matters. TRUST_RETRIEVAL does two different things -
+# it SUPPRESSES rejected facts, which is authoritative, and it reweights the
+# rest, which is advisory. LESSONS only ever reweights. Nothing here can add a
+# candidate; see trust/states.py and salience.py for why that restraint is the
+# whole design.
+TRUST_RETRIEVAL = os.environ.get("ECHO_MEMORY_TRUST_RETRIEVAL", "").lower() in (
+    "1", "true", "yes",
+)
+LESSON_CHANNEL = os.environ.get("ECHO_MEMORY_LESSONS", "").lower() in (
+    "1", "true", "yes",
+)
+
+
+def _trust():
+    """The verification module, or None when it is not installed.
+
+    Imported lazily and tolerantly on purpose. The intelligence capabilities
+    ship as separate modules and a self-hosted install may be running a build
+    without them; a read path that raises ImportError because an optional
+    feature is absent is worse than one that simply does not apply it.
+    """
+    try:
+        from echo_memory.trust import verify
+    except ImportError:
+        return None
+    return verify
+
+
+def _lessons():
+    try:
+        from echo_memory.intelligence import lessons
+    except ImportError:
+        return None
+    return lessons
+
 
 def needs_expansion(conn, group_id: str, query: str) -> bool:
     """Whether this question needs a second fact to answer it.
@@ -1011,6 +1053,7 @@ def query_memory(
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
     about: list[str] | None = None,
+    trust: bool | None = None, lessons: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -1194,11 +1237,37 @@ def query_memory(
                 # content channel's. Full weight here would reintroduce
                 # exactly the problem the weight exists to test.
                 weights.append(expansion_weight or 1.0)
+        # Trust and lessons, last and in that order, over the candidates the
+        # content channels already found. Same restraint as salience: they
+        # reorder an answer and can never add to one. A fact nothing scored
+        # arriving with a top slot worth 1/(k+1) is the single mechanism behind
+        # three failed experiments, and a trust state is no more a signal about
+        # this query than a recall count is.
+        trusting = TRUST_RETRIEVAL if trust is None else trust
+        lessoning = LESSON_CHANNEL if lessons is None else lessons
+        advisory = []
+        if trusting and (verify := _trust()) is not None:
+            advisory.append(verify.ranked(conn, group_id, sorted(content, key=content.get, reverse=True)))
+        if lessoning and (lesson_mod := _lessons()) is not None:
+            advisory.append(lesson_mod.for_query(conn, group_id, sorted(content, key=content.get, reverse=True)))
+        for extra in advisory:
+            lists.append(extra)
+            if weights is not None:
+                weights.append(expansion_weight or 1.0)
         fused = (
             reciprocal_rank_fusion(lists, k=k, weights=weights)
-            if (hops or salient) else content
+            if (hops or salient or advisory) else content
         )
         by_score = sorted(fused, key=fused.get, reverse=True)
+
+        # Suppression is the one authoritative thing a trust state does, and it
+        # happens BEFORE truncation rather than after. A rejected fact filtered
+        # out of the final ten would have already cost a real fact its slot,
+        # which is a quietly thinner answer - the failure nobody notices.
+        if trusting and (verify := _trust()) is not None:
+            gone = verify.suppressed(conn, group_id, by_score)
+            if gone:
+                by_score = [e for e in by_score if e not in gone]
 
         # Reciprocal rank fusion sees rank POSITION and nothing else. That is
         # its virtue - it needs no comparable scores - and it is the single

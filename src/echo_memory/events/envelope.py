@@ -46,7 +46,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 #: Bumped when a field's meaning changes, never for an addition. The drain
 #: refuses a version it does not know rather than reading a familiar-looking
@@ -164,7 +164,7 @@ def _parse_when(raw) -> datetime:
         when = raw
     elif isinstance(raw, str):
         try:
-            when = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            when = datetime.fromisoformat(raw)
         except ValueError as e:
             raise EnvelopeError(f"occurred_at is not an ISO 8601 instant: {raw!r}") from e
     else:
@@ -191,7 +191,7 @@ def parse(raw: dict, *, now: datetime | None = None) -> Envelope:
     """
     if not isinstance(raw, dict):
         raise EnvelopeError(f"an event must be an object, got {type(raw).__name__}")
-    now = now or datetime.now(timezone.utc)
+    now = now or datetime.now(UTC)
 
     version = raw.get("schema_version", SCHEMA_VERSION)
     if version not in SUPPORTED_VERSIONS:

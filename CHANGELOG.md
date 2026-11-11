@@ -9,6 +9,55 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**A fact can now record whether it was ever checked, and by whom.**
+`confidence` says how the writer came by a claim, which is a statement about
+their process: an agent that inferred something confidently and wrongly leaves
+exactly the same row as one that read it off a deploy log. Three new tables
+close that gap.
+
+`evidence` holds the artefact - a deployment, a test run, a human correction,
+a metric, a document, an attestation head recorded elsewhere - with a digest
+of what it said at the time, so a document edited after it was cited is
+distinguishable from one that was not. `fact_evidence` links one artefact to
+every claim it backs, and the link is a separate call from recording the
+artefact because late arrival is the normal case: the test run that confirms a
+decision happens after the decision was written.
+
+`fact_verification` is the check itself, append only, newest row per fact
+wins. Six states rather than a score, for the reason `trust/states.py` gives
+at length: the one calibration this project has measured came out AUC 0.766
+with a 95% interval of [0.437, 0.968] over five positives, an interval that
+includes chance. Exactly one state, `rejected`, removes a fact from an answer,
+and only an authorised verifier can set it.
+
+**An expired verification degrades a fact, it never hides one.** A `verified`
+row whose `expires_at` has passed reads as `stale` and the row is left
+untouched. The fact is still returned and still findable, only ranked lower.
+A lapsed check is not a refutation, and rewriting the row to say so would
+destroy the evidence that the check ever passed. Expiry is judged against the
+database's clock rather than the caller's, because a fact that flips between
+`verified` and `stale` depending on which process asked is the container-skew
+bug this project has already shipped once, with a worse symptom.
+
+**Verifications get their own tamper-evident chain, separate from the facts'.**
+`verification_attestation` mirrors `fact_attestation` and shares nothing with
+it. Pouring verifications into the existing chain would mean every check
+shifts the sequence numbers a fact's own digest chains through, so recording a
+verification would alter the evidence about the claim being verified.
+
+`ECHO_MEMORY_VERIFICATION_KEYS` holds `key_id:hexkey` pairs and
+`ECHO_MEMORY_VERIFICATION_KEY_ID` names the one that signs, so a key can be
+rotated: each link records the key that signed it and is verified with that
+key. Without this, rotating would make the entire audit trail read as forged,
+which is the same as having no rotation at all. A link whose key is no longer
+configured is reported as unverifiable rather than altered, because being
+unable to check a link is not evidence that it changed. As with
+`fact_attestation`, unkeyed this is only as strong as a record of the head
+kept outside the database, and `report().strength` says which is in force
+rather than implying a guarantee that is not there.
+
+Migrations 0031 and 0032. Nothing on the read path consumes these yet.
+
 **Outcomes can be reported by machines, and conclusions are derived from them
 rather than stored.** Until now this store could record that a decision was
 made and never that it worked. The half that was missing arrives as two new
