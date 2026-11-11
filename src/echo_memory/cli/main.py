@@ -18,6 +18,7 @@ from echo_memory.cli import (
     adopt,
     calibrate,
     distil,
+    exchange,
     forget,
     health,
     infer_causal,
@@ -315,6 +316,11 @@ def _add_project_parsers(sub) -> None:
         "--log", action="store_true",
         help="every erasure recorded for this scope. What a restore has to replay",
     )
+
+    # Its own parsers, defined next to its own code. Like `forget`, none of
+    # these is an MCP tool: handing an organisation's memory to another
+    # organisation is a person's decision, not a step in an agent's loop.
+    exchange.add_parser(sub)
 
     rt = sub.add_parser(
         "retain", help="how long this scope keeps a fact, and enforcing it"
@@ -786,6 +792,7 @@ _PROJECT_COMMANDS = {
     "calibrate": calibrate.run,
     "distil": distil.run,
     "forget": forget.run,
+    "exchange": exchange.run,
     "retain": retain.run,
     "verify": verify.run,
     "merge": merge.run,
