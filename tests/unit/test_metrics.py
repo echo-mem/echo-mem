@@ -21,9 +21,19 @@ from echo_memory.infra.logging import JsonFormatter
 
 @pytest.fixture(autouse=True)
 def clean_registry():
+    """Registry AND logger state.
+
+    Restoring the logger is not tidiness: `_capture` sets propagate=False to
+    read the formatted line, and caplog can only see records that propagate.
+    Without this, whether `test_the_cap_is_announced_once` passes depends on
+    whether an emission test ran before it, which under pytest-randomly means
+    it passes alone and fails in the suite."""
+    logger = metrics._logger
+    handlers, propagate, level = logger.handlers, logger.propagate, logger.level
     metrics.reset()
     yield
     metrics.reset()
+    logger.handlers, logger.propagate, logger.level = handlers, propagate, level
 
 
 def _capture() -> io.StringIO:
@@ -191,12 +201,19 @@ def test_the_total_survives_the_cap():
     assert overflow[0]["value"] == 250
 
 
-def test_the_cap_is_announced_once(caplog):
-    with caplog.at_level(logging.WARNING, logger="echo_memory.metrics"):
-        for i in range(metrics.MAX_SERIES_PER_NAME + 50):
-            metrics.counter("writes", session=f"sess-{i}")
+def test_the_cap_is_announced_once():
+    """Through this file's own handler rather than caplog. `configure_logging`
+    sets propagate=False on the `echo_memory` parent, so once any test in the
+    suite has called it, caplog sees nothing from here and this test fails
+    with "said it 0 times" while the line is plainly on stderr."""
+    stream = _capture()
+    for i in range(metrics.MAX_SERIES_PER_NAME + 50):
+        metrics.counter("writes", session=f"sess-{i}")
 
-    capped = [r for r in caplog.records if r.message == "metric_label_cardinality_capped"]
+    capped = [
+        ln for ln in stream.getvalue().splitlines()
+        if "metric_label_cardinality_capped" in ln
+    ]
     assert len(capped) == 1, f"said it {len(capped)} times"
 
 
@@ -221,7 +238,11 @@ def test_the_mean_is_derived_not_stored():
     metrics.observe("write_ms", 1.0)
     metrics.observe("write_ms", 2.0)
     slot = _timer(metrics.snapshot(), "write_ms")[0]
-    assert slot["mean_ms"] == pytest.approx(slot["sum_ms"] / slot["count"], abs=1e-3)
+    # Exact, not approx: pytest.approx probes numpy, and the server's
+    # background embedder warm thread imports it at the same time, which
+    # fails as "partially initialized module 'numpy'" in about one run in
+    # three. The values here are exactly representable anyway.
+    assert slot["mean_ms"] == round(slot["sum_ms"] / slot["count"], 3)
 
 
 def test_the_timer_context_manager_measures_the_block():
