@@ -535,6 +535,86 @@ def test_the_replay_refusal_tells_one_account_about_anothers_import(
     assert _registry_rows(conn) == 1
 
 
+def test_two_importers_racing_one_bundle_leave_one_import_and_no_half(
+    migrated_db, embedder
+):
+    """The same refusal under a race, which is a different mechanism.
+
+    Sequentially the replay check finds the registry row before the
+    transaction opens. Concurrently both importers look, both see nothing,
+    both open a transaction and both INSERT the primary key - so the thing
+    that decides the race is the key itself, and the loser has already
+    written facts by the time it finds out.
+
+    What has to hold is that the loser leaves nothing. The registry INSERT is
+    the first statement inside `with conn.transaction()` and every fact is
+    written inside it, so the rollback takes both; a version that registered
+    outside the transaction would leave a scope of orphaned facts whose
+    bundle row had vanished.
+
+    The loser's exception is a UniqueViolation rather than an ImportRefused,
+    which is recorded rather than asserted as desirable: the friendly refusal
+    is the sequential path's, and a caller racing itself gets the database's
+    word for it. Worth knowing before somebody writes an `except
+    ImportRefused` around this.
+
+    Two REAL connections, because an advisory lock and a primary key are both
+    properties of separate sessions and two cursors on one connection share a
+    transaction."""
+    import threading
+
+    conn = connect(migrated_db)
+    _seed(conn, embedder, PEER_SCOPE, POISONED)
+    manifest, blob = _export(conn, PEER_SCOPE)
+    _, facts = bundle_format.parse(json.dumps(manifest.to_dict()).encode(), blob)
+
+    barrier = threading.Barrier(2)
+    outcomes: list[tuple[str, object]] = []
+    lock = threading.Lock()
+
+    def race(account):
+        racer = connect(migrated_db)
+        try:
+            barrier.wait(timeout=30)
+            summary = _import(racer, manifest, facts, account=account,
+                              embedder=HashedEmbedder())
+            with lock:
+                outcomes.append(("imported", summary["group_id"]))
+        except Exception as e:  # noqa: BLE001
+            with lock:
+                outcomes.append(("refused", type(e).__name__))
+        finally:
+            racer.close()
+
+    threads = [
+        threading.Thread(target=race, args=(acct,))
+        for acct in (OUR_ACCOUNT, "acct-theirs")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=60)
+
+    assert len(outcomes) == 2, outcomes
+    won = [o for o in outcomes if o[0] == "imported"]
+    lost = [o for o in outcomes if o[0] == "refused"]
+    assert len(won) == 1, outcomes
+    assert len(lost) == 1, outcomes
+    assert lost[0][1] in ("UniqueViolation", "ImportRefused"), outcomes
+
+    assert _registry_rows(conn) == 1
+    assert len(_facts_in(conn, won[0][1])) == 3
+    # The loser's scope is empty rather than partly written, whichever account
+    # it was. Counted over every import scope on the deployment so that this
+    # does not depend on which thread won.
+    everywhere = conn.execute(
+        f"""SELECT count(*) FROM {GRAPH}."FACT"
+             WHERE (properties ->> '"group_id"'::agtype) LIKE %s""",
+        ("%:import:%",),
+    ).fetchone()[0]
+    assert everywhere == 3, f"{everywhere} facts across import scopes, expected 3"
+
+
 def test_the_same_memory_cannot_hold_one_bundle_twice(migrated_db, embedder):
     """The case the global key is RIGHT about, kept separate from the case it
     is wrong about so that fixing the second cannot quietly lose the first.
