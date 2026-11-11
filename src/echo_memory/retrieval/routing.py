@@ -98,6 +98,15 @@ DEPTH_WEIGHT = 0.25
 #: rather than being picked out of the air.
 MIN_WEIGHT = 0.1
 
+#: Characters per token.
+#:
+#: The same 4 that `eval/retrieval.py` uses for every token figure in
+#: BENCHMARKS.md. Duplicated rather than imported because retrieval must not
+#: depend on the eval package, and the two must not drift: a budget measured
+#: against a different constant is not comparable with any number already
+#: published.
+CHARS_PER_TOKEN = 4
+
 _logger = get_logger("routing")
 
 _NODE_GROUP = """(n.properties ->> '"group_id"'::agtype)"""
@@ -340,3 +349,76 @@ def weights_for(scores: list[ScopeScore]) -> dict[str, float]:
     if best <= 0.0:
         return {s.group_id: 1.0 for s in scores}
     return {s.group_id: max(MIN_WEIGHT, s.score / best) for s in scores}
+
+
+def estimate_tokens(facts: list[dict]) -> int:
+    """Roughly what these facts cost to put in a prompt.
+
+    Characters over four, which is the accepted approximation for English prose
+    and is the same constant `eval/retrieval.py` computes every token figure in
+    BENCHMARKS.md with, so a budget here is comparable with those.
+
+    **It is an approximation, and it is wrong in one direction.** It undercounts
+    code and identifiers, where a BPE tokeniser splits `fact_embedding_hnsw_idx`
+    into pieces far shorter than four characters, and it undercounts non-English
+    badly: CJK and Devanagari often run near one token per character, so this
+    can be off by a factor of three or four on a store that is not in English.
+    It also counts the fact text alone, not the subject name `scratchpad.render`
+    prepends to each line, nor any JSON framing, so the prompt a caller actually
+    sends costs more than this says.
+
+    Undercounting means a budget can be exceeded in real tokens while this
+    function says it was honoured. It is kept anyway because the alternative is
+    loading a tokeniser on the read path, and the budget's job is to compare two
+    configurations at the same spend, which it does as long as both are measured
+    the same way.
+    """
+    return sum(len(f.get("fact") or "") for f in facts) // CHARS_PER_TOKEN
+
+
+def fit_to_budget(facts: list[dict], budget: int | None) -> tuple[list[dict], dict]:
+    """The ranked list cut to the budget, and what the cut cost.
+
+    **Truncated from the tail, never from the middle.** The list arrives ranked,
+    so a gap in it is a reordering the caller did not ask for: dropping a long
+    fact at rank 3 to fit a short one at rank 4 silently promotes the short one.
+    A fact that does not fit therefore ends the list, and whatever followed it
+    goes too.
+
+    A budget of 0 or None means no budget. The shape does not change in that
+    case: the report is still there and still says what the answer cost, because
+    a caller that reads `estimated_tokens` should not have to know whether a
+    budget was set to find out.
+
+    The report is the only thing that distinguishes an empty answer from an
+    exhausted budget, which is a real case: a budget smaller than the top fact
+    returns nothing, and nothing looks exactly like "the store holds no answer".
+    """
+    if budget is not None and (isinstance(budget, bool) or not isinstance(budget, int)):
+        raise ValidationError(f"budget must be an integer number of tokens, got {budget!r}")
+    if budget is not None and budget < 0:
+        raise ValidationError(f"budget must not be negative, got {budget}")
+
+    kept = list(facts)
+    if not budget:
+        return kept, {
+            "budget": budget,
+            "estimated_tokens": estimate_tokens(kept),
+            "dropped": 0,
+        }
+
+    spent = 0
+    kept = []
+    for i, fact in enumerate(facts):
+        cost = estimate_tokens([fact])
+        if spent + cost > budget:
+            kept = list(facts[:i])
+            break
+        spent += cost
+    else:
+        kept = list(facts)
+    return kept, {
+        "budget": budget,
+        "estimated_tokens": estimate_tokens(kept),
+        "dropped": len(facts) - len(kept),
+    }

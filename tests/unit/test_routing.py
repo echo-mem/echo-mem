@@ -1,8 +1,9 @@
-"""The part of routing that decides what a caller does not get.
+"""The parts of routing that decide what a caller does not get.
 
-The default-scope tests are about data loss rather than about arithmetic. A
-scorer that drops the scope the caller configured returns something shaped
-exactly like a correct answer, so nothing downstream can notice.
+Two of these are about data loss rather than about arithmetic. A scorer that
+drops the scope the caller configured, and a budget that drops a fact out of
+the middle of a ranked list, both return something shaped exactly like a
+correct answer, so nothing downstream can notice.
 """
 
 from __future__ import annotations
@@ -11,12 +12,19 @@ import pytest
 
 from echo_memory.retrieval.query_memory import ValidationError
 from echo_memory.retrieval.routing import (
+    CHARS_PER_TOKEN,
     MIN_WEIGHT,
     ScopeScore,
     choose,
+    estimate_tokens,
+    fit_to_budget,
     select,
     weights_for,
 )
+
+
+def _fact(text: str) -> dict:
+    return {"fact_id": text[:4], "fact": text}
 
 
 def _score(group_id: str, score: float, matched: int = 1, facts: int = 10) -> ScopeScore:
@@ -53,6 +61,68 @@ class _StubConn:
     def execute(self, sql, params=None):
         self.calls += 1
         return _Row(self._answers.pop(0))
+
+
+def test_estimate_tokens_is_characters_over_four():
+    assert CHARS_PER_TOKEN == 4
+    assert estimate_tokens([_fact("a" * 40)]) == 10
+    assert estimate_tokens([_fact("a" * 40), _fact("b" * 20)]) == 15
+    assert estimate_tokens([]) == 0
+
+
+def test_a_fact_with_no_text_costs_nothing():
+    """Not an invented case: a digest row and a scratchpad row both carry a
+    `fact` that can be NULL in the database, and summing None raises."""
+    assert estimate_tokens([{"fact": None}, {"fact_id": "x"}]) == 0
+
+
+def test_no_budget_changes_nothing_and_keeps_the_shape():
+    facts = [_fact("a" * 40), _fact("b" * 40)]
+    for budget in (None, 0):
+        kept, report = fit_to_budget(facts, budget)
+        assert kept == facts
+        assert report == {"budget": budget, "estimated_tokens": 20, "dropped": 0}
+
+
+def test_the_budget_truncates_from_the_tail():
+    facts = [_fact("a" * 40), _fact("b" * 40), _fact("c" * 40)]
+    kept, report = fit_to_budget(facts, 25)
+
+    assert [f["fact"] for f in kept] == ["a" * 40, "b" * 40]
+    assert report == {"budget": 25, "estimated_tokens": 20, "dropped": 1}
+
+
+def test_a_long_fact_ends_the_list_rather_than_being_skipped():
+    """The ranked order is the product. Dropping the 40-token fact at rank 2
+    because the 4-token fact at rank 3 fits would promote rank 3 over rank 2,
+    which is a reranking nobody asked for and no test downstream would see."""
+    facts = [_fact("a" * 16), _fact("b" * 160), _fact("c" * 16)]
+    kept, report = fit_to_budget(facts, 20)
+
+    assert [f["fact"] for f in kept] == ["a" * 16]
+    assert report["dropped"] == 2
+
+
+def test_the_budget_is_never_exceeded():
+    facts = [_fact("x" * 400)] * 5
+    for budget in range(1, 400):
+        kept, report = fit_to_budget(facts, budget)
+        assert report["estimated_tokens"] <= budget
+        assert estimate_tokens(kept) <= budget
+
+
+def test_a_budget_under_the_top_fact_returns_nothing_and_says_so():
+    kept, report = fit_to_budget([_fact("a" * 400)], 10)
+
+    assert kept == []
+    # The distinction that matters: an empty answer because the store holds
+    # nothing reports dropped 0, and this reports 1.
+    assert report["dropped"] == 1
+
+
+def test_a_negative_budget_is_refused():
+    with pytest.raises(ValidationError):
+        fit_to_budget([_fact("a")], -1)
 
 
 def test_weights_normalise_the_best_scope_to_one():
