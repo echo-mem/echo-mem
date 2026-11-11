@@ -261,7 +261,15 @@ than anyone's choice; with no SDK configured its record costs 0.044 us and
 nothing leaves the process. `ECHO_MEMORY_OTEL=0` turns it off. Label keys
 that would carry fact, entity or query text are replaced with a visible
 marker rather than dropped, and a label whose value varies per call cannot
-grow the registry without bound.
+grow the registry without bound. **Nothing calls it yet** - there is no
+`counter()` or `timer()` in `src/`, only in its tests - so an operator running
+a collector gets nothing from this engine today, and the 0.044 us figure is
+the cost of a call that would be made rather than one that is. Which writes
+and reads deserve a counter is a separate judgement from what a counter may
+record, and the module docstring now says so where a reader would otherwise
+infer it is instrumented. `infra/provider.py` gets the same note for the same
+reason: nothing consults `load()`, so a named provider is ignored rather than
+refused.
 
 **The one agtype decoder is for the Cypher path only, and had reached a
 projection that is not one.** Collapsing the four copies into

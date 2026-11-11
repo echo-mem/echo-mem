@@ -31,6 +31,18 @@ ingests through a model - and the answer is that writes must not wait.
 same one, stated from the other side: it is for offline batch commands a person
 types, it is deliberately not wired into `infra.config.Config`, and nothing
 under ingestion/ or retrieval/ imports it.
+
+## Nothing calls `load()`
+
+This module states a boundary; it does not yet enforce one. No code in `src/`
+consults it, so `ECHO_MEMORY_INFERENCE_PROVIDER=openai` raises nothing at
+startup and is simply ignored - the operator gets the no-provider behaviour
+they would have got anyway, without being told their variable did nothing.
+The claim the package actually keeps is structural and is checked elsewhere:
+`tests/unit/test_no_model_on_the_write_path.py` pins every call site that
+reaches a model to the commands the README names, and asserts `cli/llm.py` is
+still the only module holding an outbound request. `UnknownProvider` becomes a
+live guard the first time a caller asks this module what is configured.
 """
 
 from __future__ import annotations
