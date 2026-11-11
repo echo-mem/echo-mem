@@ -17,9 +17,9 @@ shards writing four scopes of one graph at once, three of the four dying with
 `-775.1` is a mangled graphid and `utterance` is an entity TYPE string, so two
 unrelated values reached one buffer inside AGE.
 
-**It did not reproduce on this hardware.** Everything tried, on Postgres 16
-with AGE under Colima, 2026-11-11, each episode one fact with both mentions
-asserted new:
+**That write-path failure did not reproduce on this hardware.** Everything
+tried, on Postgres 16 with AGE under Colima, 2026-11-11, each episode one fact
+with both mentions asserted new:
 
     writers   episodes each   total   graph before   errors
           4              50     200              0        0
@@ -46,33 +46,47 @@ and is not the same as "the bug is gone".
 that cross-scope writers DO overlap in time today, so the hazard window is
 real whether or not this hardware can make AGE fall into it.
 
-## What DID reproduce, and why it points somewhere else
+## The corruption that WAS captured, which is a different mechanism
 
-While integrating these streams the fault appeared on this same hardware, from
-a different cause. The exact error, during the `migrated_db` fixture's
-teardown:
+On 2026-11-11 the same underlying AGE cache bug was reproduced on this project,
+and it is worth recording verbatim because it is the only first-hand evidence
+anyone here has:
 
-    psycopg.errors.InternalError_: label (relation) cache corrupted
+    sqlalchemy.exc.InternalError: (psycopg.errors.InternalError_)
+    label (relation) cache corrupted
     [SQL: DELETE FROM alembic_version WHERE alembic_version.version_num = '0001']
 
-At that moment five OTHER databases on the same Postgres container were each
-running their own `alembic upgrade`/`downgrade base` cycles, which is
-`create_graph` and `drop_graph` over and over. `pg_stat_activity` showed 13
-backends across 5 databases. The same test passed in isolation in 9 seconds.
+It fired during `alembic downgrade base` - this suite's own `migrated_db`
+teardown - while five databases of one Postgres container were each running
+their own migrate and drop_graph cycle. `pg_stat_activity` showed 13 backends
+across 5 databases at that moment (echo_s1_test 6, echo_s3_across 3,
+echo_s5_test 3, echo_s7_test 1, postgres 1). The same test passed in isolation.
 
-So on this machine the write path survived roughly 30,000 concurrent
-cross-scope episodes untouched, while concurrent graph DDL corrupted the cache
-on the first serious attempt. That is evidence the trigger is more likely
-`create_graph`/`drop_graph` contention than concurrent INSERTs, and it widens
-the exposure in a direction the write gate does not cover: a CI runner that
-migrates several test databases in parallel is itself a reproducer.
+Two things that matters for, stated carefully:
 
-It does not settle it. The production failure was writers, not migrations, and
-one observation is not a characterisation. What it does mean is that anybody
-chasing this next should start with DDL rather than with write volume, and that
-a deployment which never creates or drops a graph at runtime - which is every
-deployment, since labels are only ever created in migration 0001 - is exposed
-mainly at migration time.
+**It is DDL contention, not write contention.** Nothing in it went through
+`write_episode`. So it does NOT reproduce the failure the tests below are
+written for, and this file does not claim it does. What it does establish is
+that the cache bug is real on this hardware and reachable by concurrency that
+is not writes, which is a wider exposure than the brief for this file assumed.
+
+**It surfaced on a statement that never mentions a graph.** A DELETE against
+`alembic_version`. AGE checks its label cache on ordinary statements too, so a
+backend whose cache is poisoned fails on whatever it does next, which is why
+this arrives looking like a migration bug rather than a graph bug.
+
+Whether the FIVE DATABASES part is causal is not established by one
+observation, and guessing would be worse than saying so. AGE's label cache is
+backend-local and Postgres filters most invalidation by database, so the six
+concurrent backends on the one database being downgraded are the likelier
+locus. `test_concurrent_graph_ddl` below is the harness for settling it, and is
+skipped by default because running it is destructive to every other database on
+the instance.
+
+**`graph_write_gate` would not have prevented this one**, on either reading.
+It is not on the DDL path, and advisory lock keys are scoped to a database
+anyway, so no lock taken in one database can serialise another's DDL. See
+`infra/graphlock.py`'s "What this gate CANNOT protect".
 
 ECHO_MEMORY_CONCURRENCY_SOAK=1 raises the load from 4x40 to 8x500, which takes
 about two minutes instead of about three seconds. The default is small on
@@ -84,9 +98,13 @@ from __future__ import annotations
 import hashlib
 import math
 import os
+import subprocess
+import sys
 import threading
 import time
 import traceback
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 import pytest
 
@@ -429,3 +447,92 @@ def test_sixteen_writers(migrated_db):
         assert _labels(conn) == EXPECTED_LABELS
     finally:
         conn.close()
+
+
+# --- the DDL mechanism, as a harness rather than a default run ----------
+
+
+DDL_DBS = [
+    name.strip()
+    for name in os.environ.get("ECHO_MEMORY_DDL_CONTENTION_DBS", "").split(",")
+    if name.strip()
+]
+
+
+def _ddl_url(database: str) -> str:
+    """The configured URL with its database name swapped, so credentials and
+    port are never retyped into a test and can never point somewhere else."""
+    parsed = urlsplit(os.environ["ECHO_MEMORY_DATABASE_URL"])
+    if parsed.port != 5434 or not database.endswith("_test"):
+        raise AssertionError(
+            f"refusing DDL contention against {database!r} on port {parsed.port}: "
+            "this test runs `alembic downgrade base` in a loop and would drop it. "
+            "Name only disposable databases ending in _test on port 5434."
+        )
+    return urlunsplit(parsed._replace(path=f"/{database}"))
+
+
+@pytest.mark.skipif(
+    not DDL_DBS,
+    reason="ECHO_MEMORY_DDL_CONTENTION_DBS=a_test,b_test,... to run; DESTRUCTIVE, "
+           "see the test docstring",
+)
+def test_concurrent_graph_ddl_does_not_corrupt_the_label_cache():
+    """The harness for the one corruption this project has actually captured.
+
+        sqlalchemy.exc.InternalError: (psycopg.errors.InternalError_)
+        label (relation) cache corrupted
+        [SQL: DELETE FROM alembic_version WHERE alembic_version.version_num = '0001']
+
+    Observed during `alembic downgrade base` with 13 backends across 5
+    databases of one container each running migrate and drop_graph. See the
+    module docstring for the full account and for what is and is not
+    established by it.
+
+    **Destructive, and not only to the databases named.** It is a reproducer
+    for a bug whose whole character is that it poisons a backend and breaks
+    whatever that backend does next, so firing it on a Postgres instance other
+    people are using can fail their runs, in ways that look like their own
+    migration bugs. Opt in by naming disposable `_test` databases on port 5434,
+    on an instance nobody else is using.
+
+    Skipped by default for that reason, not because it is slow. A reproducer
+    that runs itself is a reproducer that breaks a colleague's afternoon.
+    """
+    cycles = int(os.environ.get("ECHO_MEMORY_DDL_CONTENTION_CYCLES", "3"))
+    urls = [_ddl_url(name) for name in DDL_DBS]
+    barrier = threading.Barrier(len(urls))
+    failures: list[tuple[str, str]] = []
+    lock = threading.Lock()
+
+    def churn(url: str) -> None:
+        env = {**os.environ, "ECHO_MEMORY_DATABASE_URL": url}
+        barrier.wait(timeout=120)
+        for _ in range(cycles):
+            for argv in (["upgrade", "head"], ["downgrade", "base"]):
+                # check=False deliberately: a failing cycle is the result this
+                # test exists to collect, and raising here would lose the
+                # stderr that says whether it was the cache corruption.
+                done = subprocess.run(
+                    [sys.executable, "-m", "alembic", *argv],
+                    cwd=Path(__file__).parent.parent.parent,
+                    env=env, capture_output=True, text=True, check=False,
+                )
+                if done.returncode != 0:
+                    with lock:
+                        failures.append((url, done.stderr[-1500:]))
+                    return
+
+    threads = [threading.Thread(target=churn, args=(u,)) for u in urls]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=1800)
+
+    assert not any(t.is_alive() for t in threads), "an alembic cycle never finished"
+    corrupted = [f for f in failures if "cache corrupted" in f[1]]
+    assert not failures, (
+        f"{len(failures)} of {len(urls)} databases failed their DDL cycle"
+        + (f", {len(corrupted)} with the label cache corruption" if corrupted else "")
+        + f"; first:\n{failures[0][1]}"
+    )

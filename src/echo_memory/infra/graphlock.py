@@ -67,6 +67,46 @@ two:
 Neither is in scope here, and neither is a thing this module should pretend to
 decide.
 
+## What this gate CANNOT protect, which is more than it looks
+
+Two limits, and the second one is structural.
+
+**It does not cover graph DDL.** `create_graph`, `drop_graph`, `create_vlabel`
+and the migrations that call them are not writes and do not pass through
+`write_episode`, so nothing here gates them. The only corruption anyone on this
+project has actually captured was DDL contention, not write contention:
+
+    psycopg.errors.InternalError_: label (relation) cache corrupted
+    [SQL: DELETE FROM alembic_version WHERE alembic_version.version_num = '0001']
+
+observed 2026-11-11 during `alembic downgrade base`, with 13 backends across 5
+databases of one Postgres container each running their own migrate and
+drop_graph cycle. Note where it surfaced: a DELETE against a plain table that
+has nothing to do with the graph. AGE checks its label cache on statements that
+never mention a graph, so a backend whose cache has been poisoned fails on
+whatever it does next, which is why this reads as an unrelated migration bug.
+
+**It cannot cover anything in another database, at all.** `pg_advisory_xact_lock`
+keys are scoped to the database. Measured directly: two connections to two
+databases of one instance both acquired the SAME key at the same time, and
+`pg_locks` carries the database oid as part of the lock identity.
+
+    db echo_s7_test  pg_advisory_lock(424242424242)        -> held
+    db postgres      pg_try_advisory_lock(424242424242)    -> True
+    second connection to echo_s7_test, same key            -> False
+
+So if the cross-database part of that report is causal, no advisory lock can
+fix it and this module is the wrong shape for the problem. There is no
+instance-wide lock in SQL to reach for. The answers are a runner that does not
+migrate several databases at once, or one Postgres per stream.
+
+Whether the cross-database part IS causal is not established by that one
+observation, and this module should not pretend otherwise. AGE's label cache is
+backend-local and Postgres filters most invalidation by database, so the six
+concurrent backends on the single database being downgraded are the likelier
+locus, with the other four databases as correlated load. Either reading leaves
+the same conclusion: DDL needs serialising somewhere that is not here.
+
 ## Why this module does not take the lock for you
 
 `graph_write_gate` is not wired into `write_episode`. Where it belongs is a

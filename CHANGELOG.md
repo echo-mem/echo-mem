@@ -189,13 +189,40 @@ Eight gated writers are **slower than one unimpeded writer**, because the
 handoff is not free. Size an ingress for one writer's throughput minus a
 quarter.
 
-**The corruption did not reproduce on this hardware, and the tests say so
-rather than implying otherwise.** 4, 8 and 16 concurrent cross-scope writers,
-about 30,000 episodes, zero errors and an intact label catalogue every time.
-`tests/integration/test_graph_concurrency.py` carries the full table of what
-was tried and is a regression guard, not a reproduction. What it does show
+**The write-path corruption did not reproduce on this hardware, and the tests
+say so rather than implying otherwise.** 4, 8 and 16 concurrent cross-scope
+writers, about 30,000 episodes, zero errors and an intact label catalogue every
+time. `tests/integration/test_graph_concurrency.py` carries the full table of
+what was tried and is a regression guard, not a reproduction. What it does show
 positively is that cross-scope writers overlap in time today, so the hazard
 window is real whether or not a laptop can make AGE fall into it.
+
+**The corruption that WAS captured is a different mechanism, and the gate does
+not cover it.** On 2026-11-11, during `alembic downgrade base` with five
+databases of one container each running their own migrate and drop_graph cycle:
+
+    psycopg.errors.InternalError_: label (relation) cache corrupted
+    [SQL: DELETE FROM alembic_version WHERE alembic_version.version_num = '0001']
+
+That is DDL contention, not write contention: nothing in it went through
+`write_episode`. It also surfaced on a DELETE against a plain table, because
+AGE checks its label cache on statements that never mention a graph, so a
+poisoned backend fails on whatever it does next and the whole thing arrives
+looking like a migration bug.
+
+**Two limits on the gate follow, and the second is structural.** It is not on
+the DDL path. And advisory lock keys are scoped to a database: measured
+directly, two connections to two databases of one instance both acquired the
+same key at once, with `pg_locks` carrying the database oid as part of the lock
+identity. So no advisory lock can serialise another database's DDL, and if the
+cross-database part of that report is causal then this is the wrong shape of
+fix entirely. The answers there are a runner that does not migrate several
+databases at once, or one Postgres per stream.
+
+`test_concurrent_graph_ddl_does_not_corrupt_the_label_cache` is the harness for
+settling which reading is right. It is **skipped by default and destructive**:
+it reproduces a bug that poisons backends, so running it on a shared instance
+can fail other people's runs in ways that look like their own migration bugs.
 
 **`hashtext` is 32 bit, which makes one of this package's stated guarantees
 false at a measurable rate.** `attest()` says it locks per scope "because
