@@ -29,6 +29,21 @@ def flat(path: Path) -> str:
     return " ".join(path.read_text().split())
 
 
+def line_of(path: Path, phrase: str) -> int:
+    """The first line of `path` containing `phrase`, for the failure message.
+
+    flat() collapses newlines so a wrapped phrase can be matched at all, which
+    loses the line number a maintainer actually needs. This finds it back on
+    the unflattened text, and falls back to 0 when the phrase only exists
+    across a line break.
+    """
+    low = phrase.lower()
+    for n, line in enumerate(path.read_text().splitlines(), start=1):
+        if low in line.lower():
+            return n
+    return 0
+
+
 def test_the_licence_file_is_the_apache_license():
     text = flat(ROOT / "LICENSE")
 
@@ -83,9 +98,66 @@ def test_nothing_still_claims_the_business_source_license():
             assert "Business Source" not in text, name
 
 
-#: Files that describe the licence to a reader deciding whether they may use
-#: this. NOTICE is deliberately absent: it records the BSL window on purpose.
-SELLS_THE_LICENCE = ("README.md", "docs/COMPLIANCE.md")
+#: Every piece of rendered text this project publishes about itself.
+#:
+#: This used to be ("README.md", "docs/COMPLIANCE.md"), which are the two
+#: files that were wrong in November and therefore the two that got a guard.
+#: That is the wrong shape for the same reason the guard before it was: it
+#: covers the places somebody already found, so the next stale page is
+#: wherever nobody looked. echo-mem-cloud proved it - its guard walked
+#: src/echo_cloud/**/*.py only, and docs/DATA-PROCESSING.md sold the BSL in
+#: three places for sixteen days underneath it.
+#:
+#: So the list is discovered rather than enumerated, and each exclusion below
+#: has to earn itself.
+def sells_the_licence() -> list[Path]:
+    out = [
+        ROOT / name
+        for name in (
+            "README.md",
+            "CONTRIBUTING.md",
+            "SECURITY.md",
+            "CODE_OF_CONDUCT.md",
+            "DCO.md",
+            # Shipped inside the wheel and installed into an agent's skill
+            # directory, so it is read by more agents than the README is by
+            # people.
+            "src/echo_memory/skill/SKILL.md",
+        )
+        if (ROOT / name).exists()
+    ]
+    # docs/*.md, top level only. Every page a reader reaches from the
+    # repository, including the ones that did not exist when this was written.
+    out += sorted(p for p in (ROOT / "docs").glob("*.md"))
+    return out
+
+
+#: Not scanned, each for a stated reason rather than because it was awkward.
+#:
+#:   CHANGELOG.md        records the relicence in both directions on purpose.
+#:                       It has to contain "Business Source License" to be a
+#:                       changelog at all.
+#:   NOTICE              records the BSL window on purpose; that is the
+#:                       mechanism Apache provides for it.
+#:   TODOS.md            internal working notes, not published prose.
+#:   docs/designs/       dated design records written before the thing was
+#:                       built. echo-memory-design.md describes three MCP
+#:                       tools and a PR5 that would wire them together. That
+#:                       is what was planned, which is the document's whole
+#:                       point, and rewriting it to match the present would
+#:                       destroy the record rather than correct it.
+#:   .claude/, .agents/  vendored third party tooling, several hundred files.
+#:                       Not this project's text and not ours to edit.
+#:   spikes/             throwaway experiments.
+NOT_SCANNED = (
+    "CHANGELOG.md",
+    "NOTICE",
+    "TODOS.md",
+    "docs/designs",
+    ".claude",
+    ".agents",
+    "spikes",
+)
 
 #: Phrases that cannot be true under Apache 2.0, whatever sentence they sit in.
 #: Deliberately the OBLIGATION rather than the numbers: "fewer than 50
@@ -122,14 +194,106 @@ def test_no_file_that_sells_the_licence_still_imposes_a_bsl_obligation():
     So this asserts the ABSENCE of the obligation, which is the thing that
     would stop somebody using software they are free to use.
     """
-    for name in SELLS_THE_LICENCE:
-        text = flat(ROOT / name).lower()
+    offending = []
+    for path in sells_the_licence():
+        text = flat(path).lower()
         for phrase in IMPOSSIBLE_UNDER_APACHE:
-            assert phrase not in text, (
-                f"{name} still says {phrase!r}, which Apache 2.0 does not "
-                f"impose. A reader deciding whether they may use this would "
-                f"be told, wrongly, that they may not."
-            )
+            if phrase in text:
+                offending.append((path.relative_to(ROOT), line_of(path, phrase), phrase))
+
+    assert not offending, "\n".join(
+        f"  {f}:{n}  says {p!r}, which Apache 2.0 does not impose. A reader "
+        f"deciding whether they may use this would be told, wrongly, that "
+        f"they may not."
+        for f, n, p in offending
+    )
+
+
+#: Licence names that were true once. Unlike the obligations above these have
+#: an honest past tense, so they are allowed where something nearby withdraws
+#: them - and nowhere else.
+#:
+#: Bare figures are deliberately in here rather than in
+#: IMPOSSIBLE_UNDER_APACHE. "free only below fifty people and $5M of revenue.
+#: That is withdrawn" is the sentence a reader who saw this project in October
+#: needs, and a guard that banned the figure would ban the correction with the
+#: claim. Requiring the withdrawal instead gets both.
+SUPERSEDED = (
+    "bsl",
+    "busl",
+    "business source",
+    "source available",
+    "50 employees",
+    "fifty employees",
+    "fifty people",
+    "5,000,000",
+    "$5m",
+    "5m revenue",
+    # The price before 2026-10. Not a pricing decision: the README served $99
+    # for weeks after the service moved to $149, and this is only the figure
+    # that is no longer true.
+    "$99",
+)
+
+#: What makes a mention a withdrawal rather than a claim.
+WITHDRAWS = (
+    "withdrawn",
+    "relicen",
+    "no longer",
+    "shipped under",
+    "was withdrawn",
+    "does not apply",
+    "removes the block",
+    "for about a month",
+    "and is apache",
+    # docs/COMPLIANCE.md's opening: "An earlier version of this page said the
+    # opposite, which was true while the project was BSL 1.1 and false from
+    # the moment it was not." Neither of those can read as a current claim -
+    # one dates the text, the other dates the fact - so both count, and
+    # neither was in the list until this test flagged that paragraph.
+    "an earlier version",
+    "was true while",
+)
+
+
+def test_no_superseded_licence_name_appears_without_being_withdrawn():
+    """The half the obligation list cannot see.
+
+    IMPOSSIBLE_UNDER_APACHE catches a sentence that imposes something. It does
+    not catch a sentence that merely NAMES the old licence as the current one,
+    which is what public/llms.txt on the website did for sixteen days: a link
+    labelled "License (Business Source License 1.1)", seventy-six lines below
+    its own line saying Apache-2.0. No obligation in it, and wrong anyway.
+
+    Checked in a window rather than per file, because every one of these
+    phrases has a legitimate past tense in this repository and a file level
+    "does the word 'withdrawn' appear anywhere" test is the presence check this
+    whole module exists to argue against. 400 characters is wide enough for a
+    wrapped paragraph and narrow enough that a withdrawal three sections away
+    does not count.
+    """
+    offending = []
+    for path in sells_the_licence():
+        text = flat(path)
+        low = text.lower()
+        for phrase in SUPERSEDED:
+            start = 0
+            while (i := low.find(phrase, start)) != -1:
+                window = low[max(0, i - 400) : i + 400]
+                if not any(w in window for w in WITHDRAWS):
+                    offending.append(
+                        (path.relative_to(ROOT), line_of(path, phrase), phrase)
+                    )
+                start = i + 1
+
+    assert not offending, (
+        "these name a superseded licence term with nothing nearby withdrawing "
+        f"it, so each reads as a current term. The engine is Apache 2.0.\n"
+        + "\n".join(f"  {f}:{n}  {p!r}" for f, n, p in offending)
+        + "\n\nEither delete it, or put it in the past the way docs/COMPLIANCE.md "
+        "does: name what the restriction was, then say it was withdrawn. One of "
+        f"{WITHDRAWS} has to appear within 400 characters."
+    )
 
 
 def test_the_compliance_page_says_it_is_open_source():
