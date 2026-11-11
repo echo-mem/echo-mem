@@ -33,23 +33,23 @@ price is higher than "one writer's worth". Eight writer threads, 500 one-fact
 episodes each into its own scope, 4,000 episodes per run, migrated from base
 before every run, on Postgres 16 with AGE under Colima:
 
-    configuration                      run 1     run 2   episodes/s
-    no gate                            46.5s     40.2s     86 to 100
-    gate, ECHO_MEMORY_MAX_GRAPH_WRITERS=8 (off)        57.2s        70
-    gate, limit 1                     122.1s    112.8s     33 to 35
-    one writer alone, 500 episodes              11.1s             45
+    configuration                     run 1    run 2   episodes/s
+    no gate                           46.5s    40.2s    86 to 100
+    gate, limit 1                    122.1s   112.8s     33 to 35
+    gate off by env (limit 8)          57.2s        -           70
+    one writer alone, 500 episodes     11.1s        -           45
 
 2.6x to 2.8x slower in aggregate. The row that matters most is the last one:
-with the gate on, eight writers achieve 33 to 35 episodes/s while a single
-writer with no contention at all achieves 45. Serialising through one lock is
-about 25% WORSE than not having the writers, because the handoff is not free.
-Anyone sizing an ingress should plan for one writer's throughput minus a
-quarter, not for one writer's throughput.
+with the gate on, eight writers reach 33 to 35 episodes/s while ONE writer
+with no contention at all reaches 45. Serialising through one lock is about
+25% worse than not having the other seven writers, because the handoff is not
+free. Size an ingress for one writer's throughput minus a quarter, not for one
+writer's throughput.
 
-The third row isolates the wrapper from the lock: with the limit set to 8 the
-gate takes nothing, but the outer `with conn.transaction():` it has to be
-called inside is still paid, and that alone accounts for roughly a quarter of
-the gap. The lock is the rest.
+The env-disabled row separates the wrapper from the lock. With the limit at 8
+the gate takes nothing, but the outer `with conn.transaction():` it has to be
+called inside is still paid, and that alone is about a quarter of the gap. The
+lock is the rest. One sample, so treat it as an order of magnitude.
 
 No failures in any configuration, which is the honest version of this: at 4, 8
 and 16 concurrent cross-scope writers, and about 30,000 episodes, the
@@ -80,6 +80,8 @@ from __future__ import annotations
 import hashlib
 import os
 from contextlib import contextmanager
+
+from psycopg.pq import TransactionStatus
 
 from echo_memory.infra.db import GRAPH_NAME
 from echo_memory.infra.logging import get_logger
@@ -114,12 +116,14 @@ def lock_key(namespace: str, value: str) -> int:
     """A 64 bit advisory lock key for this value within this namespace.
 
     `hashtext()` returns int4, so the existing keys live in 2^32 values and
-    two scopes can land on one. Over a store's scopes, by the birthday bound:
+    two scopes can land on one. Chance of at least one colliding pair, by the
+    birthday bound:
 
-        scopes    32 bit (hashtext)    64 bit (here)
-         1,000              0.0116%        1 in 3.7e11
-        10,000               1.157%        1 in 3.7e11
-       100,000              68.781%        1 in 3.7e7 at 1e6 scopes
+        scopes      32 bit (hashtext)        64 bit (here)
+         1,000                0.0116%    1 in 36,914,751,044,020
+        10,000                 1.157%       1 in 368,935,825,950
+       100,000                68.781%         1 in 3,689,349,193
+     1,000,000               ~100.00%            1 in 36,893,489
 
     1.2% at ten thousand scopes is not a corruption risk. It is a tenancy
     one, and it falsifies a claim this package makes out loud: attestation's
@@ -157,8 +161,6 @@ def graph_write_gate(conn, graph: str = GRAPH_NAME):
     forgotten `with conn.transaction():` away, and this package has already
     paid for two silent no-ops that returned success.
     """
-    from psycopg.pq import TransactionStatus
-
     if max_graph_writers() > 1:
         yield False
         return
