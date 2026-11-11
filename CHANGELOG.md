@@ -191,6 +191,21 @@ which is the last point at which the decision is still yours.
 
 None of these is an MCP tool. `migration 0035` adds `bundle_registry`.
 
+**An account, memory or bundle id containing `:` is now refused rather than
+building an import scope out of it.** An import scope is
+`acct:<account>:memory:<memory>:import:<bundle_id>` and `readable_scopes`
+finds a memory's promoted imports by prefix, so a name carrying the separator
+supplied its own segments. A memory called `main:import:x:memory:other`
+produced a scope that prefix-matched memory `main`, and `readable_scopes` -
+which is the function that is meant to be the enforcement, the one place an
+import scope is handed out - returned it to a reader of `main`. One segment
+earlier the same input crossed accounts. Both were measured against a real
+database rather than reasoned about. The hosted service was never exposed to
+this: its account ids are generated hex, its memory keys are validated, and it
+does not call these functions. A self-hosted deployment passing `--account` or
+`--memory` was, which is why the check is in the one place the shape is
+derived rather than at the call sites.
+
 **Two writers in two scopes of one graph were never serialised, and nothing
 tested it.** `write_episode` takes a per-scope advisory lock, so two agents
 writing one scope are safe and there is a test. Apache AGE's label catalogue
