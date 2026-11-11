@@ -675,3 +675,136 @@ from their own answers on a 411 fact store. LoCoMo's multi hop split is 282
 questions nobody derived, and it already scores this system at MRR 0.360 with
 recall@10 0.361, so it has far more room to show a recall gain than this store
 does. Running the three weights there is the real test.
+
+## The derived scratchpad, measured for the first time, 2026-11-11
+
+`retrieval/scratchpad.py` shipped with an argument and no number. The argument
+is BEAM's: the LIGHT framework's ablation at 100K tokens says removing episodic
+retrieval "does not change performance and it remains steady, since the
+scratchpad alone suffices", and this store can derive such a block from the
+graph for free rather than running a 32B model over every dialogue pair.
+
+`eval/scratchpad_eval.py` tests that. Two decisions come before the numbers.
+
+**Matched token spend, not matched list length.** A scratchpad is not `top_k`
+of anything, so the budget is measured rather than chosen: `query_memory` runs
+first, its mean answer cost becomes the budget, and `routing.fit_to_budget`
+cuts the block to exactly that. Both sides then cost the same and the
+comparison is about what went in rather than how much.
+
+**Presence, not only rank.** A scratchpad's order is centrality, which is
+query-independent by design, so scoring its ranking against a query scores it
+on something it never claimed to do. `presence` is recall at a k above either
+list's length: the answer was in what came back, or it was not. MRR and
+recall@10 are reported beside it because reporting only the favourable metric
+is what this harness exists to prevent.
+
+### The corpus
+
+Synthetic and built in `tests/integration/test_scratchpad_eval.py`: 60 live
+facts over five hub entities of degree 12, 10, 9, 8 and 6 plus sixteen leaf
+pairs, with five further facts written and then superseded so the live view is
+not the write log. The real `all-MiniLM-L6-v2` embedder, not a test double,
+because the question is whether a query-independent block can beat a real
+ranker. One scope, n=60 cases, one case per live fact.
+
+### At matched spend
+
+Both shapes, n=60. The block fitted 4 of the 60 live facts into the budget.
+
+| shape | measure | query_memory | scratchpad | Δ | 95% CI |
+|---|---|---:|---:|---:|---|
+| entity_pair (68 tok) | MRR | 0.9639 | 0.0347 | **-0.9292** | [-0.9736, -0.8764] |
+| entity_pair | recall@1 | 0.9333 | 0.0167 | | |
+| entity_pair | recall@10 | 1.0000 | 0.0667 | **-0.9333** | [-0.9833, -0.8667] |
+| entity_pair | presence | 1.0000 | 0.0667 | **-0.9333** | [-0.9833, -0.8667] |
+| prose (67 tok) | MRR | 1.0000 | 0.0347 | **-0.9653** | [-0.9958, -0.9222] |
+| prose | recall@1 | 1.0000 | 0.0167 | | |
+| prose | recall@10 | 1.0000 | 0.0667 | **-0.9333** | [-0.9833, -0.8667] |
+| prose | presence | 1.0000 | 0.0667 | **-0.9333** | [-0.9833, -0.8667] |
+
+**No interval here contains zero.** At the spend one query costs, on this
+corpus, the derived scratchpad is not a substitute for retrieval and the result
+is not close.
+
+### How much more context it needs
+
+`scratchpad_eval.sweep`, entity_pair, n=60, at multiples of the 68-token
+matched spend:
+
+| spend | tokens | facts | MRR | presence | Δ presence | 95% CI |
+|---|---:|---:|---:|---:|---:|---|
+| 1x | 68 | 4 | 0.0347 | 0.0667 | -0.9333 | [-0.9833, -0.8667] |
+| 2x | 136 | 10 | 0.0488 | 0.1667 | -0.8333 | [-0.9167, -0.7333] |
+| 4x | 272 | 20 | 0.0600 | 0.3333 | -0.6667 | [-0.7833, -0.5500] |
+| 8x | 544 | 42 | 0.0721 | 0.7000 | -0.3000 | [-0.4167, -0.1833] |
+| 16x | 1088 | 60 | 0.0780 | 1.0000 | +0.0000 | degenerate, see below |
+
+The block reaches the ranker's recall at **16x the tokens**, and at that point
+it holds all 60 facts, which is the entire scope. So at parity the derived
+scratchpad is not a cheaper context, it IS the "inject everything" baseline
+that the context-cost section above measures recall against.
+
+The 16x interval is `[+0.0000, +0.0000]` because both sides contain the answer
+on every case, so every paired difference is exactly zero. That is a degenerate
+bootstrap, not evidence of equivalence, and the honest reading is "presence is
+saturated on both sides at this spend".
+
+### What this does not establish, which is most of it
+
+**The presence column is an identity, not a discovery.** `build_cases` makes
+exactly one case per live fact, so the number of cases whose answer is in the
+block is exactly the number of facts in the block, and presence is `k/n` to the
+last digit in every row above: 4/60, 10/60, 20/60, 42/60, 60/60. That holds
+whatever order the block is in.
+
+So **this experiment cannot credit or discredit centrality ranking at all**. It
+measures the size of the block and the spread of the question set, and nothing
+about which facts were chosen. That is the single biggest weakness of the
+measurement and it is a property of deriving questions from their own answers,
+which is the caveat the shape table at the top of this file already carries.
+
+**It is also the wrong question distribution for BEAM's claim.** LIGHT's
+ablation runs over a dialogue whose questions concentrate on a few salient
+facts; one case per fact, spread evenly, is the distribution least favourable
+to any query-independent block. This refutes the strong reading of "the
+scratchpad alone suffices" for an evenly spread question set, and says nothing
+about a concentrated one.
+
+**Latency was not measured.** A scratchpad is one indexed query with no
+embedding call; an answer is an embed plus two candidate queries plus a
+fusion. Tokens were matched, wall clock was not, and the scratchpad is cheaper
+on the axis that was not measured.
+
+**The 8x row moves between seedings.** It read 43 facts and presence 0.7167 on
+one run and 42 and 0.7000 on the next. `scratchpad` breaks centrality ties by
+`t_valid DESC`, which is the write second, so which facts tie depends on how
+fast the seed ran. Every other row was identical across runs. A rerun against
+one existing store is fixed, which is what `scratchpad.py` claims; a reseed is
+not.
+
+**The intervals are optimistic**, for the reason `compare` states: cases are
+resampled one at a time and these cases share entity names and hub entities, so
+a cluster bootstrap would be wider.
+
+### What to do about it
+
+Nothing yet, to `scratchpad.py`. These numbers say it is not a retrieval
+substitute at retrieval's budget on an evenly spread question set, which is not
+the same as saying it is useless: it is still a zero-model-call block that
+cannot drift from the store and cannot carry a superseded version, which is
+what a session-start primer wants and is not what this measured.
+
+The measurements that would settle it, in order of value:
+
+1. **The query-scoped form.** `scratchpad(about=[...])` is the version that
+   could plausibly win, and it is unmeasured here because it needs query terms
+   resolved to entity names and `about` matches names exactly while
+   `prompt_terms` lowercases and splits. That is a resolution problem, not a
+   parameter.
+2. **A question set nobody derived from its own answers.** LoCoMo's 282
+   multi-hop questions break the `k/n` identity above, because several
+   questions can share an answer and most facts answer none.
+3. **A concentrated question set**, which is the distribution LIGHT's ablation
+   actually ran on, and the only one in which a centrality-ordered block has a
+   mechanism to win.

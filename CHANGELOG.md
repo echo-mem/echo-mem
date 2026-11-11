@@ -241,6 +241,53 @@ unconditional id index changes neither the plan nor the time (3.75ms against
 Index Only Scan at 0.026ms. An index that does not change a plan costs write
 amplification and leaves a comment claiming a query is fast.
 
+**Several scopes are routed rather than fanned out, and the answer fits a token
+budget.** `query_across` costs one full `query_memory` per scope, so an account
+with eight memories paid eight times over for an answer that lived in one.
+`retrieval/routing.py` decides which scopes are worth asking with **zero model
+calls**, generalising the technique `needs_expansion` already uses: tokenise the
+query, find the nodes whose name contains a term, count the live facts hanging
+off them. One indexed query per scope, and no embedder anywhere near it, because
+a vector probe per scope IS a query_memory and routing has to be cheaper than
+the thing it decides about.
+
+`routing.select` keeps the scope a caller named as its default whatever it
+scored, and refuses a default from outside the authorised scopes. Routing that
+can exclude a configured scope loses data and the answer comes back shaped
+exactly like a correct one.
+
+`retrieval/context.py`'s `assemble` composes routing, `query_across` and the
+budget. With one scope and no budget it returns exactly what `query_across`
+returns, byte for byte, so every published number is still the baseline. The
+answer carries which scopes were asked, which were rejected and why, and what a
+budget dropped, because an answer thinned by a budget otherwise looks exactly
+like a thin store.
+
+Weights proposed from the scores are **untuned**, as `weights_for` says in as
+many words; `propose_weights=False` is plain RRF.
+
+**The derived scratchpad has a number, and it loses.** `retrieval/scratchpad.py`
+shipped on BEAM's claim that "the scratchpad alone suffices" and no measurement.
+`eval/scratchpad_eval.py` compares it against `query_memory` at matched token
+spend over a 60-fact synthetic corpus:
+
+| shape | measure | query_memory | scratchpad | Δ | 95% CI |
+|---|---|---:|---:|---:|---|
+| entity_pair | MRR | 0.9639 | 0.0347 | -0.9292 | [-0.9736, -0.8764] |
+| entity_pair | recall@10 | 1.0000 | 0.0667 | -0.9333 | [-0.9833, -0.8667] |
+| prose | MRR | 1.0000 | 0.0347 | -0.9653 | [-0.9958, -0.9222] |
+
+No interval contains zero. The block reaches the ranker's recall at 16x the
+tokens, at which point it holds the whole scope and is the "inject everything"
+baseline rather than a cheaper context.
+
+The limitation is written down beside the result: `build_cases` makes one case
+per fact, so presence is `k/n` by construction and the experiment **cannot
+credit or discredit centrality ranking at all**. It is also the question
+distribution least favourable to any query-independent block, and it is not the
+one LIGHT's ablation ran on. Nothing about `scratchpad.py` changes on the
+strength of it. See docs/BENCHMARKS.md.
+
 **The ablation table reports an interval for recall@10, and it changes what
 several past experiments mean.** Until now `compare` bootstrapped the
 per-case reciprocal ranks and nothing else, so every row carried an interval
