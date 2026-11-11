@@ -82,7 +82,7 @@ def test_no_tool_gained_or_lost_a_parameter():
     tool refuses every call that worked yesterday."""
     actual = {
         name: (
-            list((schema.get("properties") or {})),
+            list(schema.get("properties") or {}),
             list(schema.get("required") or []),
         )
         for name, schema in _tools().items()
