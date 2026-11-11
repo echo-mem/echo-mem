@@ -42,6 +42,12 @@ Those are different bugs on their side, and only one of them is theirs. So the
 rejected scopes travel with the answer, each with the sentence that rejected
 it, and so does the budget report, because an answer thinned by a budget looks
 exactly like a thin store.
+
+Two keys in that block are easy to confuse and mean different things.
+`chosen` is what routing picked. `considered` is `query_across`'s, and is
+`chosen` minus any scope that turned out to be unreadable, which is why the
+weights are keyed on it. An empty `scores` means the scorer never ran, not
+that nothing matched: with one scope there was no decision to make.
 """
 
 from __future__ import annotations

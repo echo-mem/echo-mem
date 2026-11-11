@@ -276,9 +276,16 @@ def _rate(result: Result, k: int) -> float:
 def render_sweep(swept: dict) -> str:
     """How much context the block needs, arm by arm.
 
-    The `facts` column is the one to read first. It is what the budget bought,
-    and on an evenly spread question set it predicts the presence column
-    almost exactly, which is the finding rather than an artefact of it.
+    The `facts` column is the one to read first, and reading it honestly means
+    knowing that with `build_cases` it DETERMINES the presence column rather
+    than predicting it. One case per live fact means the number of cases whose
+    answer is in the block equals the number of facts in the block, so presence
+    is k/n exactly, whatever order the block is in.
+
+    That makes this sweep a measurement of block size against a spread question
+    set and not of centrality. It is a limit of the case construction, not of
+    the scratchpad, and the way past it is a question set nobody derived from
+    its own answers.
     """
     if swept.get("error"):
         return f"no measurement: {swept['error']}"
