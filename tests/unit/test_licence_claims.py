@@ -12,6 +12,7 @@ every place the claim appears, including the ones that are easy to forget.
 
 from __future__ import annotations
 
+import re
 import tomllib
 from pathlib import Path
 
@@ -256,6 +257,54 @@ WITHDRAWS = (
 )
 
 
+def blocks(path: Path) -> list[tuple[int, list[str]]]:
+    """`path` as paragraphs, each with the line number it starts on.
+
+    Paragraphs rather than the whole file, so a reported line number is the
+    offending one. Flattening a file whole loses the mapping, and looking the
+    phrase back up by its first occurrence reported docs/COMPLIANCE.md:14 -
+    the legitimate historical sentence - for a planted claim on line 18. A
+    guard that names the wrong line sends somebody to read correct text and
+    conclude the test is broken.
+    """
+    out, start, buf = [], 1, []
+    for n, line in enumerate(path.read_text().splitlines(), start=1):
+        if line.strip():
+            if not buf:
+                start = n
+            buf.append(line)
+        elif buf:
+            out.append((start, buf))
+            buf = []
+    if buf:
+        out.append((start, buf))
+    return out
+
+
+def sentences(lines: list[str]) -> list[str]:
+    """One paragraph's lines split into sentences, wrapping collapsed first.
+
+    Collapsed because a licence paragraph wraps mid-sentence, so a line-based
+    check reads a withdrawal two lines down as absent and fails a page that
+    is correct.
+
+    Split on a full stop NOT preceded by a digit. "Versions 0.5.0 to 0.5.5
+    shipped under the Business Source License" is one sentence containing
+    four full stops, and a naive splitter turns the only honest way to write
+    that history into five fragments with the withdrawal in none of them.
+    """
+    flat_text = " ".join(" ".join(lines).split())
+    return [s for s in re.split(r"(?<![0-9])[.!?]+\s+", flat_text) if s]
+
+
+def line_in(start: int, lines: list[str], phrase: str) -> int:
+    """The line inside one paragraph that carries `phrase`."""
+    for offset, line in enumerate(lines):
+        if phrase in line.lower():
+            return start + offset
+    return start
+
+
 def test_no_superseded_licence_name_appears_without_being_withdrawn():
     """The half the obligation list cannot see.
 
@@ -265,34 +314,44 @@ def test_no_superseded_licence_name_appears_without_being_withdrawn():
     labelled "License (Business Source License 1.1)", seventy-six lines below
     its own line saying Apache-2.0. No obligation in it, and wrong anyway.
 
-    Checked in a window rather than per file, because every one of these
-    phrases has a legitimate past tense in this repository and a file level
-    "does the word 'withdrawn' appear anywhere" test is the presence check this
-    whole module exists to argue against. 400 characters is wide enough for a
-    wrapped paragraph and narrow enough that a withdrawal three sections away
-    does not count.
+    Checked per SENTENCE, not per file and not in a window of characters.
+
+    Per file would be a presence check - "does the word 'withdrawn' appear
+    anywhere" - which is what this whole module exists to argue against.
+
+    A 400 character window was the first attempt and was the same bug in
+    miniature. Inserting "The engine is source available under BSL 1.1, free
+    under 50 employees" into docs/COMPLIANCE.md passed, because the correct
+    paragraph around it withdraws the restriction and a window cannot tell
+    which claim a withdrawal applies to. A withdrawal three sentences away is
+    a withdrawal of a different claim, which is the same shape as a correction
+    sixty lines from the thing it was meant to replace.
     """
     offending = []
     for path in sells_the_licence():
-        text = flat(path)
-        low = text.lower()
-        for phrase in SUPERSEDED:
-            start = 0
-            while (i := low.find(phrase, start)) != -1:
-                window = low[max(0, i - 400) : i + 400]
-                if not any(w in window for w in WITHDRAWS):
-                    offending.append(
-                        (path.relative_to(ROOT), line_of(path, phrase), phrase)
-                    )
-                start = i + 1
+        for start, lines in blocks(path):
+            for sentence in sentences(lines):
+                low = sentence.lower()
+                if any(w in low for w in WITHDRAWS):
+                    continue
+                for phrase in SUPERSEDED:
+                    if phrase in low:
+                        offending.append(
+                            (
+                                path.relative_to(ROOT),
+                                line_in(start, lines, phrase),
+                                phrase,
+                            )
+                        )
 
     assert not offending, (
         "these name a superseded licence term with nothing nearby withdrawing "
-        f"it, so each reads as a current term. The engine is Apache 2.0.\n"
+        "it, so each reads as a current term. The engine is Apache 2.0.\n"
         + "\n".join(f"  {f}:{n}  {p!r}" for f, n, p in offending)
         + "\n\nEither delete it, or put it in the past the way docs/COMPLIANCE.md "
-        "does: name what the restriction was, then say it was withdrawn. One of "
-        f"{WITHDRAWS} has to appear within 400 characters."
+        "does: name what the restriction was, then say it was withdrawn IN THE "
+        f"SAME SENTENCE. One of {WITHDRAWS} has to appear in the sentence "
+        "carrying the term, not merely somewhere near it."
     )
 
 
