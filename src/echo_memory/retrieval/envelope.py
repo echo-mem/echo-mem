@@ -68,14 +68,14 @@ HANDLING = (
 #: long regex list gives a false sense of completeness, and the honest claim
 #: here is "these are worth an operator's attention", not "these are all of them".
 _INSTRUCTION_SHAPES = (
-    re.compile(r"\bignore\s+(all\s+|any\s+)?(previous|prior|earlier|above)\b", re.I),
-    re.compile(r"\bdisregard\s+(all\s+|any\s+)?(previous|prior|earlier|above)\b", re.I),
-    re.compile(r"\b(you\s+are\s+now|from\s+now\s+on\s+you)\b", re.I),
-    re.compile(r"\bnew\s+(system\s+)?(instructions?|rules?|directives?)\b", re.I),
-    re.compile(r"</?(system|assistant|user)>", re.I),
-    re.compile(r"^\s*(system|assistant)\s*:", re.I | re.M),
-    re.compile(r"\b(reveal|print|output|repeat)\b.{0,30}\b(system\s+prompt|instructions)\b", re.I),
-    re.compile(r"\boverride\b.{0,20}\b(instructions?|rules?|safety)\b", re.I),
+    re.compile(r"\bignore\s+(all\s+|any\s+)?(previous|prior|earlier|above)\b", re.IGNORECASE),
+    re.compile(r"\bdisregard\s+(all\s+|any\s+)?(previous|prior|earlier|above)\b", re.IGNORECASE),
+    re.compile(r"\b(you\s+are\s+now|from\s+now\s+on\s+you)\b", re.IGNORECASE),
+    re.compile(r"\bnew\s+(system\s+)?(instructions?|rules?|directives?)\b", re.IGNORECASE),
+    re.compile(r"</?(system|assistant|user)>", re.IGNORECASE),
+    re.compile(r"^\s*(system|assistant)\s*:", re.IGNORECASE | re.MULTILINE),
+    re.compile(r"\b(reveal|print|output|repeat)\b.{0,30}\b(system\s+prompt|instructions)\b", re.IGNORECASE),
+    re.compile(r"\boverride\b.{0,20}\b(instructions?|rules?|safety)\b", re.IGNORECASE),
 )
 
 

@@ -199,18 +199,22 @@ def query_across(
         if result.get("excluded_by_erasure") is not None:
             exclusions[gid] = result["excluded_by_erasure"]
         facts = result.get("facts") or []
+        if single:
+            # Nothing to fuse, and nothing to add. Returned before `source` is
+            # attached, because attaching it would mutate the dicts
+            # query_memory produced and the single-scope answer would stop
+            # being the single-scope answer. That is what the byte-identical
+            # test caught, and it is the sort of difference that would
+            # otherwise show up as an unexplained delta in a benchmark months
+            # later.
+            if errors:
+                result["unreadable_scopes"] = errors
+            return result
         for f in facts:
             f["source"] = gid
             per_scope[str(f["fact_id"])] = f
         ranked_lists.append([str(f["fact_id"]) for f in facts])
         list_weights.append(1.0 if weights is None else float(weights.get(gid, 1.0)))
-        if single:
-            # Nothing to fuse, and nothing to add. Returning the single-scope
-            # result untouched is what makes the byte-identical guarantee hold
-            # rather than being approximately true.
-            if errors:
-                result["unreadable_scopes"] = errors
-            return result
 
     if not ranked_lists:
         out: dict = {"facts": []}
