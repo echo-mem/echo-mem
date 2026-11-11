@@ -135,12 +135,22 @@ Answering for the data, which is the part a compliance review asks about:
 echo-memory forget                 # erase facts outright, for a data subject's deletion request
 echo-memory retain                 # how long this scope keeps a fact, and enforcing it
 echo-memory verify                 # has any fact been changed behind this store's back
+echo-memory exchange               # signed, redacted knowledge bundles between organisations
 ```
 
-Those three are deliberately not MCP tools, and a test reads the published
+Those four are deliberately not MCP tools, and a test reads the published
 tool list so that adding one later fails. Irreversible deletion of a scope,
 one prompt injection away from any agent holding a key, is not a trade worth
-making.
+making, and neither is handing one organisation's memory to another.
+
+`exchange` is one directional and there is no federation API. An export is a
+signed file whose signature covers the redacted content, so what a recipient
+verifies is what was actually sent. An import lands in a quarantine scope that
+ordinary retrieval is not given, at `confidence: inferred`, and becomes
+readable only when a named verifier promotes the bundle. Revoking one stops
+the scope being readable from then on; it cannot recall facts already returned
+into an agent's context, which is a property of having handed data over rather
+than a gap, and `exchange export` says so before it writes anything.
 
 ### The seven MCP tools
 
@@ -439,7 +449,7 @@ and the v1a to v1b plan.
 
 | | |
 |---|---|
-| **v1a, built** | Basic recall. Seven MCP tools, 38 CLI commands, on PyPI and in the MCP registry. |
+| **v1a, built** | Basic recall. Seven MCP tools, 39 CLI commands, on PyPI and in the MCP registry. |
 | **v1b, part built** | Causal typing and `trace_cause` shipped in 0.5.0. Multi hop associative retrieval has not: 187 questions no single fact answers score MRR 0.212 today, and that number is what the rest of v1b has to beat. |
 | **v1c, designed** | Consolidation: hot, consolidated and archived tiers, so retrieval cost stops tracking total facts written. Nothing implemented. |
 | **v1.1, planned** | Organisation wide tenancy: per agent, per team, or org wide graphs. |
