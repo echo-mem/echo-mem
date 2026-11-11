@@ -523,3 +523,102 @@ def test_an_erasure_before_the_as_of_moment_is_not_reported(migrated_db):
     past = query_memory(conn, GROUP, UNRELATED, 10, embedder, as_of=after_erasure)
 
     assert "excluded_by_erasure" not in past
+
+
+def test_erasure_reaches_the_intelligence_tables(migrated_db):
+    """A deletion request has to reach every table holding the subject's data,
+    and five were added after this module was written.
+
+    Split the way the rest of erase() splits. A pointer and a piece of content
+    are deleted; a record that something happened is kept with its prose
+    stripped, because the record is what makes a chain over it mean anything
+    and an id on its own is not content.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from echo_memory.events import envelope as events
+    from echo_memory.events import inbox
+    from echo_memory.trust import evidence as evidence_mod
+    from echo_memory.trust import states, verify
+
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder)
+
+    subject_edge, other_edge = (
+        str(r[0]) for r in conn.execute(
+            f"""SELECT e.id FROM {GRAPH}."FACT" e
+                 WHERE {_GROUP.replace('properties', 'e.properties')} = %s
+                 ORDER BY CASE WHEN {_FACT.replace('properties', 'e.properties')}
+                               LIKE %s THEN 0 ELSE 1 END, e.id""",
+            (GROUP, f"%{SUBJECT}%"),
+        ).fetchall()[:2]
+    )
+
+    shared = evidence_mod.record(
+        conn, GROUP, "human_correction", uri="https://tickets.example/9001",
+        detail={"note": f"{SUBJECT} asked for a correction"},
+        reporter_agent="claude-code",
+    )
+    evidence_mod.link(conn, GROUP, subject_edge, shared)
+    evidence_mod.link(conn, GROUP, other_edge, shared)
+
+    private = evidence_mod.record(
+        conn, GROUP, "human_correction", uri="https://tickets.example/9002",
+        detail={"note": f"{SUBJECT} home address"}, reporter_agent="claude-code",
+    )
+    evidence_mod.link(conn, GROUP, subject_edge, private)
+
+    verify.record(
+        conn, GROUP, subject_edge, states.VERIFIED, verifier_kind=states.HUMAN,
+        verifier_id="reviewer", method=f"spoke to {SUBJECT} directly",
+        detail=f"{SUBJECT} confirmed by email",
+    )
+
+    inbox.enqueue(conn, GROUP, events.Envelope(
+        event_id="erasure-reach-0001",
+        event_type=events.OUTCOME_OBSERVED,
+        occurred_at=datetime.now(UTC),
+        actor=events.Actor(agent="ci-reporter"),
+        scope=events.Scope(memory=None, scope="shared"),
+        payload={"decision": "d", "outcome": "o", "sign": "success",
+                 "detail": f"reported by {SUBJECT}"},
+    ))
+    inbox.mark(conn, "erasure-reach-0001", inbox.APPLIED, edge_ids=[subject_edge])
+
+    erasure.erase(
+        conn, GROUP, erasure.plan(conn, GROUP, entity=SUBJECT), requested_by="test",
+    )
+
+    assert conn.execute(
+        "SELECT count(*) FROM public.fact_evidence WHERE edge_id = %s::graphid",
+        (subject_edge,),
+    ).fetchone()[0] == 0
+
+    remaining = {
+        r[0] for r in conn.execute(
+            "SELECT id FROM public.evidence WHERE group_id = %s", (GROUP,)
+        ).fetchall()
+    }
+    assert private not in remaining, "evidence nothing points at any more must go"
+    assert shared in remaining, "evidence a surviving fact still cites must stay"
+
+    row = conn.execute(
+        """SELECT method, detail FROM public.fact_verification
+            WHERE edge_id = %s::graphid""",
+        (subject_edge,),
+    ).fetchone()
+    assert row is not None, "deleting the row would break verification_attestation"
+    assert row[0] == "redacted"
+    assert row[1] is None
+
+    event = conn.execute(
+        """SELECT envelope, applied_edge_ids FROM public.event_inbox
+            WHERE event_id = %s""",
+        ("erasure-reach-0001",),
+    ).fetchone()
+    assert event is not None, "the idempotency key must survive an erasure"
+    assert event[0].get("redacted") is True
+    assert SUBJECT not in json.dumps(event[0])
+    assert subject_edge not in [str(x) for x in (event[1] or [])]

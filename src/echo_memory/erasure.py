@@ -316,6 +316,64 @@ def erase(
             # false for every row rather than an error.
             conn.execute("DELETE FROM public.eval_judgement WHERE edge_id = ANY(%s)", (edges,))
 
+            # The intelligence platform's tables, split the same way the rest
+            # of this function splits: delete what is content, strip what is a
+            # record that something happened.
+            #
+            # fact_evidence is a pointer and goes. An evidence row is content -
+            # a uri and free detail a reporter wrote - so it goes too, but only
+            # once nothing else points at it: evidence is linked many to many
+            # and deleting a row still cited by a fact that was NOT erased
+            # would take away somebody else's provenance.
+            conn.execute(
+                "DELETE FROM public.fact_evidence "
+                "WHERE edge_id = ANY(%s::text[]::graphid[])",
+                (edges,),
+            )
+            conn.execute(
+                """DELETE FROM public.evidence e
+                    WHERE e.group_id = %s
+                      AND NOT EXISTS (
+                          SELECT 1 FROM public.fact_evidence fe
+                           WHERE fe.evidence_id = e.id)""",
+                (group_id,),
+            )
+
+            # A verification row is BOTH. That a claim was checked, by whom and
+            # when, is the record that makes the chain over it mean anything,
+            # and deleting the row would break verification_attestation exactly
+            # the way deleting a fact breaks fact_attestation - which this
+            # module deliberately does not repair, because a visible gap
+            # reconciled against erasure_event is more honest than a rewritten
+            # chain. But `method` and `detail` are free text somebody typed,
+            # and free text is where personal data goes. So the row stays and
+            # the prose is stripped, which is what audit_entry gets below for
+            # the same reason.
+            conn.execute(
+                """UPDATE public.fact_verification
+                       SET method = 'redacted', detail = NULL, scope = NULL
+                     WHERE edge_id = ANY(%s::text[]::graphid[])""",
+                (edges,),
+            )
+
+            # An applied inbox event names the edges it created, and its
+            # envelope holds whatever a reporter sent. Once its edges are
+            # gone the payload is the only copy left, so the envelope is
+            # replaced rather than kept: the row remains as proof the event
+            # was received and not applied twice, which is the whole reason
+            # the inbox is keyed by event_id.
+            conn.execute(
+                """UPDATE public.event_inbox
+                       SET envelope = jsonb_build_object(
+                               'redacted', true,
+                               'event_type', envelope -> 'event_type'),
+                           applied_edge_ids = COALESCE((
+                               SELECT array_agg(x) FROM unnest(applied_edge_ids) x
+                                WHERE NOT x = ANY(%s)), '{}')
+                     WHERE applied_edge_ids && %s""",
+                (edges, edges),
+            )
+
             # Strip the pointers, keep the rows. These are evidence that a read
             # or an evaluation happened, which the unit meter and criterion 6
             # both count, and an id on its own is not content.
