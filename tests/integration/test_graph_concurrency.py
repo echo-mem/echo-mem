@@ -46,6 +46,34 @@ and is not the same as "the bug is gone".
 that cross-scope writers DO overlap in time today, so the hazard window is
 real whether or not this hardware can make AGE fall into it.
 
+## What DID reproduce, and why it points somewhere else
+
+While integrating these streams the fault appeared on this same hardware, from
+a different cause. The exact error, during the `migrated_db` fixture's
+teardown:
+
+    psycopg.errors.InternalError_: label (relation) cache corrupted
+    [SQL: DELETE FROM alembic_version WHERE alembic_version.version_num = '0001']
+
+At that moment five OTHER databases on the same Postgres container were each
+running their own `alembic upgrade`/`downgrade base` cycles, which is
+`create_graph` and `drop_graph` over and over. `pg_stat_activity` showed 13
+backends across 5 databases. The same test passed in isolation in 9 seconds.
+
+So on this machine the write path survived roughly 30,000 concurrent
+cross-scope episodes untouched, while concurrent graph DDL corrupted the cache
+on the first serious attempt. That is evidence the trigger is more likely
+`create_graph`/`drop_graph` contention than concurrent INSERTs, and it widens
+the exposure in a direction the write gate does not cover: a CI runner that
+migrates several test databases in parallel is itself a reproducer.
+
+It does not settle it. The production failure was writers, not migrations, and
+one observation is not a characterisation. What it does mean is that anybody
+chasing this next should start with DDL rather than with write volume, and that
+a deployment which never creates or drops a graph at runtime - which is every
+deployment, since labels are only ever created in migration 0001 - is exposed
+mainly at migration time.
+
 ECHO_MEMORY_CONCURRENCY_SOAK=1 raises the load from 4x40 to 8x500, which takes
 about two minutes instead of about three seconds. The default is small on
 purpose: a regression guard everybody skips because it is slow guards nothing.

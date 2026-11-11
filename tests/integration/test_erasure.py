@@ -440,6 +440,42 @@ def test_no_tool_published_over_mcp_can_erase():
     )
 
 
+def test_no_tool_published_over_mcp_can_grant_trust_or_export():
+    """The same argument as erasure, for the two powers added since.
+
+    Verification decides what retrieval returns, so a tool that could set a
+    state would let any agent holding a key promote its own claims - which is
+    the elevation events.envelope.REQUIRES_VERIFY exists to deny, and denying
+    it in one layer while publishing a tool for it in another would be
+    pointless. Exchange hands one organisation's memory to another, and
+    `promote` decides that an imported bundle may be read at all.
+
+    None of these is a step in an agent's loop. They are a person's decision,
+    and the operator CLI is where a person makes it.
+
+    Reads the live registry rather than the source for the same reason the
+    erasure guard does: this fails when somebody registers one, not when
+    somebody names a function.
+    """
+    from echo_memory import server
+
+    published = {t.name for t in server.server._tool_manager.list_tools()}
+
+    assert published, "precondition: the server publishes some tools"
+    forbidden = {
+        # Trust: setting a state, or approving the rules that set one.
+        "verify", "verify_fact", "record_verification", "set_verification",
+        "reject_fact", "dispute_fact", "approve_policy",
+        # Exchange: sending, accepting, or making an import readable.
+        "export", "export_bundle", "import", "import_bundle",
+        "promote", "promote_bundle", "revoke", "revoke_bundle", "exchange",
+    }
+    assert not (published & forbidden), (
+        f"trust and exchange must not be reachable over MCP: "
+        f"{sorted(published & forbidden)}"
+    )
+
+
 def test_an_as_of_answer_says_what_erasure_removed(migrated_db):
     """The honesty cost of erasure, paid out loud.
 
