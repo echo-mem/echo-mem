@@ -100,7 +100,7 @@ docker compose exec -T db psql -U postgres -d echo_cloud \
 That is stated rather than glossed because it is the question a reviewer
 should ask. The connection never leaves the machine: the database is a
 container on the same host, reached over a Docker bridge address, and its port
-is not reachable from outside the instance — only 80 and 443 are open, and a
+is not reachable from outside the instance: only 80 and 443 are open, and a
 direct connection to 5433 from the internet is refused. So the traffic is not
 exposed to a network an attacker can be on, and TLS between two processes on
 one host would protect against an attacker who already has that host.
