@@ -17,7 +17,7 @@ deployment gets all six.
 
 from __future__ import annotations
 
-import os
+import json
 from datetime import UTC, datetime
 
 import pytest
@@ -351,7 +351,7 @@ def test_superseding_a_supporting_outcome_weakens_the_lesson(migrated_db):
                SET e.t_invalid = 1
                RETURN id(e)
            $$, %s) AS (id agtype)""",
-        ('{"eid": %d}' % int(observed[0]),),
+        (json.dumps({"eid": int(observed[0])}),),
     ).fetchone()
 
     after = lessons.candidates(conn, PROD)
@@ -375,7 +375,7 @@ def test_a_bundle_with_a_bad_signature_writes_nothing(migrated_db, exchange_keys
     before = conn.execute(
         "SELECT count(*) FROM public.fact_embedding").fetchone()[0]
 
-    with pytest.raises(Exception):
+    with pytest.raises(importer.ImportRefused):
         importer.import_bundle(
             conn, manifest=manifest, facts=facts, account="acct-other",
             memory="shared-in", embedder=embedder,
