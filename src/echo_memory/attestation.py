@@ -147,44 +147,105 @@ def _value(raw):
     return json.loads(str(raw))
 
 
+def _decoded(raw):
+    """One agtype property as read by `->>`, which hands back raw text.
+
+    The counterpart to `_value`, and they must agree. `_value` decodes the
+    JSON quoted form Cypher returns; this one has the decoded text already and
+    only has to turn agtype's `null` into Python's. An absent property comes
+    back as SQL NULL here and as the agtype `null` through Cypher, and a digest
+    that told those apart would depend on which reader saw the fact.
+    """
+    if raw is None or str(raw) == "null":
+        return None
+    return str(raw)
+
+
 def claims_of(conn, group_id: str, edge_id: str) -> dict:
     """What a fact says about itself, read back from the graph.
 
     Includes the endpoint names, because moving an edge from one node to
-    another changes its meaning entirely - "billing uses Razorpay" becomes
-    "billing uses Stripe" - without touching a single covered property.
+    another changes its meaning entirely: "billing uses Razorpay" becomes
+    "billing uses Stripe" without touching a single covered property.
 
-    Read through Cypher rather than the edge table directly: `properties` is
-    an agtype map and casting one to text is not allowed, so the per-property
-    projection is the only form that works on both a map and a scalar.
+    ## Why this reads the tables and not Cypher
+
+    It used to ask through Cypher, and the comment then said the per-property
+    projection was "the only form that works on both a map and a scalar". That
+    was half right. `properties::text` on a map is indeed refused, but a
+    NESTED projection is not: `properties -> '"provenance"' ->> '"session_id"'`
+    reaches inside the map and returns the one value this function wants.
+
+    The cost of asking through Cypher was that `MATCH (a)-[e:FACT]->(b) WHERE
+    id(e) = $eid` leaves the pattern unbound, so AGE expands every FACT edge in
+    the graph before filtering by id. On the write path, once per fact written.
+    Measured on this schema, one fact read by id out of a growing graph:
+
+        edges in graph    through Cypher    off the tables    speedup
+                   307         0.776 ms          0.409 ms        1.9x
+                 1,807         2.339 ms          0.657 ms        3.6x
+                 5,807         6.785 ms          0.694 ms        9.8x
+
+    Cypher grows linearly and the table read does not, which is the signature
+    of a sequential scan against an index scan. It is the same defect already
+    fixed twice in `neighbourhood._adjacent` and once in `_graph_candidates`,
+    and migration 0024 describes the shape: "write cost rose from 29ms at
+    1,057 nodes to 129ms at 24,054... read as the corpus being large rather
+    than as a defect".
+
+    ## Why moving it was dangerous, and what was proven first
+
+    This function feeds `canonical()`, which feeds the digest. The two reads do
+    NOT return the same bytes: Cypher returns JSON quoted agtype (`'"uses"'`)
+    and `->>` returns raw text (`'uses'`). Measured across seven facts chosen
+    to break a naive decoder - embedded newline, embedded quotes, a backslash
+    path, unicode, text that looks like a JSON object, a tab, and one fact with
+    no causal_hint at all - 51 of 63 fields differed in their raw form.
+
+    What was proven before the change landed is that they agree once DECODED:
+    raw text equals `json.loads(quoted)` for all 63, with `t_valid` needing an
+    int cast because `->>` hands back a string. So `_value` stays for the
+    Cypher form, `_decoded` is its counterpart here, and the digest over every
+    covered property is unchanged. `tests/integration/test_attestation.py`
+    pins that with a populated store: same claims, same digests, same head,
+    clean report.
+
+    If a future change touches either reader, that equivalence is the thing to
+    re-prove. Getting it wrong does not fail a test loudly; it reports every
+    fact in every store as altered.
     """
+    props = ", ".join(
+        f'''(e.properties ->> '"{key}"'::agtype)''' for key in COVERED
+    )
     row = conn.execute(
-        f"""SELECT * FROM cypher('{GRAPH}', $$
-            MATCH (a)-[e:FACT]->(b)
-            WHERE id(e) = $eid AND e.group_id = $gid
-            RETURN a.name, b.name, e.relation_type, e.fact, e.confidence,
-                   e.causal_hint, e.t_valid, e.agent_id, e.project,
-                   e.provenance
-        $$, %s) AS (source agtype, target agtype, relation_type agtype,
-                     fact agtype, confidence agtype, causal_hint agtype,
-                     t_valid agtype, agent_id agtype, project agtype,
-                     provenance agtype)""",
-        (json.dumps({"eid": int(edge_id), "gid": group_id}),),
+        f"""SELECT (a.properties ->> '"name"'::agtype),
+                   (b.properties ->> '"name"'::agtype),
+                   {props},
+                   ((e.properties -> '"provenance"'::agtype)
+                        ->> '"session_id"'::agtype)
+              FROM {GRAPH}."FACT" e
+              JOIN {GRAPH}."Node" a ON a.id = e.start_id
+              JOIN {GRAPH}."Node" b ON b.id = e.end_id
+             WHERE e.id = %s::graphid
+               AND {_GROUP.replace("properties", "e.properties")} = %s""",
+        (str(edge_id), group_id),
     ).fetchone()
     if row is None:
         raise AttestationError(f"no fact {edge_id} in {group_id}")
 
-    values = [_value(x) for x in row]
-    source, target = values[0], values[1]
-    covered = dict(zip(COVERED, values[2:9], strict=True))
-    provenance = values[9] or {}
+    source, target = _decoded(row[0]), _decoded(row[1])
+    covered = dict(zip(COVERED, (_decoded(v) for v in row[2:-1]), strict=True))
+    # t_valid is a number in the digest and a string out of ->>. Cast rather
+    # than left as text: a digest over "1762800000" is not a digest over
+    # 1762800000, and the whole point of this change is that it is.
+    if covered.get("t_valid") is not None:
+        covered["t_valid"] = int(covered["t_valid"])
     return {
         "group_id": group_id,
         "source": source,
         "target": target,
         **covered,
-        "session_id": provenance.get("session_id")
-        if isinstance(provenance, dict) else None,
+        "session_id": _decoded(row[-1]),
     }
 
 
