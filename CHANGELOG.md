@@ -58,6 +58,55 @@ rather than implying a guarantee that is not there.
 
 Migrations 0031 and 0032. Nothing on the read path consumes these yet.
 
+**Outcomes can be reported by machines, and conclusions are derived from them
+rather than stored.** Until now this store could record that a decision was
+made and never that it worked. The half that was missing arrives as two new
+tables' worth of plumbing and no new data model: a decision is a `Node`, an
+outcome is a `Node`, and "this decision led to that outcome" is a `FACT` edge
+with `causal_hint=led_to`. So `trace_cause` already walks it, supersession
+already retires an outcome that turns out wrong, erasure already reaches it and
+attestation already covers it.
+
+Reporters are CI runs, deploys and test suites, none of which speaks MCP. They
+send a validated envelope to `public.event_inbox` (migration 0033) and a single
+drain per graph applies it later. The latency is forced, not chosen:
+`write_episode` locks per scope while Apache AGE keeps its label catalogue per
+graph, so two writers in two scopes of one graph still corrupt it - four
+benchmark shards writing four scopes killed three of the four with `relation
+"echo_memory.-775.1utterance" does not exist`, and the run looked complete from
+outside. A multi-tenant endpoint that writes straight through is that condition
+permanently.
+
+`event_id` is caller-supplied and the primary key, so a CI system that retries
+on a timeout gets a free duplicate rather than a second deployment record or a
+dropped one. An event is applied through `write_episode` and never around it,
+and its result is checked: `unchanged` and a deliberately fact-free episode
+count as applied, everything else is a `rejected` row carrying the reason.
+
+A **lesson** - "deciding X tends to go badly" - is derived at read time and
+never written. It needs two agreeing outcomes, unanimous, each `verified` or
+`evidence_backed`; `mixed` and `unknown` outcomes are evidence the decision was
+taken and are dropped before any counting, so ten of them yield nothing rather
+than something weak. The basis is `verified_causal` only when every supporter
+was verified by an authorised verifier naming a method, and `correlational`
+otherwise, because evidence is not proof. Retiring one supporting outcome
+weakens the lesson immediately and deletes nothing, which a stored conclusion
+could not do.
+
+`claim.verified` events need verification authority the reporting types do not.
+A CI token can attach evidence all day and cannot say the evidence was
+sufficient, and `verified` is the only state a lesson counts as causal.
+
+Migration 0034 adds three partial indexes so asking for a scope's decisions
+does not scan its nodes. `Node.type` stays free text: the server calls no model
+and cannot tell a node typed `decision` from a decision, so the reserved words
+are a convention the reading layer honours rather than a constraint that would
+refuse nodes customers already have.
+
+There is still no inference provider. `infra/provider.py` ships `NullProvider`,
+`load({})` returns it, and a provider may only ever propose `correlational`
+candidates off any read or write path.
+
 **The ablation table reports an interval for recall@10, and it changes what
 several past experiments mean.** Until now `compare` bootstrapped the
 per-case reciprocal ranks and nothing else, so every row carried an interval
