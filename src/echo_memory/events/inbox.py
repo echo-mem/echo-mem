@@ -243,6 +243,14 @@ def drain(
     same transaction as the writes they describe: an event marked `applied`
     whose facts were rolled back would be a write that returned without
     storing, which is the failure mode this project has paid for three times.
+
+    `rejected` is terminal, and `attempts` is counted without anything
+    re-queueing on it. That is deliberate for now: the failures this path
+    produces are inapplicable payloads, which do not become applicable by being
+    retried. A genuinely transient failure - the store unreachable mid-batch -
+    takes the whole transaction down instead, which leaves every event in it
+    `pending` and retryable. Adding a retry state before anything needs one
+    would mean guessing which failures deserve it.
     """
     if apply is None:
         raise InboxError(
@@ -276,8 +284,13 @@ def drain(
                     # exactly when a drain matters.
                     envelope = parse(event["envelope"], now=event["occurred_at"])
                     result = apply(conn, event["group_id"], envelope)
-                edge_ids = [str(e) for e in (result or {}).get("edge_ids") or []]
-                mark(conn, event_id, APPLIED, edge_ids=edge_ids)
+                    # Inside the savepoint with the writes it describes, so the
+                    # two cannot disagree. A mark that committed while its facts
+                    # rolled back would be an `applied` row naming edges that
+                    # are not in the graph, and a reconciliation reading it
+                    # would conclude the facts had been deleted.
+                    edge_ids = [str(e) for e in (result or {}).get("edge_ids") or []]
+                    mark(conn, event_id, APPLIED, edge_ids=edge_ids)
                 applied.append(event_id)
             except Exception as e:  # noqa: BLE001
                 # Caught broadly and recorded, which is right here and wrong
