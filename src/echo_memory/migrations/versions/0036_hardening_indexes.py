@@ -63,6 +63,21 @@ rather than made here. There is a second reason to want it: `->>` returns
 real text, where the Cypher path returns agtype whose JSON escapes the current
 reader does not decode.
 
+That second reason is also why the change is not a drop-in, and whoever takes
+it needs to know before they start. `claims_of` feeds `canonical()`, which
+feeds the digest. `_value` currently does `json.loads(str(raw))`, which is
+correct for the quoted agtype Cypher returns and raises on the bare text
+`->>` returns. So the projection cannot move without `_value` moving with it,
+and the moment a covered property decodes to a different Python value the
+digest over it changes - for every fact already attested, in every store,
+including customers'. The chain would report the whole scope as altered.
+
+So the work is: change the read, change the decode, and then prove on a
+populated store that `report()` is still clean and `head()` has not moved.
+`tests/integration/test_trust.py` already has the shape of that assertion
+for the verification chain. Without that proof this is not a performance fix,
+it is a silent integrity event.
+
 An index that does not change a plan is worse than no index. It costs write
 amplification and space, and it leaves a comment claiming a query is fast.
 """

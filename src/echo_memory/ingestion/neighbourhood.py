@@ -37,6 +37,7 @@ somebody.
 from __future__ import annotations
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
+from echo_memory.infra.db import agtype_str
 
 # Enough for an agent to notice a word it should have used, few enough that the
 # response does not become something to skim. Suggestions past the fifth have
@@ -57,8 +58,14 @@ MAX_FACTS_CONSULTED = 3
 
 
 def _clean(value) -> str:
-    """AGE returns strings as quoted agtype."""
-    return str(value).strip('"')
+    """AGE returns strings as JSON encoded agtype.
+
+    Delegates rather than stripping quotes, because this one decodes fact text
+    as well as entity names and a fact is where free-form content lives. See
+    infra.db.agtype_str: four copies of this had drifted, and the two that
+    handled facts returned every escape sequence literally.
+    """
+    return agtype_str(value) or ""
 
 
 def _endpoints(conn, edge_ids: list[str]) -> list[dict]:

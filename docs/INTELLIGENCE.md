@@ -1303,7 +1303,7 @@ attack corpus and a 24 string benign corpus, measured on 2026-11-11 and
 recorded in `tests/unit/test_injection_detection.py`:
 
 ```
-attacks flagged     24 of 32    recall 0.750
+attacks flagged     26 of 32    recall 0.812
 benign flagged       4 of 24    false positive rate 0.167
 ```
 

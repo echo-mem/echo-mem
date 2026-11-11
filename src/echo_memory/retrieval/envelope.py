@@ -68,8 +68,22 @@ HANDLING = (
 #: long regex list gives a false sense of completeness, and the honest claim
 #: here is "these are worth an operator's attention", not "these are all of them".
 _INSTRUCTION_SHAPES = (
-    re.compile(r"\bignore\s+(all\s+|any\s+)?(previous|prior|earlier|above)\b", re.IGNORECASE),
-    re.compile(r"\bdisregard\s+(all\s+|any\s+)?(previous|prior|earlier|above)\b", re.IGNORECASE),
+    # `the` and `everything` are in the alternation because `above` was
+    # already there, so the shape was clearly meant to be caught, and one
+    # intervening article defeated it: "ignore the above" did not match while
+    # "ignore above" did. Half the measured misses were this one gap. Widened
+    # rather than made general: an unbounded gap between the verb and the
+    # object starts matching ordinary sentences about ignoring things.
+    re.compile(
+        r"\bignore\s+(?:all\s+|any\s+|the\s+|everything\s+)*"
+        r"(previous|prior|earlier|above|preceding)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bdisregard\s+(?:all\s+|any\s+|the\s+|everything\s+)*"
+        r"(previous|prior|earlier|above|preceding)\b",
+        re.IGNORECASE,
+    ),
     re.compile(r"\b(you\s+are\s+now|from\s+now\s+on\s+you)\b", re.IGNORECASE),
     re.compile(r"\bnew\s+(system\s+)?(instructions?|rules?|directives?)\b", re.IGNORECASE),
     re.compile(r"</?(system|assistant|user)>", re.IGNORECASE),

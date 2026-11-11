@@ -2,6 +2,7 @@
 and ag_catalog on the search_path before any Cypher call (see PR0a's spike
 notes in the design doc's Foundational spike section)."""
 
+import json
 import os
 
 import psycopg
@@ -10,6 +11,34 @@ from pgvector.psycopg import register_vector
 from echo_memory.infra.logging import get_logger
 
 GRAPH_NAME = "echo_memory"
+
+
+def agtype_str(v):
+    """An agtype scalar as the string it actually holds.
+
+    AGE hands back a JSON encoded value, so a fact containing a newline arrives
+    as the six characters `"a\\nb"`. Three separate copies of this function
+    used to strip the outer quotes and stop, which left every escape sequence
+    literal: a stored newline read back as backslash-n, and a fact whose text
+    legitimately began and ended with a quote lost both.
+
+    It lives here rather than in any one of the three callers because it had
+    already been copied twice, and a decoder copied three times is a decoder
+    that will be fixed once. Found through a security consequence rather than a
+    rendering one: a line anchored injection pattern could not match retrieved
+    text, because the escaping had removed every line start there was.
+
+    The fallback is the old behaviour for anything that is not valid JSON. A
+    read path is the wrong place to start raising on data already stored.
+    """
+    if v is None:
+        return None
+    raw = str(v)
+    try:
+        decoded = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw.strip('"')
+    return decoded if isinstance(decoded, str) else raw.strip('"')
 
 _logger = get_logger("db")
 

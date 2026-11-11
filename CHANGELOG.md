@@ -171,10 +171,16 @@ proceed genuinely concurrently, which is the condition that killed three of
 four benchmark shards with `relation "echo_memory.-775.1utterance" does not
 exist`.
 
-`infra/graphlock.py` adds `graph_write_gate`, a graph wide lock, default one
-writer per graph, turned off by `ECHO_MEMORY_MAX_GRAPH_WRITERS` above 1. It
-is **not yet wired into the write path**; what ships here is the gate, its
-cost and its tests.
+`infra/graphlock.py` adds `graph_write_gate`, a graph wide lock, wired into
+`write_episode` through `infra/graph_gate.py` and **off unless an operator
+asks for it** with `ECHO_MEMORY_MAX_GRAPH_WRITERS=1`.
+
+The default was reversed from one writer per graph on this stream's own
+evidence: the gate costs 2.6x to 2.8x write throughput, the fault did not
+reproduce in about 30,000 concurrent cross scope episodes, and a normal
+deployment is one writer per scope. An explicit but unparseable value still
+fails safe at 1, because a typo must not silently remove a protection somebody
+believed they had switched on.
 
 The cost is real and is stated where the gate is. Eight writers, 500
 one-fact episodes each into its own scope, Postgres 16 with AGE under Colima:
@@ -235,7 +241,7 @@ write, silently, looking like latency.
 **What `instruction_like` catches is now a number.** `retrieval/envelope.py`
 says false negatives are expected, which is the right claim and the wrong one
 to leave unquantified. Measured over a 32 shape attack corpus and 24 real
-memories: **24 of 32 flagged (recall 0.750)** and **4 of 24 benign memories
+memories: **26 of 32 flagged (recall 0.812)** and **4 of 24 benign memories
 flagged (false positive rate 0.167)**. Both are pinned exactly, in both
 directions, so broadening a pattern means re-reading the benign side rather
 than passing a `>=`.

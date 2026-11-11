@@ -12,6 +12,7 @@ import time
 
 from echo_memory import erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
+from echo_memory.infra.db import agtype_str as _agtype_str
 from echo_memory.infra.logging import get_logger, log_query_memory
 from echo_memory.retrieval import bm25, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
@@ -890,32 +891,6 @@ def _digest_candidates(
         (json.dumps(params),),
     ).fetchall()
     return [str(edge_id) for (edge_id,) in rows]
-
-
-def _agtype_str(v):
-    """An agtype scalar as the string it actually holds.
-
-    AGE hands back a JSON encoded value, so a fact containing a newline arrives
-    as `"line one\\nline two"`. Stripping the quotes left the escape sequences
-    as literal backslash-n, which meant every fact containing a newline, a
-    quote or a backslash was returned subtly wrong: the dashboard rendered it
-    wrong, `export` wrote it wrong, and anything matching line starts could not
-    see them at all. Found by an adversarial test for a line anchored prompt
-    injection, which arrived unflagged because the detector's `^` had nothing
-    to anchor to.
-
-    Decoded rather than stripped. The fallback is the old behaviour for
-    anything that is not valid JSON, because a read path is the wrong place to
-    start raising on data that is already stored.
-    """
-    if v is None:
-        return None
-    raw = str(v)
-    try:
-        decoded = json.loads(raw)
-    except (ValueError, TypeError):
-        return raw.strip('"')
-    return decoded if isinstance(decoded, str) else raw.strip('"')
 
 
 def _fetch_facts(conn, edge_ids: list[str]) -> dict[str, dict]:
