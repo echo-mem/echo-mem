@@ -162,7 +162,7 @@ def test_the_measured_detection_rate_is_what_this_file_claims():
     here and re-read the benign side, rather than passing a `>=` and moving on."""
     caught = [s for s in ATTACKS if instruction_like(s)]
     assert len(ATTACKS) == 32
-    assert len(caught) == 24, f"recall moved: {len(caught)} of {len(ATTACKS)}"
+    assert len(caught) == 26, f"recall moved: {len(caught)} of {len(ATTACKS)}"
 
 
 def test_the_measured_false_positive_rate_is_what_this_file_claims():
