@@ -236,3 +236,58 @@ def test_a_repeated_scope_is_refused_before_it_is_scored():
         select(conn, ["mine", "mine"], "deploy branch policy")
 
     assert conn.calls == 0
+
+
+# --- the budget is a ceiling, including in the report --------------------
+
+
+def test_the_reported_spend_never_exceeds_the_budget():
+    """The gate and the report must do the same arithmetic.
+
+    The first version accumulated `estimate_tokens([fact])` per fact, which is
+    a sum of floors, while the report is a floor of a sum. Three facts of ten
+    characters are 2+2+2=6 one way and 30//4=7 the other, so a list passed the
+    gate at 6 against a budget of 6 and the report then said 7.
+
+    Swept rather than spot-checked at one value, because the divergence only
+    appears at some lengths and budgets and a single case is how it survived
+    the first time. It was found by the full suite, not by this file.
+    """
+    for length in range(1, 40):
+        for count in range(1, 8):
+            facts = [
+                {"fact": "x" * length, "fact_id": str(i)} for i in range(count)
+            ]
+            whole = estimate_tokens(facts)
+            for budget in range(1, whole + 3):
+                kept, report = fit_to_budget(facts, budget)
+                assert report["estimated_tokens"] <= budget, (
+                    f"{count} facts of {length} chars at budget {budget}: "
+                    f"reported {report['estimated_tokens']}"
+                )
+                assert report["estimated_tokens"] == estimate_tokens(kept), (
+                    "the report disagrees with measuring the kept list"
+                )
+                assert report["dropped"] == count - len(kept)
+
+
+def test_a_budget_smaller_than_the_first_fact_keeps_nothing():
+    """And says so in the report, which is the only thing distinguishing an
+    exhausted budget from a store with no answer."""
+    facts = [{"fact": "x" * 200, "fact_id": "a"}]
+    kept, report = fit_to_budget(facts, 1)
+    assert kept == []
+    assert report["dropped"] == 1
+    assert report["estimated_tokens"] == 0
+
+
+def test_truncation_still_comes_off_the_tail():
+    """A long fact at rank 1 ends the list rather than being skipped over, so
+    the order the caller was given is the order it gets."""
+    facts = [
+        {"fact": "x" * 400, "fact_id": "long"},
+        {"fact": "y" * 4, "fact_id": "short"},
+    ]
+    kept, report = fit_to_budget(facts, 50)
+    assert kept == [], "the short fact must not be promoted past the long one"
+    assert report["dropped"] == 2

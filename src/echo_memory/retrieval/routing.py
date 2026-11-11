@@ -441,18 +441,43 @@ def fit_to_budget(facts: list[dict], budget: int | None) -> tuple[list[dict], di
             "dropped": 0,
         }
 
-    spent = 0
+    # Characters accumulate and the division happens once, which is the same
+    # arithmetic `estimate_tokens` does over the kept list.
+    #
+    # The first version added `estimate_tokens([fact])` per fact, and that is a
+    # sum of floors where the report is a floor of a sum. Summing floors
+    # undercounts: three facts of ten characters are 2+2+2=6 tokens one way and
+    # 30//4=7 the other. So the gate let a list through at 6 against a budget
+    # of 6 and the report then said 7, and `estimated_tokens` could exceed the
+    # budget that had just been checked.
+    #
+    # Found by the full suite rather than by the file's own tests. The corpus
+    # the scratchpad eval seeds breaks centrality ties on the write second, so
+    # which facts land in the block moves between runs, and the arithmetic only
+    # diverges for some of them: 58 tokens in isolation, 70 against a budget of
+    # 68 in the long run. A rounding bug that is usually invisible is still a
+    # bug when the thing it rounds is a ceiling somebody relies on.
+    spent_chars = 0
     kept = []
     for i, fact in enumerate(facts):
-        cost = estimate_tokens([fact])
-        if spent + cost > budget:
+        chars = len(fact.get("fact") or "")
+        if (spent_chars + chars) // CHARS_PER_TOKEN > budget:
             kept = list(facts[:i])
             break
-        spent += cost
+        spent_chars += chars
+        kept.append(fact)
     else:
         kept = list(facts)
-    return kept, {
+    report = {
         "budget": budget,
         "estimated_tokens": estimate_tokens(kept),
         "dropped": len(facts) - len(kept),
     }
+    # The ceiling, asserted rather than assumed. The two expressions above are
+    # meant to be the same arithmetic and a future edit to either could part
+    # them again, silently, in the direction that matters.
+    assert report["estimated_tokens"] <= budget, (
+        f"fit_to_budget kept {report['estimated_tokens']} tokens against a "
+        f"budget of {budget}: the gate and the report have parted again"
+    )
+    return kept, report
