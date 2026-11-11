@@ -10,7 +10,7 @@ half cheap enough to be safe.
 
 Three functions and a state change:
 
-    enqueue  one INSERT, idempotent on event_id
+    enqueue  one INSERT, idempotent on (group_id, event_id)
     pending  what is waiting
     drain    the single writer, applying events one at a time
     mark     the state change, with what it created or why it did not
@@ -91,13 +91,22 @@ def enqueue(conn, group_id: str, envelope: Envelope) -> dict:
     mean the same thing to the reporter - the event is in the inbox, stop
     sending it. The row is left exactly as it was, including its state: a
     replay of an event that already applied must not reopen it as pending.
+
+    "The same event" means the same id IN THIS SCOPE. The conflict target is
+    the composite key migration 0037 widened it to, and that is a tenancy
+    boundary rather than a detail: on the global key, scope B sending an id
+    scope A had used got `duplicate: true` - the one answer that means stop
+    retrying - while A kept the row, so one tenant could silence another's
+    reporting and the refusal itself disclosed that A had used the id. The
+    envelope docstring recommends ids derived from the reporter's own run
+    ("deploy-{commit}-{env}"), which makes that collision ordinary.
     """
     row = conn.execute(
         """
         INSERT INTO public.event_inbox
             (event_id, group_id, event_type, schema_version, envelope, occurred_at)
         VALUES (%s, %s, %s, %s, %s::jsonb, %s)
-        ON CONFLICT (event_id) DO NOTHING
+        ON CONFLICT (group_id, event_id) DO NOTHING
         RETURNING event_id
         """,
         (
@@ -165,6 +174,7 @@ def pending(conn, *, limit: int = DEFAULT_LIMIT) -> list[dict]:
 
 def mark(
     conn,
+    group_id: str,
     event_id: str,
     state: str,
     *,
@@ -173,6 +183,12 @@ def mark(
 ) -> None:
     """Move an event to a terminal state, recording what it created or why it
     did not.
+
+    `group_id` is required and is half the key. Since 0037 an `event_id` is
+    unique only within a scope, so an UPDATE on the id alone would mark every
+    scope's event of that name - one reporter's rejection landing on another
+    tenant's pending row. The drain reads the group off the inbox ROW and
+    passes it back here, which is the same source the row was written from.
 
     `applied_edge_ids` is set rather than appended. An event applies once; if
     it is ever re-applied after a restore, what the second attempt created is
@@ -188,22 +204,27 @@ def mark(
         """UPDATE public.event_inbox
               SET state = %s, processed_at = now(), error = %s,
                   applied_edge_ids = %s
-            WHERE event_id = %s""",
-        (state, error, edge_ids, event_id),
+            WHERE group_id = %s AND event_id = %s""",
+        (state, error, edge_ids, group_id, event_id),
     )
 
 
-def _count_attempt(conn, event_id: str) -> None:
+def _count_attempt(conn, group_id: str, event_id: str) -> None:
     """Increment attempts, outside whatever savepoint the apply runs in.
 
     Outside on purpose. An apply that raises rolls its savepoint back, and if
     the counter were inside it the rollback would also undo the record that it
     had been tried - so an event failing forever would read as an event nobody
     had touched.
+
+    Keyed on the pair for the reason `mark` is: counting an attempt against
+    every scope that happens to share the id would make `attempts` say that a
+    reporter had been retried when nobody had touched its event.
     """
     conn.execute(
-        "UPDATE public.event_inbox SET attempts = attempts + 1 WHERE event_id = %s",
-        (event_id,),
+        """UPDATE public.event_inbox SET attempts = attempts + 1
+            WHERE group_id = %s AND event_id = %s""",
+        (group_id, event_id),
     )
 
 
@@ -275,8 +296,8 @@ def drain(
         # Read inside the lock, not before it. A list gathered outside would be
         # a list another drain may already have applied.
         for event in pending(conn, limit=limit):
-            event_id = event["event_id"]
-            _count_attempt(conn, event_id)
+            event_id, group_id = event["event_id"], event["group_id"]
+            _count_attempt(conn, group_id, event_id)
             try:
                 with conn.transaction():
                     # Re-parsed from the stored envelope rather than handed to
@@ -292,14 +313,14 @@ def drain(
                     # failure and not the reporter's, and the backlog is
                     # exactly when a drain matters.
                     envelope = parse(event["envelope"], now=event["occurred_at"])
-                    result = apply(conn, event["group_id"], envelope)
+                    result = apply(conn, group_id, envelope)
                     # Inside the savepoint with the writes it describes, so the
                     # two cannot disagree. A mark that committed while its facts
                     # rolled back would be an `applied` row naming edges that
                     # are not in the graph, and a reconciliation reading it
                     # would conclude the facts had been deleted.
                     edge_ids = [str(e) for e in (result or {}).get("edge_ids") or []]
-                    mark(conn, event_id, APPLIED, edge_ids=edge_ids)
+                    mark(conn, group_id, event_id, APPLIED, edge_ids=edge_ids)
                 applied.append(event_id)
             except Exception as e:  # noqa: BLE001
                 # Caught broadly and recorded, which is right here and wrong
@@ -308,12 +329,12 @@ def drain(
                 # graph. The error text is kept so the reporter can be told
                 # what was wrong instead of being left to guess from silence.
                 reason = f"{type(e).__name__}: {e}"
-                mark(conn, event_id, REJECTED, error=reason)
+                mark(conn, group_id, event_id, REJECTED, error=reason)
                 rejected.append({"event_id": event_id, "error": reason})
                 _logger.warning(
                     "event_rejected",
                     extra={
-                        "group_id": event["group_id"],
+                        "group_id": group_id,
                         "event_id": event_id,
                         "event_type": event["event_type"],
                         "error": reason,

@@ -12,21 +12,24 @@ that work are authorization and trust gating, and that is what is attacked:
 the scope boundary, the trust states that decide what a read returns at all,
 and the gate between reporting something and asserting it was checked.
 
-Three findings came out of writing it. All three are design changes rather
-than defects with a safe local fix, so each is an `xfail` carrying the exact
-measured behaviour, and each is in a module this stream does not own:
+Three findings came out of writing it, each left as an `xfail` carrying the
+measured behaviour because each was a design change rather than a defect with
+a safe local fix. All three are now closed, and the tests below assert the new
+behaviour instead:
 
-  1. `event_inbox.event_id` is a global PRIMARY KEY. Two scopes cannot hold
-     the same event id, so one reporter choosing a predictable id - the shape
-     the envelope docstring recommends, "deploy-{commit}-{env}" - silently
-     swallows another scope's genuine event. Nothing leaks; the other scope's
-     event is dropped, reported to its sender as `duplicate: true`, and never
-     applied. Measured below.
+  1. `event_inbox.event_id` was a global PRIMARY KEY, so two scopes could not
+     hold the same event id: one reporter choosing a predictable id - the
+     shape the envelope docstring recommends, "deploy-{commit}-{env}" -
+     silently swallowed another scope's genuine event, which was dropped,
+     reported to its sender as `duplicate: true`, and never applied. Migration
+     0037 widened the key to (group_id, event_id).
   2. Nothing bounds how many events one reporter may enqueue. 200 events from
-     one actor into one scope are 200 rows, all pending, all accepted.
-  3. Evidence `uri` and `detail` are free text that no reader passes through
+     one actor into one scope are 200 rows, all pending, all accepted. Still
+     open at this commit.
+  3. Evidence `uri` and `detail` were free text that no reader passed through
      `instruction_like`, so the one surface that carries an attacker's URL
-     into an operator's view is the one surface with no flag on it.
+     into an operator's view was the one surface with no flag on it.
+     `evidence.for_fact` now returns the flag per row.
 
 What holds, and is asserted rather than hoped: no crafted group_ids list
 reaches a scope it was not given, no weight admits one, the budget cannot be
@@ -195,25 +198,21 @@ def test_a_crafted_event_id_is_refused_at_the_door(event_id):
         })
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "event_inbox.event_id is a global PRIMARY KEY (migration 0033), so the "
-        "idempotency namespace is shared by every scope on the deployment. "
-        "Measured: scope A enqueues 'deploy-abc1234' and gets accepted=True; "
-        "scope B enqueues the same id and gets accepted=False, duplicate=True, "
-        "which is the answer that tells a reporter to STOP retrying. The row "
-        "keeps group_id=A, so B's event is never applied and B is never told. "
-        "The envelope docstring recommends deterministic ids built from the "
-        "reporter's own run ('deploy-{commit}-{env}'), which makes a collision "
-        "between two customers deploying the same open source commit ordinary "
-        "rather than contrived. Nothing leaks across the boundary; one scope "
-        "can silence another's reporting. The fix is a composite key on "
-        "(group_id, event_id), which is a migration and a change to enqueue's "
-        "conflict target, so it is reported rather than made here."
-    ),
-)
 def test_two_scopes_may_each_hold_the_same_event_id(migrated_db):
+    """The finding this file reported, now closed by migration 0037.
+
+    Before it, `event_inbox.event_id` was a global PRIMARY KEY: scope A
+    enqueued 'deploy-abc1234' and got accepted=True, scope B enqueued the same
+    id and got accepted=False, duplicate=True - the one answer that tells a
+    reporter to STOP retrying - and the surviving row kept group_id=A, so B's
+    event was never applied and B was never told. One tenant could silence
+    another's reporting, and the refusal itself disclosed that A had used the
+    id. The envelope's own docstring recommends ids built from the reporter's
+    run, which makes two customers deploying one open source commit ordinary
+    rather than contrived.
+
+    The key is now (group_id, event_id). Both rows exist, each under its own
+    scope, and each reporter is told its event was accepted."""
     conn = connect(migrated_db)
     shared_id = "deploy-abc1234"
     first = inbox.enqueue(conn, OURS, _envelope(
@@ -223,64 +222,48 @@ def test_two_scopes_may_each_hold_the_same_event_id(migrated_db):
         events.DEPLOYMENT_COMPLETED, shared_id,
         decision="ship-it", outcome="deploy", sign="success"))
 
-    assert first["accepted"] is True
-    assert second["accepted"] is True, (
+    assert first == {"event_id": shared_id, "accepted": True, "duplicate": False}
+    assert second == {"event_id": shared_id, "accepted": True, "duplicate": False}, (
         "a second scope's genuine event was swallowed by the first scope's id"
     )
-
-
-def test_one_scopes_event_id_takes_the_id_from_every_other_scope(migrated_db):
-    """The measured half of the finding above, pinned so that fixing it
-    breaks this test on purpose.
-
-    Asserted on the ROW rather than on the return value, because the return
-    value alone is ambiguous: `duplicate: true` is also what a reporter's own
-    retry gets, and that case is correct. What makes this one wrong is that
-    the surviving row belongs to a different scope."""
-    conn = connect(migrated_db)
-    shared_id = "deploy-abc1234"
-    inbox.enqueue(conn, OURS, _envelope(
-        events.DEPLOYMENT_COMPLETED, shared_id,
-        decision="ship-it", outcome="deploy", sign="success"))
-    second = inbox.enqueue(conn, THEIRS, _envelope(
-        events.DEPLOYMENT_COMPLETED, shared_id,
-        decision="ship-it", outcome="deploy", sign="success"))
-
-    assert second == {"event_id": shared_id, "accepted": False, "duplicate": True}
-    owner = conn.execute(
-        "SELECT group_id FROM public.event_inbox WHERE event_id = %s",
+    owners = conn.execute(
+        """SELECT group_id FROM public.event_inbox
+            WHERE event_id = %s ORDER BY group_id""",
         (shared_id,),
-    ).fetchone()
-    assert owner[0] == OURS, "the row is the first scope's, and there is only one"
+    ).fetchall()
+    assert [o[0] for o in owners] == sorted([OURS, THEIRS])
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Nothing bounds an inbox. Measured: 200 events from one actor into one "
-        "scope are 200 accepted rows, all pending, with no per-reporter, "
-        "per-scope or per-window limit anywhere in events/inbox.py or "
-        "events/envelope.py. MAX_PAYLOAD_BYTES bounds ONE event at 64 KiB, "
-        "which bounds a row and not a queue, so 200 of them is a 12.8 MB "
-        "ceiling per 200 calls and nothing stops the 201st. drain's "
-        "DEFAULT_LIMIT of 100 bounds how many are APPLIED per pass, not how "
-        "many may wait, so a flood delays every other reporter on the graph "
-        "behind it rather than being refused. The bound belongs at the hosted "
-        "door with the credential that knows who is calling, which is cloud, "
-        "so this is reported rather than invented here."
-    ),
-)
-def test_a_flooding_reporter_is_bounded(migrated_db):
+def test_a_replay_within_one_scope_is_still_refused_and_still_says_so(migrated_db):
+    """The half the global key was RIGHT about, kept as its own test so that
+    widening the key cannot quietly lose it.
+
+    A reporter's own retry must be free: a CI system that times out cannot
+    know whether the first call landed, so the second call has to be an answer
+    rather than an error. `duplicate: true` is that answer, and the row is
+    left exactly as it was - including its state, because a replay of an event
+    that already applied must not reopen it as pending.
+
+    Asserted on the ROW as well as on the return value. The return value alone
+    cannot tell this case from the cross-scope swallow above: both said
+    `duplicate: true`, and what made that one wrong was which scope owned the
+    surviving row."""
     conn = connect(migrated_db)
-    for n in range(200):
-        inbox.enqueue(conn, OURS, _envelope(
-            events.OUTCOME_OBSERVED, f"flood-{n:08d}",
-            decision="d", outcome=f"o-{n}", sign="success"))
+    event_id = "deploy-abc1234"
+    first = inbox.enqueue(conn, OURS, _envelope(
+        events.DEPLOYMENT_COMPLETED, event_id,
+        decision="ship-it", outcome="deploy", sign="success"))
+    again = inbox.enqueue(conn, OURS, _envelope(
+        events.DEPLOYMENT_COMPLETED, event_id,
+        decision="ship-it", outcome="deploy", sign="success"))
 
-    waiting = conn.execute(
-        "SELECT count(*) FROM public.event_inbox WHERE state = 'pending'"
-    ).fetchone()[0]
-    assert waiting < 200, f"{waiting} events from one reporter are queued"
+    assert first["accepted"] is True
+    assert again == {"event_id": event_id, "accepted": False, "duplicate": True}
+    rows = conn.execute(
+        """SELECT group_id, state FROM public.event_inbox WHERE event_id = %s""",
+        (event_id,),
+    ).fetchall()
+    assert rows == [(OURS, "pending")], "a retry wrote a second row"
 
 
 def test_a_poisoned_outcome_chain_from_one_reporter_yields_no_lesson(

@@ -40,11 +40,21 @@ A widening, by the same argument as 0037. The old key was unique over
 `(group_id, bundle_id)`. The new constraint is implied by the old one and the
 ADD cannot find a duplicate to fail on.
 
-The downgrade is not symmetric and that is the honest statement: a store that
-has used the new freedom has two rows sharing a `bundle_id`, and re-adding the
-narrow key fails on them. The alternative is deleting one account's import
-record to make a schema change fit, which would also orphan the facts that row
-is the only proof of.
+## The downgrade is lossy, by the same argument 0037 makes at length
+
+A store that has used the new freedom has two rows sharing a `bundle_id`, and
+a unique index over duplicates does not exist, so the downgrade DELETES the
+later one. What that destroys is one account's record of an import - and the
+facts of that import stay on the graph in a quarantine scope whose registry
+row has gone, which is the orphaned-scope state `import_bundle` puts the
+registry INSERT inside its transaction to avoid.
+
+Refusing instead would make `downgrade base` impossible on any store that had
+used the feature, while the revision immediately below - 0035's own downgrade
+- is `DROP TABLE public.bundle_registry`, which orphans every import scope.
+Declining to delete one row above that is inconsistent rather than careful.
+
+A downgrade of this table is destructive at any depth. Take a dump first.
 
 ## Indexes
 
@@ -77,12 +87,22 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Narrow the key back, which fails if two scopes have shared a bundle_id.
+    """Narrow the key back, destroying the rows that cannot fit under it.
 
-    Left to fail for the reason 0037's downgrade is: the only way to re-add
-    the narrow key over two accounts' rows is to delete one account's import
-    record, and a migration does not get to choose which tenant loses theirs.
+    `created_at` picks the survivor, with `group_id` as the tiebreak, so that
+    two rows written in the same microsecond still give one deterministic
+    winner. The earliest import is kept for the same reason 0037 keeps the
+    earliest event: it is the one whose facts have been readable longest, so
+    it is the one most likely to have been acted on.
     """
+    op.execute(
+        """DELETE FROM public.bundle_registry b
+            WHERE EXISTS (
+                SELECT 1 FROM public.bundle_registry k
+                 WHERE k.bundle_id = b.bundle_id
+                   AND (k.created_at, k.group_id) < (b.created_at, b.group_id)
+            )"""
+    )
     op.execute(
         """CREATE INDEX IF NOT EXISTS bundle_registry_group_idx
              ON public.bundle_registry (group_id)"""

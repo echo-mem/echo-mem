@@ -37,11 +37,26 @@ There cannot be a duplicate for the ADD to fail on, whatever is in the table.
 Both tables are young enough that any real store is probably empty, but this
 holds either way and is the reason it does not have to be checked first.
 
-The downgrade is NOT symmetric and this is the honest statement: once a store
-has used the new freedom, two rows will share an `event_id` across scopes and
-re-adding the narrow key fails on them. That failure is correct. The
-alternative would be deleting one tenant's accepted events to make a schema
-change fit, which is not something a migration gets to decide.
+## The downgrade is lossy, and that is the honest statement
+
+It is not symmetric. Once a store has used the new freedom, two rows share an
+`event_id` across scopes, and re-adding the narrow key cannot succeed over
+them: a unique index over duplicates does not exist. So the downgrade DELETES
+the colliding rows, keeping the earliest-received one per `event_id`, and what
+it destroys is another scope's accepted events - including, for an applied
+one, the `applied_edge_ids` that is the only record of what it wrote.
+
+Refusing instead was the first version of this. It is the wrong trade here for
+one reason: the next step down the chain is 0033's own downgrade, which is
+`DROP TABLE public.event_inbox`. A migration that declined to delete one row
+while the revision below it throws away every row is not being careful, it is
+being inconsistent - and it would make `downgrade base` impossible on any
+store that had used the feature, which is what the test suite does after every
+test.
+
+What this does mean: a downgrade of this table is a destructive operation at
+any depth, and nothing here makes it otherwise. An operator who needs the rows
+takes a dump first.
 
 ## Indexes
 
@@ -74,14 +89,23 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Narrow the key back, which fails if any scope has used the widening.
+    """Narrow the key back, destroying the rows that cannot fit under it.
 
-    Deliberately left to fail rather than made to work. Two rows sharing an
-    `event_id` across two scopes are two tenants' accepted events, and the
-    only way to re-add the narrow key is to delete one of them. A downgrade
-    that silently picked a tenant to lose would be worse than one that stops
-    and says the schema no longer fits the data.
+    See the docstring above for why this deletes rather than refuses. The
+    survivor is chosen by `received_at` - the one timestamp this database
+    vouches for, which is the same reason the drain orders by it rather than
+    by the reporter's `occurred_at`. `group_id` breaks a tie so that two rows
+    received in the same microsecond still give one deterministic winner
+    rather than a result that depends on the plan.
     """
+    op.execute(
+        """DELETE FROM public.event_inbox e
+            WHERE EXISTS (
+                SELECT 1 FROM public.event_inbox k
+                 WHERE k.event_id = e.event_id
+                   AND (k.received_at, k.group_id) < (e.received_at, e.group_id)
+            )"""
+    )
     op.execute("ALTER TABLE public.event_inbox DROP CONSTRAINT IF EXISTS event_inbox_pkey")
     op.execute(
         """ALTER TABLE public.event_inbox

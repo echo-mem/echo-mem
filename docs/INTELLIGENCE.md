@@ -126,7 +126,7 @@ The envelope's four load bearing fields:
 
 | Field | Why |
 |---|---|
-| `event_id` | idempotency. A CI run that times out cannot know whether the first call landed, so the second returns `duplicate: true` rather than an error. 8 to 128 characters of letters, digits, dot, colon, underscore or hyphen |
+| `event_id` | idempotency, within your scope. A CI run that times out cannot know whether the first call landed, so the second returns `duplicate: true` rather than an error. Another account using the same id is not your problem: the inbox key is `(group_id, event_id)`. 8 to 128 characters of letters, digits, dot, colon, underscore or hyphen |
 | `occurred_at` | replay protection, with `MAX_AGE`. A naive timestamp is refused rather than assumed UTC |
 | `actor.agent` | attribution. Bound to the credential by the caller, never read out of the payload |
 | `schema_version` | so the drain refuses what it does not understand instead of reading a familiar looking field out of an unfamiliar envelope |

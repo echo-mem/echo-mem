@@ -97,6 +97,12 @@ REQUIRES_VERIFY = frozenset({CLAIM_VERIFIED})
 #: event_id shape. Caller supplied so that the caller can make it deterministic
 #: from its own run - "deploy-{commit}-{env}" is idempotent across retries in a
 #: way a uuid generated per attempt is not.
+#:
+#: Unique within a SCOPE and not across the deployment; migration 0037 widened
+#: the inbox key to (group_id, event_id) for exactly the id this comment
+#: recommends. On the old global key two customers deploying the same open
+#: source commit collided, and the loser was told `duplicate: true`, which
+#: means stop retrying.
 _EVENT_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$")
 
 PENDING, APPLIED, REJECTED, QUARANTINED = (
