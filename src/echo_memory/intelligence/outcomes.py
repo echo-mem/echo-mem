@@ -47,6 +47,7 @@ from echo_memory.infra.project import UNKNOWN as PROJECT_UNKNOWN
 from echo_memory.ingestion.write_episode import write_episode
 from echo_memory.intelligence import vocabulary
 from echo_memory.intelligence.naming import outcome_node_name
+from echo_memory.trust import states as trust_states
 
 _logger = get_logger("outcomes")
 
@@ -319,12 +320,17 @@ def _outcome(conn, group_id, envelope, embedder) -> dict:
 def _trust(module: str):
     """Stream 4's trust package, imported at call time.
 
-    Lazily, because the trust and learning halves of this land separately and
-    an import at module scope would make every outcome event fail on a build
-    that has one and not the other. The error says which module is missing
-    rather than surfacing an ImportError from three frames down, because the
-    answer - upgrade, or stop sending this event type - depends on knowing
-    that it is absent rather than broken.
+    Lazily, because trust and learning land separately and an import at module
+    scope would make every outcome event fail on a build that has one and not
+    the other. The error says the package is absent rather than surfacing an
+    ImportError from three frames down, because the answer - upgrade, or stop
+    sending this event type - depends on knowing it is missing rather than
+    broken.
+
+    The package is present or absent as a unit: `echo_memory/trust/__init__.py`
+    imports every submodule, so asking for one of them loads all of them. That
+    is why this catches ImportError around the whole import rather than trying
+    to report which submodule was unavailable.
     """
     try:
         return importlib.import_module(f"echo_memory.trust.{module}")
@@ -337,29 +343,57 @@ def _trust(module: str):
 
 
 def _evidence(conn, group_id, envelope, embedder) -> dict:
-    """Attach evidence to an existing fact. Writes no fact of its own.
+    """Attach an artefact to an existing fact. Writes no fact of its own.
 
-    Evidence is not proof and this deliberately cannot make it one: a
-    deployment log saying the deploy happened does not establish that the
-    decision behind it was right. All this does is move the fact from
-    `unverified` to `evidence_backed`, which is advisory - it changes the order
-    facts come back in and never which facts come back.
+    Evidence is not proof and this deliberately cannot make it one, in a
+    stronger sense than it first appears. Attaching evidence does NOT move a
+    fact to `evidence_backed`: that state is recorded by a verifier like any
+    other, so a fact with five evidence rows still reads `unverified` until
+    somebody says the evidence was sufficient.
+
+    That is the mechanism rather than an oversight, and it is the same
+    separation `REQUIRES_VERIFY` draws one layer up. If attaching an artefact
+    promoted a fact's trust state, a CI reporter could attach its own deploy
+    log to its own outcome and thereby admit that outcome into lesson support -
+    which is exactly the elevation a reporter credential must not be able to
+    perform. Here it records what it saw, and somebody else weighs it.
     """
     del embedder  # no fact is written here, so nothing is embedded
     payload = envelope.payload
     fact_id = _required(payload, envelope.event_type, "fact_id")
     kind = _required(payload, envelope.event_type, "kind")
-    locator = _required(payload, envelope.event_type, "locator")
+    # Required here although Stream 4 has it optional. Evidence with no
+    # artefact to point at is an assertion wearing the word evidence, and the
+    # whole value of an evidence row is that somebody can go and look.
+    uri = _required(payload, envelope.event_type, "uri")
+    detail = payload.get("detail")
+    if detail is not None and not isinstance(detail, dict):
+        raise OutcomeError(
+            f"payload.detail must be an object, got {type(detail).__name__}. "
+            f"It is stored structured so a reader can query it; a sentence "
+            f"belongs in the fact, not in the evidence row."
+        )
     evidence = _trust("evidence")
-    recorded = evidence.record(
+    if kind not in evidence.KINDS:
+        raise OutcomeError(
+            f"payload.kind must be one of {sorted(evidence.KINDS)}, got "
+            f"{kind!r}. A kind nothing recognises cannot be weighed."
+        )
+    # Returns the id as a plain string, not a result envelope.
+    evidence_id = evidence.record(
         conn,
         group_id,
-        kind=kind,
-        locator=locator,
-        detail=str(payload.get("detail") or ""),
-        reported_by=envelope.actor.agent,
+        kind,
+        uri=uri,
+        detail=detail,
+        reporter_agent=envelope.actor.agent,
+        reporter_run=envelope.actor.run_id,
+        # When the artefact was produced, from the envelope rather than from
+        # now(). An evidence row stamped at drain time would date a CI log to
+        # whenever the queue got round to it.
+        occurred_at=envelope.occurred_at,
+        content_digest=payload.get("content_digest"),
     )
-    evidence_id = recorded.get("evidence_id") if isinstance(recorded, dict) else recorded
     evidence.link(conn, group_id, fact_id, evidence_id)
     return {"edge_ids": [], "node_ids": [], "fact_id": fact_id,
             "evidence_id": evidence_id}
@@ -378,18 +412,50 @@ def _verified(conn, group_id, envelope, embedder) -> dict:
     fact_id = _required(payload, envelope.event_type, "fact_id")
     state = _required(payload, envelope.event_type, "state")
     method = _required(payload, envelope.event_type, "method")
+    # Only the three states a verifier sets deliberately. The advisory ones -
+    # unverified, evidence_backed, stale - are computed from what the store can
+    # see, and an event channel able to assert them would be a way to mark a
+    # thousand facts stale, which is a denial of service on your own memory
+    # dressed as a verification.
+    if state not in trust_states.AUTHORITATIVE:
+        raise OutcomeError(
+            f"payload.state must be one of {sorted(trust_states.AUTHORITATIVE)}, "
+            f"got {state!r}. The advisory states are computed, not asserted."
+        )
+    kind = str(payload.get("verifier_kind") or trust_states.SERVICE)
+    if kind not in trust_states.VERIFIER_KINDS:
+        raise OutcomeError(
+            f"payload.verifier_kind must be one of "
+            f"{list(trust_states.VERIFIER_KINDS)}, got {kind!r}"
+        )
+    evidence_ids = payload.get("evidence_ids") or ()
+    if not isinstance(evidence_ids, (list, tuple)):
+        raise OutcomeError(
+            f"payload.evidence_ids must be a list, got {type(evidence_ids).__name__}"
+        )
     verify = _trust("verify")
-    recorded = verify.record(
+    # Returns the fact_verification row id as an int, not a result envelope.
+    # `verifier_id` is the credential, which is the reporter's agent key: a
+    # verification nobody can be identified by is a verification nobody can be
+    # held to, and the same rule already applies to a fact's author.
+    row_id = verify.record(
         conn,
         group_id,
         fact_id,
-        state=state,
+        state,
+        verifier_kind=kind,
+        verifier_id=envelope.actor.agent,
         method=method,
-        verifier=envelope.actor.agent,
-        verifier_kind=str(payload.get("verifier_kind") or "service"),
+        policy_id=payload.get("policy_id"),
+        evidence_ids=tuple(str(e) for e in evidence_ids),
+        # Passed through, because a check that cannot lapse is a check that
+        # stays true after it stops being true. An expired `verified` reads
+        # back as `stale`, which drops the outcome out of lesson support with
+        # no write having happened - the behaviour a lapsing check should have.
+        expires_at=payload.get("expires_at"),
     )
     return {"edge_ids": [], "node_ids": [], "fact_id": fact_id, "state": state,
-            "recorded": recorded}
+            "verification_id": row_id}
 
 
 #: One handler per event type, and no default. Built as a mapping rather than

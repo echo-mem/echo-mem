@@ -226,6 +226,34 @@ def test_verification_events_are_refused_without_the_capability(migrated_db, emb
         assert "allow_verify" in error
 
 
+def test_a_verifier_may_not_assert_an_advisory_state(migrated_db, embedder):
+    """Even with the capability granted. The advisory states are computed from
+    what the store can see, and an event channel able to assert them would be a
+    way to mark a thousand facts `stale` - a denial of service on your own
+    memory, dressed as a verification. Checked before anything reaches the
+    trust package, so the refusal does not depend on which build this is."""
+    with connect(migrated_db) as conn:
+        envelope = _event(
+            envelope_module.CLAIM_VERIFIED, "verify-claim-stale-7f2a",
+            fact_id="1", state="stale", method="manual-review",
+        )
+        with pytest.raises(outcomes.OutcomeError, match="advisory"):
+            outcomes.apply(conn, GROUP, envelope, embedder, allow_verify=True)
+
+
+def test_an_unknown_verifier_kind_is_refused(migrated_db, embedder):
+    """Human, service or rule. A fourth value would be a verifier nothing
+    downstream can weigh, recorded as though it had been weighed."""
+    with connect(migrated_db) as conn:
+        envelope = _event(
+            envelope_module.CLAIM_VERIFIED, "verify-claim-bykind-7f2a",
+            fact_id="1", state="verified", method="manual-review",
+            verifier_kind="committee",
+        )
+        with pytest.raises(outcomes.OutcomeError, match="verifier_kind"):
+            outcomes.apply(conn, GROUP, envelope, embedder, allow_verify=True)
+
+
 def test_an_unknown_state_is_refused_by_mark(migrated_db):
     """The CHECK constraint would catch this too. Catching it in Python keeps
     the message about the four states rather than about a constraint name."""
