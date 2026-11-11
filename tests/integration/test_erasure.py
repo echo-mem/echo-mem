@@ -591,7 +591,11 @@ def test_erasure_reaches_the_intelligence_tables(migrated_db):
         payload={"decision": "d", "outcome": "o", "sign": "success",
                  "detail": f"reported by {SUBJECT}"},
     ))
-    inbox.mark(conn, "erasure-reach-0001", inbox.APPLIED, edge_ids=[subject_edge])
+    # mark() takes the scope now: migration 0037 keyed the inbox on
+    # (group_id, event_id), because a global event_id made one tenant's
+    # idempotency namespace visible to another.
+    inbox.mark(conn, GROUP, "erasure-reach-0001", inbox.APPLIED,
+               edge_ids=[subject_edge])
 
     erasure.erase(
         conn, GROUP, erasure.plan(conn, GROUP, entity=SUBJECT), requested_by="test",

@@ -362,6 +362,13 @@ def erase(
             # replaced rather than kept: the row remains as proof the event
             # was received and not applied twice, which is the whole reason
             # the inbox is keyed by event_id.
+            #
+            # Scoped on group_id as well as on the edges. A graphid is unique
+            # within a database so the edge match alone cannot reach another
+            # scope's row today, but an erasure is the one operation where
+            # "cannot reach it by accident" is worth less than "does not look
+            # there at all", and migration 0037 made the scope part of this
+            # table's key precisely so it could be relied on.
             conn.execute(
                 """UPDATE public.event_inbox
                        SET envelope = jsonb_build_object(
@@ -370,8 +377,8 @@ def erase(
                            applied_edge_ids = COALESCE((
                                SELECT array_agg(x) FROM unnest(applied_edge_ids) x
                                 WHERE NOT x = ANY(%s)), '{}')
-                     WHERE applied_edge_ids && %s""",
-                (edges, edges),
+                     WHERE group_id = %s AND applied_edge_ids && %s""",
+                (edges, group_id, edges),
             )
 
             # Strip the pointers, keep the rows. These are evidence that a read
