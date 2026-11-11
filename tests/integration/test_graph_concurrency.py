@@ -90,6 +90,7 @@ import traceback
 
 import pytest
 
+from echo_memory.infra import graphlock
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.db import connect
 from echo_memory.infra.graphlock import graph_write_gate
@@ -158,7 +159,26 @@ class Run:
         self.lock = threading.Lock()
 
 
-def _run_concurrently(url: str, *, gated: bool, writers: int, episodes: int) -> Run:
+def _run_concurrently(
+    url: str, *, gated: bool, writers: int, episodes: int,
+    limit: str = "1",
+) -> Run:
+    """Run `writers` threads, each into its own scope, optionally gated.
+
+    `gated=True` sets ECHO_MEMORY_MAX_GRAPH_WRITERS=1 for the duration, because
+    the gate is off unless an operator asks for it. That is the point rather
+    than an inconvenience: this test now exercises what a person who turns the
+    protection on actually gets, which is what the gate is for. Before the
+    default was reversed it exercised what everybody got by accident.
+
+    Set on the process rather than through monkeypatch because the writers are
+    threads and read the same os.environ, and restored in a finally so a gated
+    run cannot leave the gate on for whatever test follows it.
+
+    `limit` is a parameter so that the one test which wants the gate REQUESTED
+    and then disabled - an operator who set 8 and accepted the risk - can say
+    so without fighting this function for the variable.
+    """
     run = Run()
     barrier = threading.Barrier(writers)
 
@@ -202,11 +222,22 @@ def _run_concurrently(url: str, *, gated: bool, writers: int, episodes: int) -> 
         finally:
             conn.close()
 
+    previous = os.environ.get(graphlock.MAX_GRAPH_WRITERS_ENV)
+    if gated:
+        os.environ[graphlock.MAX_GRAPH_WRITERS_ENV] = limit
+    elif previous is not None:
+        del os.environ[graphlock.MAX_GRAPH_WRITERS_ENV]
+
     threads = [threading.Thread(target=writer, args=(i,)) for i in range(writers)]
     for t in threads:
         t.start()
     for t in threads:
         t.join(timeout=900)
+
+    if previous is None:
+        os.environ.pop(graphlock.MAX_GRAPH_WRITERS_ENV, None)
+    else:
+        os.environ[graphlock.MAX_GRAPH_WRITERS_ENV] = previous
     assert not any(t.is_alive() for t in threads), "a writer thread never finished"
     return run
 
@@ -375,17 +406,9 @@ def test_the_gate_off_by_env_still_writes_everything(migrated_db):
     a broken write path. The no-op branch still has to leave every fact
     stored."""
     episodes = min(N_EPISODES, 30)
-    previous = os.environ.get("ECHO_MEMORY_MAX_GRAPH_WRITERS")
-    os.environ["ECHO_MEMORY_MAX_GRAPH_WRITERS"] = "8"
-    try:
-        run = _run_concurrently(
-            migrated_db, gated=True, writers=N_WRITERS, episodes=episodes
-        )
-    finally:
-        if previous is None:
-            del os.environ["ECHO_MEMORY_MAX_GRAPH_WRITERS"]
-        else:
-            os.environ["ECHO_MEMORY_MAX_GRAPH_WRITERS"] = previous
+    run = _run_concurrently(
+        migrated_db, gated=True, writers=N_WRITERS, episodes=episodes, limit="8",
+    )
 
     assert not run.errors, run.errors[0][1]
     assert run.written == N_WRITERS * episodes

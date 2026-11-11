@@ -16,6 +16,7 @@ from psycopg.pq import TransactionStatus
 
 from echo_memory.infra.graphlock import (
     MAX_GRAPH_WRITERS_ENV,
+    UNLIMITED,
     graph_write_gate,
     lock_key,
     max_graph_writers,
@@ -96,9 +97,19 @@ def test_lock_key_does_not_collide_where_hashtext_would():
 # --- the limit ----------------------------------------------------------
 
 
-def test_one_writer_per_graph_by_default(monkeypatch):
+def test_the_gate_is_off_unless_an_operator_asks_for_it(monkeypatch):
+    """Unset means unlimited, which is to say the gate does nothing.
+
+    Reversed from this module's first version on its own evidence. The gate
+    costs 2.6x write throughput; the fault it guards did not reproduce in about
+    30,000 concurrent cross scope episodes here, and the reproduction that WAS
+    obtained came from concurrent graph DDL rather than from writes. A normal
+    deployment has one writer per scope and a hosted service is one container,
+    so defaulting it on would charge everybody for a fault none of them is
+    positioned to hit. See the comment on UNLIMITED.
+    """
     monkeypatch.delenv(MAX_GRAPH_WRITERS_ENV, raising=False)
-    assert max_graph_writers() == 1
+    assert max_graph_writers() == UNLIMITED
 
 
 @pytest.mark.parametrize(

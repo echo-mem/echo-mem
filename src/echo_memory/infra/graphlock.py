@@ -97,17 +97,55 @@ _logger = get_logger("graphlock")
 #: change its mind and so a test does not need to reload the module.
 MAX_GRAPH_WRITERS_ENV = "ECHO_MEMORY_MAX_GRAPH_WRITERS"
 
+#: Unset means UNLIMITED, which is to say the gate does nothing.
+#:
+#: This default was reversed deliberately, and the reasoning is the whole
+#: argument for this module existing at all, so it belongs next to the value
+#: rather than in a commit message.
+#:
+#: The gate costs 2.6x to 2.8x write throughput, measured above. The fault it
+#: guards did not reproduce here in about 30,000 concurrent cross scope
+#: episodes at 4, 8 and 16 writers, and the one reproduction obtained during
+#: integration came from concurrent graph DDL across databases rather than
+#: from writes at all (see tests/integration/test_graph_concurrency.py).
+#:
+#: Meanwhile the shape of a normal deployment is one writer: an MCP server
+#: process per client, one scope per writer, and a hosted service that is a
+#: single container. The production failure was four benchmark shards doing
+#: bulk ingest, which is an operator running a specific job and able to set a
+#: variable.
+#:
+#: So defaulting this ON would charge every existing deployment 2.6x on every
+#: write to guard a fault none of them is positioned to hit. Defaulting it OFF
+#: and saying loudly where it IS needed - concurrent multi-process ingest into
+#: one graph - matches the evidence. The guard is one environment variable away
+#: for the person who needs it, which is the person who already knows they are
+#: running four of something.
+UNLIMITED = 0
+
 
 def max_graph_writers() -> int:
-    raw = os.environ.get(MAX_GRAPH_WRITERS_ENV, "").strip()
-    if not raw:
-        return 1
+    """The configured limit, distinguishing absent from present-but-wrong.
+
+    Absent means the operator never asked for the gate, which is UNLIMITED.
+    Present but unparseable - including empty - means they DID ask and got it
+    wrong, and a typo must not silently remove a protection somebody believed
+    they had turned on. So those fail safe at 1.
+
+    That distinction is the whole reason this reads the raw value rather than
+    calling os.environ.get with a default: `MAX_WRITERS=""` and no MAX_WRITERS
+    at all are the same string and opposite intentions.
+    """
+    if MAX_GRAPH_WRITERS_ENV not in os.environ:
+        return UNLIMITED
+    raw = os.environ[MAX_GRAPH_WRITERS_ENV].strip()
     try:
         return max(1, int(raw))
     except ValueError:
         _logger.warning(
             "max_graph_writers_unparseable",
-            extra={"value": raw, "detail": "defaulting to 1"},
+            extra={"value": raw, "detail": "an explicit but unreadable limit "
+                   "fails safe at 1 rather than off"},
         )
         return 1
 
@@ -161,7 +199,8 @@ def graph_write_gate(conn, graph: str = GRAPH_NAME):
     forgotten `with conn.transaction():` away, and this package has already
     paid for two silent no-ops that returned success.
     """
-    if max_graph_writers() > 1:
+    limit = max_graph_writers()
+    if limit == UNLIMITED or limit > 1:
         yield False
         return
 
