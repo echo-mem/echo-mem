@@ -59,14 +59,25 @@ def test_every_turn_in_the_file_reaches_the_store(migrated_db, embedder):
 def test_a_long_turn_is_split_and_every_piece_is_stored(migrated_db, embedder):
     """write_episode refuses a fact over 4,000 characters by RETURNING an
     error. The fixture's handover turn is 4,190, so an unsplit write would be
-    counted as a success and lose the one turn flagged as carrying the answer."""
+    counted as a success and lose the one turn flagged as carrying the answer.
+
+    Asserts the invariant rather than a piece count. The count was 2 when the
+    split was sized to write_episode's 4,000 character refusal; it is 4 now that
+    EMBED_WINDOW sizes it to what the embedder can actually read (256 word
+    pieces, about 1,500 characters), and it will move again the next time that
+    changes. What must stay true is that the turn is split at all, that every
+    piece is stored, and that no piece is big enough to be refused - none of
+    which is a function of the window."""
     handover = list(external.load_longmemeval(LONGMEMEVAL))[2]
     pieces = [t for t in handover.turns if t.key == "fixture_answer_3#0"]
 
     with connect(migrated_db) as conn:
         external.ingest(conn, handover, embedder)
 
-        assert len(pieces) == 2
+        assert len(pieces) > 1, "a 4,190 character turn must be split"
+        assert all(len(p.text) <= external.MAX_FACT for p in pieces), (
+            "a piece over write_episode's limit would be refused and lost"
+        )
         assert _facts_in(conn, handover.group_id) == len(handover.turns)
 
 

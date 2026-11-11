@@ -493,12 +493,23 @@ def _graph_candidates(
     # fact_group_start_idx and fact_group_end_idx, both (group_id, start_id) and
     # (group_id, end_id), have existed since migration 0013. This is the query
     # they were built for.
+    #
+    # The seeds CTE filters on group_id too, and that matters more now than it
+    # did. While retrieval was single scope the seeds could only ever come from
+    # this scope's own candidate lists, so filtering them was redundant. With
+    # query_across fanning out over several scopes, a seed list is assembled
+    # from several, and an unfiltered seeds CTE would walk from one scope's
+    # nodes into another's neighbourhood. The neighbour filter below would
+    # still refuse to RETURN the foreign edge, so this was never a leak - but
+    # "cannot return it" is a weaker guarantee than "never walks there", and
+    # the cost of the stronger one is one indexed predicate.
     live_n2 = live_clause("n2", as_of)
     rows = conn.execute(
         f"""WITH seeds AS (
                 SELECT e.id AS seed, e.start_id, e.end_id
                 FROM {GRAPH}."FACT" e
                 WHERE e.id = ANY(SELECT unnest(%s::text[])::graphid)
+                  AND (e.properties ->> '"group_id"'::agtype) = %s
             ),
             ends AS (
                 SELECT seed, start_id AS node FROM seeds
@@ -511,7 +522,7 @@ def _graph_candidates(
               ON (n2.start_id = ends.node OR n2.end_id = ends.node)
             WHERE (n2.properties ->> '"group_id"'::agtype) = %s
               AND {live_n2}""",
-        ([str(i) for i in seed_edge_ids], group_id),
+        ([str(i) for i in seed_edge_ids], group_id, group_id),
     ).fetchall()
 
     order = {edge_id: i for i, edge_id in enumerate(seed_edge_ids)}
