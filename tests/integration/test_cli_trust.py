@@ -26,8 +26,8 @@ from echo_memory import server
 from echo_memory.cli.main import main
 from echo_memory.events import envelope as events
 from echo_memory.events import inbox
-from echo_memory.infra.config import Config
 from echo_memory.infra.db import connect
+from echo_memory.ingestion.write_episode import write_episode
 from echo_memory.intelligence import lessons, outcomes
 from echo_memory.trust import evidence, states, verify
 
@@ -61,11 +61,19 @@ def _embedder():
 
 
 def _seed_fact(migrated_db) -> str:
-    """One live fact in GROUP, through the real write path, and its edge id."""
-    config = Config(user_id=USER, agent_id=AGENT, database_url=migrated_db)
-    server.startup(config=config, embedder=_embedder())
-    written = server.write_episode(
-        SCOPE, "sess-trust",
+    """One live fact in GROUP, through the real write path, and its edge id.
+
+    `write_episode` directly rather than `server.write_episode`, which would
+    need `server.startup` and leave a Config, an embedder and an open
+    connection on the module for every later test in the process. The conftest
+    spells out what that costs: the teardown contends with connections the
+    tests never close, and its failure then lands on whichever test ran next.
+    The CLI under test opens its own connection from the environment anyway, so
+    the server singleton was never part of this path.
+    """
+    conn = connect(migrated_db)
+    written = write_episode(
+        conn, GROUP, "sess-trust",
         [{"name": "Queue", "type": "component"}, {"name": "Postgres", "type": "tool"}],
         [{"source": "Queue", "target": "Postgres", "relation_type": "runs_on",
           "fact": "the queue runs on Postgres", "confidence": "extracted"}],
@@ -73,8 +81,9 @@ def _seed_fact(migrated_db) -> str:
         # existing node was meant. There is nobody to ask in a test, and a
         # deferral would read as a seed that silently stored nothing.
         {"Queue": {"resolved_to": "new"}, "Postgres": {"resolved_to": "new"}},
+        _embedder(), project="acme", agent_id=AGENT,
     )
-    created = written["edges_created"]
+    created = written.get("edges_created") or []
     assert created, f"precondition: the seed episode stored nothing ({written})"
     return str(created[0])
 

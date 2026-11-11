@@ -257,12 +257,19 @@ filtered by trust state. It claims no causality, carries no basis, and says
 only "this decision has failed more than once, go and look". A caller must not
 render it as a finding.
 
-**An empty answer has two causes and the log distinguishes them.** No lessons
-with no evidence anywhere means nothing is reporting. No lessons with evidence
-arriving means artefacts are being attached and nobody is adjudicating them,
-which is the likely state of a new install, because `evidence_backed` is never
-derived from evidence existing. The `lesson_candidates` log line carries
-`supporting` and `evidence_rows` for exactly this.
+**An empty answer has several causes and `echo-memory trust lessons` names
+which.** No lessons with no evidence anywhere means nothing is reporting. No
+lessons with evidence arriving means artefacts are being attached and nobody is
+adjudicating them, which is the likely state of a new install, because
+`evidence_backed` is never derived from evidence existing. The
+`lesson_candidates` log line carries `supporting` and `evidence_rows`, and the
+command prints the counts against each of the three bars plus the command that
+fixes it, because a log line is not where an operator looks.
+
+The reason that command exists at all is the failure it was written after:
+until `echo-memory trust` there was no caller for `trust.verify.record`
+anywhere, so NO deployment could put a fact into a supporting state, and this
+empty list was the permanent and only output of the whole capability.
 
 **An erased event keeps its `event_id` and loses its envelope.**
 `echo-memory forget` replaces an applied event's envelope with
@@ -498,11 +505,25 @@ mention an unbound key's agent.
 evidence the table exists to hold. An agent with no runs recorded is honestly
 silent about what it ran on.
 
-**Nothing requires the four new capabilities yet.** They are defined,
-`require_capability` enforces them, and `grants.from_key` maps them onto memory
-access, but no tool or route currently asks for `trust.verify`,
-`events.report`, `trust.policy` or `exchange.manage`. There is no HTTP events
-door and no exchange route in the hosted service on this branch.
+**Two of the four new capabilities are now required by a route, and two are
+not.** `events.report` gates `POST /v1/events` and `trust.verify` gates both
+`POST /v1/trust/verify` and the `claim.verified` event type, which is the
+separation that makes a reporter credential safe to put in a CI config: it can
+attach evidence all day and cannot say the evidence was sufficient.
+
+`trust.policy` and `exchange.manage` are still defined and asked for by
+nothing. There is no exchange route in the hosted service; building, importing
+and promoting a bundle is `echo-memory exchange` on the engine.
+
+**A key narrowed to `events.report` ALONE cannot report an event.**
+`grants.from_key` returns NONE for a credential narrowed to capabilities that
+are not about memory, and names `events.report` as its example, because a key
+issued to report events should not be able to recall the account's memory as a
+side effect. The events route checks `memory.write` on the target memory, since
+an event becomes facts in that graph, so the two rules meet and refuse. The
+ordinary CI credential is a member-role key with no narrowing, which carries
+both. Reconciling the narrowed shape is a change to `grants.from_key` and has
+not been made.
 
 ---
 
@@ -562,6 +583,33 @@ state this version does not know was written by a newer one, and guessing is
 how a future `rejected` becomes a boost.
 
 ### The API
+
+A Python API and, since `echo-memory trust`, a command. The command came second
+and that order was the problem: every function below shipped with no caller, so
+in a real deployment nothing could put a fact into `verified` or
+`evidence_backed`, and `lessons.candidates` filters on exactly those two. The
+result was an empty lesson list in every store, indistinguishable from a scope
+whose outcomes disagree with themselves.
+
+```bash
+echo-memory trust show     --scope shared --fact <id>    # state, history, evidence
+echo-memory trust list     --scope shared [--state ...]  # the scope, by state
+echo-memory trust verify   --scope shared --fact <id> --verifier <who> --method <how>
+echo-memory trust dispute  --scope shared --fact <id> --verifier <who> --method <how>
+echo-memory trust reject   --scope shared --fact <id> --verifier <who> --method <how>
+echo-memory trust evidence --scope shared --fact <id> --kind test_run --uri <url>
+echo-memory trust lessons  --scope shared                # and WHY, when empty
+```
+
+`--verifier` is required on the three states a verifier sets on purpose, and an
+empty one is refused: a verification nobody can be identified by is one nobody
+can be held to, and it would still count towards a lesson. There is no
+`--confirm`, because nothing here deletes - the table is append only, so a
+wrong call is corrected by recording the right one and the mistake stays
+readable.
+
+None of these is an MCP tool, and a test reads the published tool list so that
+registering one later fails. See §4's **What it does not do**.
 
 ```python
 from echo_memory import trust

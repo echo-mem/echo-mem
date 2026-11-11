@@ -136,12 +136,27 @@ echo-memory forget                 # erase facts outright, for a data subject's 
 echo-memory retain                 # how long this scope keeps a fact, and enforcing it
 echo-memory verify                 # has any fact been changed behind this store's back
 echo-memory exchange               # signed, redacted knowledge bundles between organisations
+echo-memory trust                  # record and read whether a fact was ever checked, and by whom
 ```
 
-Those four are deliberately not MCP tools, and a test reads the published
+Those five are deliberately not MCP tools, and a test reads the published
 tool list so that adding one later fails. Irreversible deletion of a scope,
 one prompt injection away from any agent holding a key, is not a trade worth
 making, and neither is handing one organisation's memory to another.
+
+`trust` is the strongest of the five in one specific sense: it is the only
+thing in this store that decides WHICH facts a read returns rather than the
+order they come back in, so a tool for it would let any agent holding a key
+mark its own claims `verified` and its inconvenient ones `rejected`.
+
+Note that `trust` and `verify` are different jobs with confusingly close
+names. `verify` asks whether the store has been tampered with, by checking the
+attestation chain. `trust` records that a person checked a claim, which is what
+`trust/states.py`'s six states are and what the lesson layer filters on.
+`trust lessons` is also the only thing that explains an empty lesson list: it
+prints which of the three bars was not cleared, because "no lessons" covers
+both a scope whose outcomes disagree and a scope where nobody has verified
+anything, and those have different owners.
 
 `exchange` is one directional and there is no federation API. An export is a
 signed file whose signature covers the redacted content, so what a recipient
@@ -319,7 +334,7 @@ self hosting gets all of it.
 | **Collective learning** | A validated door CI runs, deploys and test suites report through, a single writer behind it, and lessons derived at read time. A lesson is never stored: retire one supporting outcome and it stops being produced |
 | **Knowledge networks** | `query_across` asks several scopes and fuses one ranked answer. With one scope the answer is byte identical to `query_memory` |
 | **Agent identity** | A registry of the agents an account has, and runs recording what changed underneath one. Cloud only, because the engine has no concept of a principal |
-| **Trust and verification** | Six states, append only, with their own tamper evident chain. Only `rejected` removes a fact from an answer, and only a verifier can set it |
+| **Trust and verification** | Six states, append only, with their own tamper evident chain. Only `rejected` removes a fact from an answer, and only a verifier can set it. `echo-memory trust` is where a verifier sets one |
 | **Context intelligence** | Which scopes are worth asking, decided with no model call, and an answer cut to a token budget that says what it dropped |
 | **Knowledge exchange** | `echo-memory exchange`: a signed, redacted file. An import lands in a scope ordinary retrieval is never given until a verifier promotes it |
 
@@ -472,7 +487,7 @@ and the v1a to v1b plan.
 
 | | |
 |---|---|
-| **v1a, built** | Basic recall. Seven MCP tools, 39 CLI commands, on PyPI and in the MCP registry. |
+| **v1a, built** | Basic recall. Seven MCP tools, 40 CLI commands, on PyPI and in the MCP registry. |
 | **v1b, part built** | Causal typing and `trace_cause` shipped in 0.5.0. Multi hop associative retrieval has not: 187 questions no single fact answers score MRR 0.212 today, and that number is what the rest of v1b has to beat. |
 | **v1c, designed** | Consolidation: hot, consolidated and archived tiers, so retrieval cost stops tracking total facts written. Nothing implemented. |
 | **v1.1, planned** | Organisation wide tenancy: per agent, per team, or org wide graphs. |
