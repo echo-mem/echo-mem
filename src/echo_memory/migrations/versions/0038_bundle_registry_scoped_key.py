@@ -56,13 +56,27 @@ Declining to delete one row above that is inconsistent rather than careful.
 
 A downgrade of this table is destructive at any depth. Take a dump first.
 
-## Indexes
+## Indexes, and a claim of 0035's that was not true
 
-`bundle_registry_group_idx` on (group_id) is now a strict prefix of the
-primary key's index and is therefore redundant - `readable_scopes` filters on
-group_id with a prefix match and the PK index serves that at least as well.
-Dropped, because a redundant index is write amplification nobody is reading,
-and recreated on the downgrade so the two directions agree.
+`bundle_registry_group_idx` on (group_id) is dropped. It is now a strict
+prefix of the primary key's index, so it cannot answer anything the key
+cannot - but the reason it never earned its place is older than this
+migration. 0035 justified it as "readable_scopes asks this on every fan-out
+read ... without the index it is a sequential scan on the read path". That is
+wrong, and the planner says so. `readable_scopes` filters with
+`starts_with(group_id, prefix)`, which is a function call and not an
+indexable predicate, so measured on 5,000 rows with BOTH indexes present:
+
+    Seq Scan on bundle_registry
+      Filter: (starts_with(group_id, 'acct:a1:...:import:') AND ...)
+
+The index was never used by the query it was created for. Dropping it loses
+nothing and stops write-amplifying every registry INSERT for a plan nobody
+gets. Recreated on the downgrade so the two directions agree.
+
+The sequential scan itself is real and is NOT addressed here: it is a read
+path cost that wants either an indexable prefix form or a different predicate,
+which is a change to `readable_scopes` rather than to its schema.
 
 Idempotent, because init-db re-applies every migration on every run.
 """

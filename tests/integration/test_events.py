@@ -260,4 +260,4 @@ def test_an_unknown_state_is_refused_by_mark(migrated_db):
     with connect(migrated_db) as conn, pytest.raises(
         inbox.InboxError, match="unknown inbox state"
     ):
-        inbox.mark(conn, "deploy-ab12cd34-prod", "half-applied")
+        inbox.mark(conn, GROUP, "deploy-ab12cd34-prod", "half-applied")

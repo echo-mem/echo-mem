@@ -276,7 +276,7 @@ def _import(args, config, conn) -> int:
 
 def _promote(args, config, conn) -> int:
     try:
-        row = importer.get(conn, args.bundle_id)
+        row = importer.get(conn, args.bundle_id, group_id=args.group_id)
     except importer.ImportRefused as e:
         print(f"error: {e}")
         return 1
@@ -301,7 +301,10 @@ def _promote(args, config, conn) -> int:
         return 0
 
     try:
-        row = importer.promote(conn, args.bundle_id, verifier_id=args.verifier)
+        row = importer.promote(
+            conn, args.bundle_id, verifier_id=args.verifier,
+            group_id=args.group_id,
+        )
     except importer.ImportRefused as e:
         print(f"error: {e}")
         return 1
@@ -315,7 +318,9 @@ def _promote(args, config, conn) -> int:
 
 def _revoke(args, config, conn) -> int:
     try:
-        row = importer.revoke(conn, args.bundle_id, reason=args.reason)
+        row = importer.revoke(
+            conn, args.bundle_id, reason=args.reason, group_id=args.group_id
+        )
     except importer.ImportRefused as e:
         print(f"error: {e}")
         return 1
@@ -337,7 +342,8 @@ def _revoke(args, config, conn) -> int:
 def _reject(args, config, conn) -> int:
     try:
         row = importer.reject(
-            conn, args.bundle_id, verifier_id=args.verifier, reason=args.reason
+            conn, args.bundle_id, verifier_id=args.verifier,
+            reason=args.reason, group_id=args.group_id,
         )
     except importer.ImportRefused as e:
         print(f"error: {e}")
@@ -503,6 +509,21 @@ def add_parser(sub) -> None:
         "promote", help="make an imported bundle's facts readable"
     )
     promote.add_argument("bundle_id", metavar="BUNDLE_ID")
+    # Needed only when two scopes hold one bundle id, which migration 0038
+    # made possible: a partner may send one bundle to two accounts, and one
+    # account may import it into two memories. `importer.get` refuses an
+    # ambiguous id rather than picking, so this is how the operator says which
+    # one. Not required, because the id alone is unambiguous in every store
+    # that has not done that.
+    #
+    # `--group-id` and not `--scope`: this parser inherits a global `--scope`
+    # that means solo|shared, and a subcommand flag of the same name would
+    # shadow it and silently hand a scope KIND to a lookup wanting a group id.
+    promote.add_argument(
+        "--group-id", metavar="GROUP_ID", dest="group_id",
+        help="the import scope this bundle was written to. Only needed when "
+             "two scopes hold the same bundle id",
+    )
     promote.add_argument(
         "--verifier", required=True, metavar="WHO",
         help="who is accepting these claims. Required: a trust decision with "
@@ -517,6 +538,21 @@ def add_parser(sub) -> None:
         "revoke", help="withdraw a bundle. Its scope stops being readable"
     )
     revoke.add_argument("bundle_id", metavar="BUNDLE_ID")
+    # Needed only when two scopes hold one bundle id, which migration 0038
+    # made possible: a partner may send one bundle to two accounts, and one
+    # account may import it into two memories. `importer.get` refuses an
+    # ambiguous id rather than picking, so this is how the operator says which
+    # one. Not required, because the id alone is unambiguous in every store
+    # that has not done that.
+    #
+    # `--group-id` and not `--scope`: this parser inherits a global `--scope`
+    # that means solo|shared, and a subcommand flag of the same name would
+    # shadow it and silently hand a scope KIND to a lookup wanting a group id.
+    revoke.add_argument(
+        "--group-id", metavar="GROUP_ID", dest="group_id",
+        help="the import scope this bundle was written to. Only needed when "
+             "two scopes hold the same bundle id",
+    )
     revoke.add_argument(
         "--reason", required=True, metavar="TEXT", help="recorded on the bundle"
     )
@@ -525,6 +561,21 @@ def add_parser(sub) -> None:
         "reject", help="refuse a quarantined bundle a verifier has looked at"
     )
     reject.add_argument("bundle_id", metavar="BUNDLE_ID")
+    # Needed only when two scopes hold one bundle id, which migration 0038
+    # made possible: a partner may send one bundle to two accounts, and one
+    # account may import it into two memories. `importer.get` refuses an
+    # ambiguous id rather than picking, so this is how the operator says which
+    # one. Not required, because the id alone is unambiguous in every store
+    # that has not done that.
+    #
+    # `--group-id` and not `--scope`: this parser inherits a global `--scope`
+    # that means solo|shared, and a subcommand flag of the same name would
+    # shadow it and silently hand a scope KIND to a lookup wanting a group id.
+    reject.add_argument(
+        "--group-id", metavar="GROUP_ID", dest="group_id",
+        help="the import scope this bundle was written to. Only needed when "
+             "two scopes hold the same bundle id",
+    )
     reject.add_argument("--verifier", required=True, metavar="WHO")
     reject.add_argument("--reason", required=True, metavar="TEXT")
 

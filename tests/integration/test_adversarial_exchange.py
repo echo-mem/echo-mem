@@ -27,15 +27,19 @@ registry row and the provenance string. A hostile exporter has no influence on
 the scope name at all, which is the property that makes the quarantine a
 boundary rather than a suggestion.
 
-Two findings left as `xfail`, both design changes:
+Two findings were left as `xfail`, both design changes. Both are now closed
+and the tests below assert the new behaviour:
 
-  1. `bundle_registry.bundle_id` is a global PRIMARY KEY (migration 0035), so
-     the same bundle cannot be imported into two accounts on one deployment,
-     and the refusal discloses the other account's import date, direction and
-     state. Sharing one partner bundle with two of your own memories is also
-     impossible.
-  2. Nothing bounds a bundle's size or fact count. 400 claims import in one
+  1. `bundle_registry.bundle_id` was a global PRIMARY KEY (migration 0035), so
+     the same bundle could not be imported into two accounts on one
+     deployment, and the refusal disclosed the other account's import date,
+     direction and state. Sharing one partner bundle with two of your own
+     memories was impossible too. Migration 0038 widened the key to
+     (group_id, bundle_id).
+  2. Nothing bounded a bundle's size or fact count. 400 claims imported in one
      transaction with no ceiling anywhere in bundle.parse or import_bundle.
+     `bundle.MAX_FACTS`, `MAX_BLOB_BYTES` and `MAX_MANIFEST_BYTES` are now
+     refused in `parse` and again in `import_bundle`.
 """
 
 from __future__ import annotations
@@ -479,26 +483,20 @@ def test_a_valid_signature_over_somebody_elses_facts_writes_nothing(
 # --- two importers, one registry ---------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "bundle_registry.bundle_id is a global PRIMARY KEY (migration 0035), "
-        "so the replay refusal is deployment wide rather than per account. "
-        "Measured: account acct-ours imports a bundle, then account "
-        "acct-theirs importing the SAME file is refused with \"bundle '<id>' "
-        "was already imported here on <timestamp> and is 'quarantined'\" - a "
-        "message that discloses the other account's import timestamp, "
-        "direction and trust state to a tenant that cannot otherwise see that "
-        "the bundle exists. Two consequences, and the second is the one a "
-        "customer will hit: a partner cannot send one bundle to two accounts "
-        "on a shared deployment, and one account cannot import a partner's "
-        "bundle into two of its own memories, which is an ordinary thing to "
-        "want. The replay protection the key provides is real and must stay; "
-        "it belongs on (group_id, bundle_id), which is a migration plus a "
-        "change to _row and get, so it is reported rather than made here."
-    ),
-)
 def test_two_accounts_may_each_import_the_same_bundle(migrated_db, embedder):
+    """The finding this file reported, now closed by migration 0038.
+
+    Before it, `bundle_registry.bundle_id` was a global PRIMARY KEY, so the
+    replay refusal was deployment wide: account `acct-theirs` importing the
+    same file was refused with "bundle '<id>' was already imported here on
+    <timestamp> and is 'quarantined'", which handed one tenant the other
+    tenant's import timestamp, direction and trust state for a bundle it could
+    not otherwise see existed. The functional half is the one a customer hits
+    first: a partner could not send one bundle to two accounts on a shared
+    deployment.
+
+    The key is now (group_id, bundle_id). Each account gets its own quarantine
+    scope and its own registry row, and neither import can read the other."""
     conn = connect(migrated_db)
     _seed(conn, embedder, PEER_SCOPE, POISONED)
     manifest, blob = _export(conn, PEER_SCOPE)
@@ -508,42 +506,145 @@ def test_two_accounts_may_each_import_the_same_bundle(migrated_db, embedder):
     second = _import(conn, manifest, facts, account="acct-theirs", embedder=embedder)
 
     assert first["group_id"] != second["group_id"]
+    assert _registry_rows(conn) == 2
+    # Each scope holds its own copy of the claims, written as new local nodes.
+    # Asserted because "two rows exist" would also be true of a registry that
+    # recorded the second import and wrote none of its facts.
+    assert len(_facts_in(conn, first["group_id"])) == 3
+    assert len(_facts_in(conn, second["group_id"])) == 3
 
 
-def test_the_replay_refusal_tells_one_account_about_anothers_import(
+def test_one_account_may_import_one_bundle_into_two_of_its_own_memories(
     migrated_db, embedder
 ):
-    """The measured half of the finding above, pinned so that fixing it fails
-    this test on purpose.
+    """The other half of the same freedom, and the one that does not involve a
+    second tenant at all.
 
-    Asserted on the text of the refusal and not only on the fact of it,
-    because the fact of a refusal is defensible - it is replay protection -
-    and the disclosure is not. The message is built in `import_bundle` from
-    the row it found, which belongs to the other account."""
+    One account importing a partner's bundle into two of its own memories is
+    an ordinary thing to want - a team's shared memory and a project's - and
+    the global key made it impossible. The scopes differ in the `memory`
+    segment rather than the `account` one, so this exercises a different part
+    of `quarantine_group_id` than the test above."""
     conn = connect(migrated_db)
     _seed(conn, embedder, PEER_SCOPE, POISONED)
     manifest, blob = _export(conn, PEER_SCOPE)
     _, facts = bundle_format.parse(json.dumps(manifest.to_dict()).encode(), blob)
-    _import(conn, manifest, facts, account=OUR_ACCOUNT, embedder=embedder)
+
+    into_shared = _import(conn, manifest, facts, memory="shared", embedder=embedder)
+    into_project = _import(conn, manifest, facts, memory="project-x", embedder=embedder)
+
+    assert into_shared["group_id"] != into_project["group_id"]
+    assert len(_facts_in(conn, into_shared["group_id"])) == 3
+    assert len(_facts_in(conn, into_project["group_id"])) == 3
+
+
+def test_a_replay_refusal_names_only_the_scope_it_was_asked_about(
+    migrated_db, embedder
+):
+    """The disclosure half, asserted on the text of the refusal.
+
+    The fact of a refusal is defensible - it is replay protection - and the
+    disclosure was not: the message was built from a row belonging to another
+    account. It is now built from the row for the scope the caller named,
+    which is the only row the lookup reads, so there is nothing of another
+    tenant's for it to quote.
+
+    Two accounts import the bundle, then the first one replays it. The refusal
+    has to name the first account's own scope and no other."""
+    conn = connect(migrated_db)
+    _seed(conn, embedder, PEER_SCOPE, POISONED)
+    manifest, blob = _export(conn, PEER_SCOPE)
+    _, facts = bundle_format.parse(json.dumps(manifest.to_dict()).encode(), blob)
+    ours = _import(conn, manifest, facts, account=OUR_ACCOUNT, embedder=embedder)
+    theirs = _import(conn, manifest, facts, account="acct-theirs", embedder=embedder)
 
     with pytest.raises(importer.ImportRefused) as refused:
-        _import(conn, manifest, facts, account="acct-theirs", embedder=embedder)
+        _import(conn, manifest, facts, account=OUR_ACCOUNT, embedder=embedder)
 
     message = str(refused.value)
-    assert "already imported here" in message
-    assert importer.STATE_QUARANTINED in message
-    assert _registry_rows(conn) == 1
+    assert ours["group_id"] in message
+    assert theirs["group_id"] not in message, (
+        "the refusal quoted another account's registry row"
+    )
+    assert "acct-theirs" not in message
+    assert _registry_rows(conn) == 2
+
+
+def test_a_trust_decision_on_an_ambiguous_bundle_id_is_refused_not_guessed(
+    migrated_db, embedder
+):
+    """Two scopes holding one bundle id makes `promote <id>` ambiguous, and
+    the operator surfaces answer by refusing.
+
+    Not by picking the newest or the first. A promotion is the moment another
+    organisation's claims become answers this store will give, and promoting
+    the wrong account's import is the one error here that cannot be noticed
+    afterwards: the scope either became readable or did not, and nothing in
+    the row says it was the wrong one. The refusal names both scopes so the
+    operator can repeat the call with one of them.
+
+    The second half is what makes the first a control rather than a dead end:
+    naming the scope works, and it moves exactly one of the two rows."""
+    conn = connect(migrated_db)
+    _seed(conn, embedder, PEER_SCOPE, POISONED)
+    manifest, blob = _export(conn, PEER_SCOPE)
+    _, facts = bundle_format.parse(json.dumps(manifest.to_dict()).encode(), blob)
+    ours = _import(conn, manifest, facts, account=OUR_ACCOUNT, embedder=embedder)
+    theirs = _import(conn, manifest, facts, account="acct-theirs", embedder=embedder)
+
+    with pytest.raises(importer.ImportRefused, match="recorded in 2 scopes"):
+        importer.promote(conn, manifest.bundle_id, verifier_id="ops")
+    with pytest.raises(importer.ImportRefused, match="recorded in 2 scopes"):
+        importer.get(conn, manifest.bundle_id)
+
+    promoted = importer.promote(
+        conn, manifest.bundle_id, verifier_id="ops", group_id=ours["group_id"]
+    )
+    assert promoted["group_id"] == ours["group_id"]
+    assert promoted["state"] == importer.STATE_PROMOTED
+    still = importer.get(conn, manifest.bundle_id, group_id=theirs["group_id"])
+    assert still["state"] == importer.STATE_QUARANTINED, (
+        "one scope's promotion moved another scope's bundle"
+    )
+
+
+def test_one_accounts_promotion_does_not_make_the_other_accounts_scope_readable(
+    migrated_db, embedder
+):
+    """`readable_scopes` is the only function that hands out an import scope,
+    and it is per account. The promotion above must not reach the other
+    account's list, which is the property the whole quarantine rests on."""
+    conn = connect(migrated_db)
+    _seed(conn, embedder, PEER_SCOPE, POISONED)
+    manifest, blob = _export(conn, PEER_SCOPE)
+    _, facts = bundle_format.parse(json.dumps(manifest.to_dict()).encode(), blob)
+    ours = _import(conn, manifest, facts, account=OUR_ACCOUNT, embedder=embedder)
+    theirs = _import(conn, manifest, facts, account="acct-theirs", embedder=embedder)
+    importer.promote(
+        conn, manifest.bundle_id, verifier_id="ops", group_id=ours["group_id"]
+    )
+
+    assert importer.readable_scopes(conn, OUR_ACCOUNT, OUR_MEMORY) == [ours["group_id"]]
+    assert importer.readable_scopes(conn, "acct-theirs", OUR_MEMORY) == []
+    assert theirs["group_id"] not in importer.readable_scopes(
+        conn, OUR_ACCOUNT, OUR_MEMORY
+    )
 
 
 def test_two_importers_racing_one_bundle_leave_one_import_and_no_half(
     migrated_db, embedder
 ):
-    """The same refusal under a race, which is a different mechanism.
+    """The same bundle into the SAME scope under a race, which is a different
+    mechanism from the sequential refusal.
 
-    Sequentially the replay check finds the registry row before the
-    transaction opens. Concurrently both importers look, both see nothing,
-    both open a transaction and both INSERT the primary key - so the thing
-    that decides the race is the key itself, and the loser has already
+    Both racers name one account and one memory, so both derive the same
+    quarantine scope and the composite key is the same pair for both. That is
+    the point: migration 0038 widened the key onto the scope, and this is the
+    test that the half it was right about still holds under concurrency, where
+    the check cannot do it. Sequentially the replay check finds the registry
+    row before the transaction opens. Concurrently both importers look, both
+    see nothing, both open a transaction and both INSERT the key - so the
+    thing that decides the race is the key itself, and the loser has already
     written facts by the time it finds out.
 
     What has to hold is that the loser leaves nothing. The registry INSERT is
@@ -586,9 +687,12 @@ def test_two_importers_racing_one_bundle_leave_one_import_and_no_half(
         finally:
             racer.close()
 
+    # One account, twice. Two DIFFERENT accounts is no longer a race at all
+    # since 0038 - both would succeed into their own scopes, which is the
+    # freedom that migration added and which the test above asserts.
     threads = [
-        threading.Thread(target=race, args=(acct,))
-        for acct in (OUR_ACCOUNT, "acct-theirs")
+        threading.Thread(target=race, args=(OUR_ACCOUNT,))
+        for _ in range(2)
     ]
     for t in threads:
         t.start()
@@ -604,9 +708,9 @@ def test_two_importers_racing_one_bundle_leave_one_import_and_no_half(
 
     assert _registry_rows(conn) == 1
     assert len(_facts_in(conn, won[0][1])) == 3
-    # The loser's scope is empty rather than partly written, whichever account
-    # it was. Counted over every import scope on the deployment so that this
-    # does not depend on which thread won.
+    # The loser's scope is empty rather than partly written. Counted over
+    # every import scope on the deployment so that this does not depend on
+    # which thread won.
     everywhere = conn.execute(
         f"""SELECT count(*) FROM {GRAPH}."FACT"
              WHERE (properties ->> '"group_id"'::agtype) LIKE %s""",

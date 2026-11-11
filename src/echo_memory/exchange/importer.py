@@ -177,32 +177,88 @@ def quarantine_group_id(account: str, memory: str, bundle_id: str) -> str:
 # --- the registry -------------------------------------------------------
 
 
-def _row(conn, bundle_id: str) -> dict | None:
+_ROW_KEYS = (
+    "bundle_id", "direction", "group_id", "state", "fact_count",
+    "peer_deployment", "peer_account", "format_version", "content_digest",
+    "signature_alg", "signature_key_id", "redaction_policy_id",
+    "created_at", "promoted_at", "revoked_at", "source_chain_head", "detail",
+)
+
+_ROW_COLUMNS = """SELECT bundle_id, direction, group_id, state, fact_count,
+                         peer_deployment, peer_account, format_version,
+                         content_digest, signature_alg, signature_key_id,
+                         redaction_policy_id, created_at, promoted_at,
+                         revoked_at, source_chain_head, detail
+                    FROM public.bundle_registry"""
+
+
+def _row(conn, group_id: str, bundle_id: str) -> dict | None:
+    """One registry row by its full key, or None.
+
+    Both halves, always. Since migration 0038 a `bundle_id` is unique only
+    within a scope, and this is the lookup the replay check uses - so a query
+    on the id alone would read another account's row and refuse an import on
+    the strength of it, which is the disclosure 0038 exists to close.
+    """
     row = conn.execute(
-        """SELECT bundle_id, direction, group_id, state, fact_count,
-                  peer_deployment, peer_account, format_version,
-                  content_digest, signature_alg, signature_key_id,
-                  redaction_policy_id, created_at, promoted_at, revoked_at,
-                  source_chain_head, detail
-             FROM public.bundle_registry WHERE bundle_id = %s""",
-        (bundle_id,),
+        _ROW_COLUMNS + " WHERE group_id = %s AND bundle_id = %s",
+        (group_id, bundle_id),
     ).fetchone()
     if row is None:
         return None
-    keys = (
-        "bundle_id", "direction", "group_id", "state", "fact_count",
-        "peer_deployment", "peer_account", "format_version", "content_digest",
-        "signature_alg", "signature_key_id", "redaction_policy_id",
-        "created_at", "promoted_at", "revoked_at", "source_chain_head", "detail",
-    )
-    return dict(zip(keys, row, strict=True))
+    return dict(zip(_ROW_KEYS, row, strict=True))
 
 
-def get(conn, bundle_id: str) -> dict:
-    found = _row(conn, bundle_id)
-    if found is None:
+def _rows_for_id(conn, bundle_id: str) -> list[dict]:
+    """Every scope's row for one bundle id, oldest first.
+
+    This is the deployment-wide read, and it is only for an OPERATOR surface:
+    `listing` is already unscoped and the CLI runs as the deployment rather
+    than as a tenant. Nothing on a tenant path calls it.
+    """
+    rows = conn.execute(
+        _ROW_COLUMNS + " WHERE bundle_id = %s ORDER BY created_at, group_id",
+        (bundle_id,),
+    ).fetchall()
+    return [dict(zip(_ROW_KEYS, r, strict=True)) for r in rows]
+
+
+def get(conn, bundle_id: str, *, group_id: str | None = None) -> dict:
+    """One registry row, by bundle id and optionally by scope.
+
+    `group_id` is optional because the operator surfaces have only ever had
+    the id: `echo-memory exchange show <bundle_id>` is what an operator holds
+    after a partner names a file. With 0038's composite key that is no longer
+    guaranteed unique, so a bare id resolves to the single row when there is
+    one and is REFUSED when there are several, naming the scopes so the
+    operator can repeat the call with one.
+
+    Refused rather than resolved by any rule - newest, or first - because
+    `promote` and `revoke` are trust decisions. Guessing which account's
+    import a verifier meant to accept is the one error here that cannot be
+    noticed afterwards: the scope either became readable or did not, and
+    nothing in the row says it was the wrong one.
+    """
+    if group_id is not None:
+        found = _row(conn, group_id, bundle_id)
+        if found is None:
+            raise ImportRefused(
+                f"no bundle {bundle_id!r} is recorded in {group_id!r}"
+            )
+        return found
+
+    candidates = _rows_for_id(conn, bundle_id)
+    if not candidates:
         raise ImportRefused(f"no bundle {bundle_id!r} is recorded here")
-    return found
+    if len(candidates) > 1:
+        scopes = ", ".join(repr(c["group_id"]) for c in candidates)
+        raise ImportRefused(
+            f"bundle {bundle_id!r} is recorded in {len(candidates)} scopes "
+            f"({scopes}). Name one with --scope: which import a trust "
+            f"decision applies to is not something this can guess, because a "
+            f"promotion of the wrong one is not visible afterwards."
+        )
+    return candidates[0]
 
 
 def listing(conn, *, state: str | None = None, limit: int = 100) -> list[dict]:
@@ -270,7 +326,7 @@ def register_export(
             "peer": peer_account or peer_deployment,
         }},
     )
-    return get(conn, manifest.bundle_id)
+    return get(conn, manifest.bundle_id, group_id=group_id)
 
 
 # --- accepting a bundle -------------------------------------------------
@@ -419,19 +475,25 @@ def import_bundle(
             f"{manifest.fact_count}, {len(facts)} claims were supplied"
         )
 
-    seen = _row(conn, manifest.bundle_id)
+    # Derived before the replay check, because the scope is now half the key
+    # that check looks up. It depends on nothing the bundle says: `account`
+    # and `memory` are this importer's own arguments, and the manifest's
+    # copies of those fields reach only the registry row and the provenance
+    # string. A hostile exporter has no influence on the scope name.
+    group_id = quarantine_group_id(account, memory, manifest.bundle_id)
+
+    seen = _row(conn, group_id, manifest.bundle_id)
     if seen is not None:
         raise ImportRefused(
             f"bundle {manifest.bundle_id!r} was already {seen['direction']}ed "
-            f"here on {seen['created_at']} and is {seen['state']!r}. Refusing "
-            f"to import it again: a second import would write every fact a "
-            f"second time, as new local nodes that nothing afterwards can tell "
-            f"apart from the first copy."
+            f"into {group_id} on {seen['created_at']} and is {seen['state']!r}. "
+            f"Refusing to import it again: a second import would write every "
+            f"fact a second time, as new local nodes that nothing afterwards "
+            f"can tell apart from the first copy."
         )
 
     _check_importable(facts)
 
-    group_id = quarantine_group_id(account, memory, manifest.bundle_id)
     session_id = f"import:{manifest.bundle_id}"
     signature = manifest.signature or {}
 
@@ -565,6 +627,7 @@ def _transition(
     conn,
     bundle_id: str,
     *,
+    group_id: str | None = None,
     to: str,
     from_states: tuple[str, ...],
     stamp: str | None,
@@ -577,8 +640,14 @@ def _transition(
     not an error, and a trust decision that quietly did nothing is the kind of
     thing nobody notices until the scope turns out to have been readable, or
     not, for a month.
+
+    The scope the UPDATE names comes from the row `get` resolved, not from the
+    argument. That is the point of resolving first: with 0038's composite key
+    an UPDATE on `bundle_id` alone would promote or revoke every account's
+    copy of the bundle at once, and the read-back would not notice because the
+    row it reads would be one of the ones that moved correctly.
     """
-    current = get(conn, bundle_id)
+    current = get(conn, bundle_id, group_id=group_id)
     if current["direction"] != "import":
         raise ImportRefused(
             f"bundle {bundle_id!r} is an export. There is nothing here to "
@@ -596,11 +665,11 @@ def _transition(
         f"""UPDATE public.bundle_registry
                SET state = %s{stamped},
                    detail = COALESCE(detail, '{{}}'::jsonb) || %s::jsonb
-             WHERE bundle_id = %s AND state = %s""",
-        (to, json.dumps(detail), bundle_id, current["state"]),
+             WHERE group_id = %s AND bundle_id = %s AND state = %s""",
+        (to, json.dumps(detail), current["group_id"], bundle_id, current["state"]),
     )
 
-    after = get(conn, bundle_id)
+    after = get(conn, bundle_id, group_id=current["group_id"])
     if after["state"] != to:
         raise ImportRefused(
             f"bundle {bundle_id!r} is still {after['state']!r} after asking "
@@ -609,7 +678,7 @@ def _transition(
     return after
 
 
-def promote(conn, bundle_id: str, *, verifier_id: str) -> dict:
+def promote(conn, bundle_id: str, *, verifier_id: str, group_id: str | None = None) -> dict:
     """Make an imported bundle's scope readable, on a named verifier's say-so.
 
     `verifier_id` is required and recorded. The engine cannot check whether
@@ -634,7 +703,7 @@ def promote(conn, bundle_id: str, *, verifier_id: str) -> dict:
             "nobody recorded against it is a decision nobody made."
         )
     result = _transition(
-        conn, bundle_id,
+        conn, bundle_id, group_id=group_id,
         to=STATE_PROMOTED,
         from_states=(STATE_QUARANTINED,),
         stamp="promoted_at",
@@ -650,7 +719,8 @@ def promote(conn, bundle_id: str, *, verifier_id: str) -> dict:
     return result
 
 
-def reject(conn, bundle_id: str, *, verifier_id: str, reason: str) -> dict:
+def reject(conn, bundle_id: str, *, verifier_id: str, reason: str,
+           group_id: str | None = None) -> dict:
     """Refuse an imported bundle a verifier has looked at and does not accept.
 
     Distinct from `revoke`, and the difference is not bookkeeping: nothing was
@@ -665,7 +735,7 @@ def reject(conn, bundle_id: str, *, verifier_id: str, reason: str) -> dict:
     if not verifier_id or not str(verifier_id).strip():
         raise ImportRefused("reject needs a verifier_id, for the same reason promote does")
     result = _transition(
-        conn, bundle_id,
+        conn, bundle_id, group_id=group_id,
         to=STATE_REJECTED,
         from_states=(STATE_QUARANTINED,),
         stamp=None,
@@ -681,7 +751,7 @@ def reject(conn, bundle_id: str, *, verifier_id: str, reason: str) -> dict:
     return result
 
 
-def revoke(conn, bundle_id: str, *, reason: str) -> dict:
+def revoke(conn, bundle_id: str, *, reason: str, group_id: str | None = None) -> dict:
     """Withdraw a bundle. Its scope stops being readable from now on.
 
     `readable_scopes` stops returning the scope, so every subsequent read is
@@ -711,7 +781,7 @@ def revoke(conn, bundle_id: str, *, reason: str) -> dict:
     is what was exported and to whom - which is what the export rows answer.
     """
     result = _transition(
-        conn, bundle_id,
+        conn, bundle_id, group_id=group_id,
         to=STATE_REVOKED,
         from_states=(STATE_QUARANTINED, STATE_PROMOTED),
         stamp="revoked_at",
@@ -740,6 +810,19 @@ def readable_scopes(conn, account: str, memory: str) -> list[str]:
     or memory name containing a `%` is a name rather than a wildcard. The
     prefix itself comes from `quarantine_prefix`, which is the single place the
     shape of an import scope is derived.
+
+    The prefix match is unaffected by 0038's composite key, and deliberately
+    so: what makes two accounts' copies of one bundle separate here is that
+    their scopes have different prefixes, which was already true. The key
+    change is what lets both rows exist.
+
+    `starts_with` is not an indexable predicate, so this is a sequential scan
+    over the registry. Measured at 5,000 rows it is a Seq Scan with or without
+    an index on group_id, which is why 0038 dropped the index 0035 added for
+    this query. The scan is a real cost on a fan-out read and is recorded here
+    rather than hidden: the registry holds one row per bundle ever exchanged,
+    so it is small for a long time, and the fix is a different predicate
+    rather than another index.
     """
     prefix = quarantine_prefix(account, memory)
     rows = conn.execute(
