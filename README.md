@@ -307,6 +307,29 @@ instead of returning as though it had succeeded.
 **Any MCP client.** A coding assistant, a chatbot, an ops agent, or something built in
 house. Coding agents are where this is proven, not what it is limited to.
 
+## Six capabilities on top of the graph
+
+Machines reporting outcomes, a read across several memories, whether a claim was ever
+checked, routing and a token budget for that read, signed bundles between organisations,
+and the identity the hosted service binds a credential to. All of it is in the engine, so
+self hosting gets all of it.
+
+| | |
+|---|---|
+| **Collective learning** | A validated door CI runs, deploys and test suites report through, a single writer behind it, and lessons derived at read time. A lesson is never stored: retire one supporting outcome and it stops being produced |
+| **Knowledge networks** | `query_across` asks several scopes and fuses one ranked answer. With one scope the answer is byte identical to `query_memory` |
+| **Agent identity** | A registry of the agents an account has, and runs recording what changed underneath one. Cloud only, because the engine has no concept of a principal |
+| **Trust and verification** | Six states, append only, with their own tamper evident chain. Only `rejected` removes a fact from an answer, and only a verifier can set it |
+| **Context intelligence** | Which scopes are worth asking, decided with no model call, and an answer cut to a token budget that says what it dropped |
+| **Knowledge exchange** | `echo-memory exchange`: a signed, redacted file. An import lands in a scope ordinary retrieval is never given until a verifier promotes it |
+
+Two of these are off until an operator turns them on. `ECHO_MEMORY_TRUST_RETRIEVAL` and
+`ECHO_MEMORY_LESSONS` default off, as does the graph wide write gate behind
+`ECHO_MEMORY_MAX_GRAPH_WRITERS`, which costs 2.6x write throughput when on.
+
+[`docs/INTELLIGENCE.md`](docs/INTELLIGENCE.md) is the guide: the API for each, what it
+costs, every environment variable, and a section per capability on what it does not do.
+
 ## Numbers, and how they were taken
 
 Every figure comes from this repository or a live store, with the command that reproduces
