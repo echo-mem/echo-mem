@@ -492,6 +492,32 @@ def test_sql_metacharacters_in_a_group_id_read_nothing_rather_than_everything(
         assert result["facts"] == [], f"{gid!r} read another scope: {result}"
 
 
+def test_a_scope_in_the_list_is_read_whoever_owns_it(migrated_db, embedder):
+    """The contract, stated as a test because it is the thing most likely to
+    be misread as a defence.
+
+    `query_across` takes the scopes the caller was ALREADY authorised for and
+    says so twice in its own docstring: it does not know what a principal is
+    and must not learn, because the hosted service resolving authorization in
+    one place is what keeps the tenancy decision in one place. So a group_id
+    in the list is read, full stop, and `_verify_scope` agrees with it rather
+    than second-guessing it - it checks that every fact belongs to one of the
+    scopes GIVEN, not that the caller was entitled to give them.
+
+    That means every test above about an unauthorised scope is a test about a
+    scope that was not in the list, and the only thing standing between a
+    hostile caller and another tenant's facts is the code that builds the
+    list. Pinning it here so that nobody reads this file as evidence the
+    engine enforces tenancy. It does not; cloud's tenancy.py does, and that
+    is deliberate."""
+    conn = connect(migrated_db)
+    match = _two_scopes(conn, embedder)
+
+    result = query_across(conn, [OURS, THEIRS], match, 10, embedder)
+
+    assert {f["source"] for f in result["facts"]} == {OURS, THEIRS}
+
+
 def test_verify_scope_fires_when_a_foreign_id_reaches_the_fusion(
     migrated_db, embedder, monkeypatch
 ):
