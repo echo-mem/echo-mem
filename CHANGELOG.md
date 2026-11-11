@@ -9,6 +9,84 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Two writers in two scopes of one graph were never serialised, and nothing
+tested it.** `write_episode` takes a per-scope advisory lock, so two agents
+writing one scope are safe and there is a test. Apache AGE's label catalogue
+is per GRAPH, so two writers in different scopes take different keys and
+proceed genuinely concurrently, which is the condition that killed three of
+four benchmark shards with `relation "echo_memory.-775.1utterance" does not
+exist`.
+
+`infra/graphlock.py` adds `graph_write_gate`, a graph wide lock, default one
+writer per graph, turned off by `ECHO_MEMORY_MAX_GRAPH_WRITERS` above 1. It
+is **not yet wired into the write path**; what ships here is the gate, its
+cost and its tests.
+
+The cost is real and is stated where the gate is. Eight writers, 500
+one-fact episodes each into its own scope, Postgres 16 with AGE under Colima:
+
+| configuration | run 1 | run 2 | episodes/s |
+|---|---|---|---|
+| no gate | 46.5s | 40.2s | 86 to 100 |
+| gate, limit 1 | 122.1s | 112.8s | 33 to 35 |
+| one writer alone, 500 episodes | 11.1s | | 45 |
+
+Eight gated writers are **slower than one unimpeded writer**, because the
+handoff is not free. Size an ingress for one writer's throughput minus a
+quarter.
+
+**The corruption did not reproduce on this hardware, and the tests say so
+rather than implying otherwise.** 4, 8 and 16 concurrent cross-scope writers,
+about 30,000 episodes, zero errors and an intact label catalogue every time.
+`tests/integration/test_graph_concurrency.py` carries the full table of what
+was tried and is a regression guard, not a reproduction. What it does show
+positively is that cross-scope writers overlap in time today, so the hazard
+window is real whether or not a laptop can make AGE fall into it.
+
+**`hashtext` is 32 bit, which makes one of this package's stated guarantees
+false at a measurable rate.** `attest()` says it locks per scope "because
+scopes are tenants, and one account's writes must not be able to block
+another's". Over 400,000 group ids in this store's shape, `hashtext` gives 22
+colliding pairs and `lock_key`'s 64 bit derivation gives 0. A collision is
+not corruption; it is two tenants blocking each other for the length of a
+write, silently, looking like latency.
+
+**What `instruction_like` catches is now a number.** `retrieval/envelope.py`
+says false negatives are expected, which is the right claim and the wrong one
+to leave unquantified. Measured over a 32 shape attack corpus and 24 real
+memories: **24 of 32 flagged (recall 0.750)** and **4 of 24 benign memories
+flagged (false positive rate 0.167)**. Both are pinned exactly, in both
+directions, so broadening a pattern means re-reading the benign side rather
+than passing a `>=`.
+
+The four false positives are all genuine memory shapes - "you are now the
+owner of the org", "the new rules of the billing plan" - which is why
+`flagged` reports instead of dropping. Of the eight misses, four are one
+narrow gap: `above` is in the ignore/disregard alternation and was meant to
+be caught, but one intervening article defeats it, so "ignore the above" does
+not match.
+
+**Counters and timers that cannot log user memory.** `infra/metrics.py` is a
+dict under a lock, emitted as one JSON line through the existing logger, with
+an OpenTelemetry bridge on by default. `opentelemetry-api` turns out to be
+present in every install already, as a transitive dependency of `mcp` rather
+than anyone's choice; with no SDK configured its record costs 0.044 us and
+nothing leaves the process. `ECHO_MEMORY_OTEL=0` turns it off. Label keys
+that would carry fact, entity or query text are replaced with a visible
+marker rather than dropped, and a label whose value varies per call cannot
+grow the registry without bound.
+
+**Migration 0036 adds no index, and records what was checked.** Every table
+was listed against its indexes and the nine with only a primary key were each
+checked against how they are queried; in every case the key is the access
+path. The one real gap cannot be fixed with an index: `attestation.claims_of`
+reads one fact by id on the write path, through Cypher, and AGE expands the
+match before filtering, so the plan is a sequential scan of `FACT`. Adding an
+unconditional id index changes neither the plan nor the time (3.75ms against
+3.74ms at 3,000 edges); the same read against the edge table directly is an
+Index Only Scan at 0.026ms. An index that does not change a plan costs write
+amplification and leaves a comment claiming a query is fast.
+
 **The ablation table reports an interval for recall@10, and it changes what
 several past experiments mean.** Until now `compare` bootstrapped the
 per-case reciprocal ranks and nothing else, so every row carried an interval
