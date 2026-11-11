@@ -147,6 +147,24 @@ def assemble(
     if "error" in result:
         return result
 
+    # `source` on every fact, including when routing narrowed to one scope.
+    #
+    # query_across deliberately leaves it off a single-scope answer, because a
+    # one-scope call there must stay byte identical to query_memory - that is
+    # what keeps every number the eval harness has produced valid as a
+    # baseline, and there is a test pinning it. But `assemble` has a different
+    # contract: it chose the scope, so it can always say which one, and a
+    # caller that has to check whether the key is present before reading it
+    # would have to know about the routing decision to know why.
+    #
+    # Found by the test that asserts no unauthorised scope enters at any
+    # budget. The isolation half passed; it was the annotation that was
+    # missing, which is the kind of gap only the seam between two modules
+    # shows.
+    if len(chosen) == 1:
+        for fact in result.get("facts") or []:
+            fact.setdefault("source", chosen[0])
+
     kept, report = routing.fit_to_budget(result.get("facts") or [], token_budget)
     result["facts"] = kept
 
