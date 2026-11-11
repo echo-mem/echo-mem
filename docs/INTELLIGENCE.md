@@ -304,7 +304,9 @@ channels.
 
 With a single `group_id` the result is **byte identical** to `query_memory`,
 and there is a test pinning that. That is what keeps every number the eval
-harness has produced valid as a baseline.
+harness has produced valid as a baseline. `with_context=True` is the one thing
+that adds a key on that path, and it is off by default, which is what keeps the
+identity.
 
 `MAX_GROUPS` is 8, and it is a latency bound rather than a capability claim.
 
@@ -1299,8 +1301,9 @@ homoglyph, base64, a negated imperative, and a reframing with no keyword at
 all. The four false positives are all genuine memory shapes.
 
 **The context block is only reachable through `query_across(with_context=True)`
-today.** `query_memory` does not emit one, nor does the MCP tool, and nothing
-passes a `trust_summary` to `describe` anywhere in the engine.
+today**, on both the single scope and the fan out path. `query_memory` does not
+emit one, nor does the MCP tool, and nothing passes a `trust_summary` to
+`describe` anywhere in the engine.
 
 ### Metrics
 
