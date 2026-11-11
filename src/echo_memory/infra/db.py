@@ -30,6 +30,25 @@ def agtype_str(v):
 
     The fallback is the old behaviour for anything that is not valid JSON. A
     read path is the wrong place to start raising on data already stored.
+
+    ## Only for the Cypher path
+
+    This decodes what `SELECT * FROM cypher(...) AS (x agtype)` returns. It
+    must NOT be applied to a per-property SQL projection - `(e.properties ->>
+    '"fact"'::agtype)` - because that operator returns the real text, already
+    decoded. Running it over a value that is itself valid JSON rewrites it:
+    the stored text `"ship it"` comes back without its quotes.
+
+    That is not hypothetical. Collapsing the four copies into this one
+    function reached `ingestion/neighbourhood.py`, whose only read is a `->>`
+    projection, and reintroduced the quote loss there. Migration 0036 states
+    the same distinction from the other end, as the reason the attestation
+    read cannot move to `->>` without moving its decode with it.
+
+    Callers on the Cypher path: cli/graph.py, cli/export.py and
+    query_memory._fetch_facts. Everything reading through `->>` - bm25.py,
+    scratchpad.py, routing.py, intelligence/lessons.py, neighbourhood.py -
+    uses the value as it arrives.
     """
     if v is None:
         return None

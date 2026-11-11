@@ -263,6 +263,21 @@ that would carry fact, entity or query text are replaced with a visible
 marker rather than dropped, and a label whose value varies per call cannot
 grow the registry without bound.
 
+**The one agtype decoder is for the Cypher path only, and had reached a
+projection that is not one.** Collapsing the four copies into
+`infra.db.agtype_str` reached `ingestion/neighbourhood.py`, whose only read is
+a per-property `->>` projection - and `->>` returns the real text, where
+`RETURN e.fact` returns a JSON encoded scalar. So the decoder was being run
+over a value that was already decoded, which rewrites anything that happens to
+be valid JSON: the stored fact `"ship it"` came back without its quotes, and a
+literal backslash-n came back as a newline. That is the same data fidelity bug
+the single decoder was written to fix, reintroduced by the fix, on the one call
+site that never had it - and migration 0036 had stated the distinction in the
+same commit. Fixed, with a test that writes a quoted fact and a quoted entity
+name and reads both back through the write path's suggestion. `agtype_str` now
+names which callers are on which side, and `retrieval/across.py` stops
+stripping quotes off a group id for the same reason.
+
 **Migration 0036 adds no index, and records what was checked.** Every table
 was listed against its indexes and the nine with only a primary key were each
 checked against how they are queried; in every case the key is the access
