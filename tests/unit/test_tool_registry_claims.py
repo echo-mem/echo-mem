@@ -76,6 +76,10 @@ COUNT_CLAIMS = (
     ("README.md", re.compile(r"^### The (\w+) MCP tools$", re.MULTILINE)),
     ("README.md", re.compile(r"\| \*\*v1a, built\*\*.*?(\w+) MCP tools", re.DOTALL)),
     ("docs/INTELLIGENCE.md", re.compile(r"The (\w+) MCP tools are unchanged")),
+    # Added when the capability table landed on a separate branch from this
+    # guard and the two met at the merge. That is the guard working: the claim
+    # arrived unchecked and the suite said so before anybody published it.
+    ("README.md", re.compile(r"registers\s+exactly (\w+) MCP tools")),
 )
 
 #: Files whose prose may state a tool count, which is every page this project

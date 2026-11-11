@@ -661,8 +661,8 @@ def test_the_same_memory_cannot_hold_one_bundle_twice(migrated_db, embedder):
 def test_an_enormous_bundle_is_refused_before_it_is_read(migrated_db, embedder):
     conn = connect(migrated_db)
     claims = [
-        ("component-%d" % n, "service-%d" % n, "uses",
-         "claim number %d about an unremarkable dependency" % n)
+        (f"component-{n}", f"service-{n}", "uses",
+         f"claim number {n} about an unremarkable dependency")
         for n in range(400)
     ]
     _seed(conn, embedder, PEER_SCOPE, claims)
