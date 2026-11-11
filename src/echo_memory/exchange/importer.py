@@ -247,6 +247,12 @@ def get(conn, bundle_id: str, *, group_id: str | None = None) -> dict:
             )
         return found
 
+    # `--group-id` and not `--scope` in the message below, and the distinction
+    # is the reason this refusal exists rather than a detail of it. The CLI
+    # declares a global `--scope` meaning solo or shared, so an operator who
+    # followed a message naming it would hand a scope KIND to a lookup wanting
+    # a group id. cli/exchange.py already argues that at the three subparsers
+    # that take the flag; this said the other thing.
     candidates = _rows_for_id(conn, bundle_id)
     if not candidates:
         raise ImportRefused(f"no bundle {bundle_id!r} is recorded here")
@@ -254,7 +260,7 @@ def get(conn, bundle_id: str, *, group_id: str | None = None) -> dict:
         scopes = ", ".join(repr(c["group_id"]) for c in candidates)
         raise ImportRefused(
             f"bundle {bundle_id!r} is recorded in {len(candidates)} scopes "
-            f"({scopes}). Name one with --scope: which import a trust "
+            f"({scopes}). Name one with --group-id: which import a trust "
             f"decision applies to is not something this can guess, because a "
             f"promotion of the wrong one is not visible afterwards."
         )

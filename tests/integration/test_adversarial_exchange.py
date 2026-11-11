@@ -592,10 +592,23 @@ def test_a_trust_decision_on_an_ambiguous_bundle_id_is_refused_not_guessed(
     ours = _import(conn, manifest, facts, account=OUR_ACCOUNT, embedder=embedder)
     theirs = _import(conn, manifest, facts, account="acct-theirs", embedder=embedder)
 
-    with pytest.raises(importer.ImportRefused, match="recorded in 2 scopes"):
-        importer.promote(conn, manifest.bundle_id, verifier_id="ops")
-    with pytest.raises(importer.ImportRefused, match="recorded in 2 scopes"):
-        importer.get(conn, manifest.bundle_id)
+    # The flag the message names is pinned as well as the count. It said
+    # `--scope`, which is the global flag meaning solo or shared, so an
+    # operator following it would have handed a scope KIND to a lookup wanting
+    # a group id - the exact confusion cli/exchange.py names the flag
+    # `--group-id` to avoid. Matching only "recorded in 2 scopes" did not see
+    # it, because the half that was wrong was the half telling somebody what
+    # to do about it.
+    for call in (
+        lambda: importer.promote(conn, manifest.bundle_id, verifier_id="ops"),
+        lambda: importer.get(conn, manifest.bundle_id),
+    ):
+        with pytest.raises(importer.ImportRefused) as refused:
+            call()
+        message = str(refused.value)
+        assert "recorded in 2 scopes" in message
+        assert "--group-id" in message, message
+        assert "--scope" not in message.replace("--group-id", ""), message
 
     promoted = importer.promote(
         conn, manifest.bundle_id, verifier_id="ops", group_id=ours["group_id"]
