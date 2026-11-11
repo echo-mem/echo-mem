@@ -204,3 +204,44 @@ def test_a_default_scope_outside_the_authorised_list_is_refused(migrated_db):
         _seed(conn)
         with pytest.raises(Exception, match="authorised"):
             routing.select(conn, [DEV], QUERY, default=PROD)
+
+
+def test_the_node_cap_does_not_understate_the_term_count(migrated_db):
+    """A scope with far more matching nodes than the cap must still be credited
+    with every term it answers to.
+
+    The cap used to sit on a join that produced one row per (node, term) pair,
+    so a scope whose nodes each matched several terms spent the cap on a few
+    nodes and an arbitrary 32 rows could miss a term entirely. Understated
+    coverage rejects a scope that held the answer, which is the failure the
+    whole module is arranged against.
+    """
+    crowded = "memory:crowded"
+    embedder = _HashEmbedder()
+    with connect(migrated_db) as conn:
+        for i in range(routing.MAX_MATCHED_NODES + 8):
+            write_episode(
+                conn, crowded, "s1",
+                [{"name": f"deploy branch {i:02d}", "type": "thing"},
+                 {"name": f"service {i:02d} deploy", "type": "thing"}],
+                [{"source": f"deploy branch {i:02d}",
+                  "target": f"service {i:02d} deploy", "relation_type": "is",
+                  "fact": f"service {i:02d} deploys from its own branch",
+                  "confidence": "extracted"}],
+                None, embedder, agent_id="claude-code", assume_new=True,
+            )
+        write_episode(
+            conn, crowded, "s2",
+            [{"name": "Colima", "type": "thing"},
+             {"name": "clock skew", "type": "thing"}],
+            [{"source": "Colima", "target": "clock skew",
+              "relation_type": "is", "fact": "the VM clock drifts",
+              "confidence": "extracted"}],
+            None, embedder, agent_id="claude-code", assume_new=True,
+        )
+        scores = routing.score_scopes(conn, [crowded], "deploy branch on Colima")
+
+    # deploy, branch and colima, all three, with 80 nodes answering to the
+    # first two and exactly one answering to the third.
+    assert scores[0].matched_terms == 3
+    assert scores[0].candidate_facts > 0

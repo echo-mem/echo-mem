@@ -67,6 +67,10 @@ from echo_memory.retrieval.query_memory import ValidationError, prompt_terms
 #: that mentions it once. 32 is a guess at where that stops mattering, and it
 #: bounds what the fact count can cost; the number it caps only ever breaks
 #: ties between scopes that matched the same share of terms.
+#:
+#: It caps NODES and deliberately not the term count, which is measured over
+#: the whole scope. A cap on the term count would understate coverage, and
+#: understated coverage rejects a scope that held the answer.
 MAX_MATCHED_NODES = 32
 
 #: Live facts at which the depth term is half its maximum.
@@ -199,26 +203,48 @@ def score_scopes(
     for gid in group_ids:
         row = conn.execute(
             f"""
-            WITH matched AS (
+            WITH named AS (
                 -- Containment, not equality, and the asymmetry is deliberate:
                 -- see the module docstring. node_group_idx covers the scope
-                -- filter, and the cap keeps a scope that names everything from
-                -- turning the count below into a scan.
-                SELECT n.id, w
+                -- filter, and the cap stops a scope that names everything from
+                -- handing an unbounded id list to the count below.
+                SELECT n.id
                   FROM {GRAPH}."Node" n
-                  JOIN unnest(%(terms)s::text[]) AS w
-                    ON position(w IN lower(n.properties ->> '"name"'::agtype)) > 0
                  WHERE {_NODE_GROUP} = %(gid)s
+                   AND EXISTS (
+                       SELECT 1 FROM unnest(%(terms)s::text[]) AS w
+                        WHERE position(
+                            w IN lower(n.properties ->> '"name"'::agtype)
+                        ) > 0
+                   )
                  LIMIT %(cap)s
-            ),
-            nodes AS (SELECT DISTINCT id FROM matched)
-            SELECT (SELECT count(DISTINCT w) FROM matched),
-                   (SELECT count(*)
-                      FROM {GRAPH}."FACT" e
-                     WHERE {_EDGE_GROUP} = %(gid)s
-                       AND (e.properties ->> '"t_invalid"'::agtype) IS NULL
-                       AND (e.start_id IN (SELECT id FROM nodes)
-                         OR e.end_id IN (SELECT id FROM nodes)))
+            )
+            SELECT
+              -- Counted per term rather than over the capped node set, and the
+              -- EXISTS is what makes that affordable: it stops at the first
+              -- node that answers to the term, so this is at most MAX_TERMS
+              -- early-exiting index scans.
+              --
+              -- An earlier version counted distinct terms inside the capped
+              -- join, where the cap applied to (node, term) PAIRS. One node
+              -- matching five terms spent five of them, so an uncapped
+              -- arbitrary 32 rows could miss a term entirely and understate
+              -- coverage, and understated coverage rejects a scope that held
+              -- the answer.
+              (SELECT count(*) FROM unnest(%(terms)s::text[]) AS w
+                WHERE EXISTS (
+                    SELECT 1 FROM {GRAPH}."Node" n
+                     WHERE {_NODE_GROUP} = %(gid)s
+                       AND position(
+                           w IN lower(n.properties ->> '"name"'::agtype)
+                       ) > 0
+                )),
+              (SELECT count(*)
+                 FROM {GRAPH}."FACT" e
+                WHERE {_EDGE_GROUP} = %(gid)s
+                  AND (e.properties ->> '"t_invalid"'::agtype) IS NULL
+                  AND (e.start_id IN (SELECT id FROM named)
+                    OR e.end_id IN (SELECT id FROM named)))
             """,
             {"gid": gid, "terms": terms, "cap": MAX_MATCHED_NODES},
         ).fetchone()
