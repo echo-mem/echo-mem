@@ -42,6 +42,51 @@ is "eight writers across sixteen scopes and thirty thousand episodes on one
 laptop did not trigger it", which is useful - it bounds where to look next -
 and is not the same as "the bug is gone".
 
+## A dedicated forensic attempt, 2026-11-11, which also failed to reproduce
+
+A separate Postgres 16 + AGE 1.5.0 container was started with nothing else on
+it, specifically to reproduce either error form on demand. Six experiments:
+
+    1  warm a backend's label cache, have ANOTHER backend drop and recreate
+       the graph, then use the first one                     no corruption
+    2  3 DDL cyclers + 4 autocommit readers, one database    no corruption
+    3  4 DDL cyclers + 5 readers holding OPEN TRANSACTIONS,
+       which is what alembic does                           no corruption
+    4  6 databases running the real alembic upgrade and
+       downgrade cycle concurrently                          too slow to
+                                                             finish; see 5
+    5  6 databases, 1,500 drop/create cycles each plus
+       24,000 reads, 216,000 operations in 47s               no corruption
+    6  4 databases cycling POPULATED graphs: 1,000 vertices,
+       their edges, a pgvector HNSW index, real CASCADE work no corruption
+
+Every error raised in 5 and 6 was a benign race with a CORRECT name: the graph
+genuinely did not exist between a drop and a create. `relation
+"echo_memory.Node" does not exist` appeared 8 times in each, which is the
+production error's family but with the right table name, so it is a reader
+inside the drop window rather than a corrupted cache entry.
+
+So: **two first-hand sightings, zero reproductions on demand.** The error is
+real and the exact text is recorded above and below. What it is not is a
+simple race, because a simple race shows up in 216,000 attempts.
+
+What both real sightings had and none of these six did is sustained heavy work
+over a long period on a loaded machine: an eleven hour benchmark ingest in one
+case, a fifteen minute test suite with five concurrent peers in the other.
+That points at resource pressure or long-lived backend state rather than
+concurrency alone, and it is where somebody chasing this next should look.
+It is a direction, not a cause, and this file does not claim otherwise.
+
+The actionable conclusions do not depend on resolving it:
+
+  - the write gate does not cover the DDL path at all, which is now pinned by
+    `test_graph_gate_boundary.py` rather than left to be inferred
+  - bulk ingest into one graph should be single writer, which is what the
+    gate is for and why it exists despite not reproducing here
+  - a CI runner should not migrate several databases of one instance at once,
+    which is an operational rule and not something a lock can enforce, because
+    advisory lock keys are scoped to a database
+
 `test_the_premise_holds` is the one that earns its place regardless: it shows
 that cross-scope writers DO overlap in time today, so the hazard window is
 real whether or not this hardware can make AGE fall into it.

@@ -9,6 +9,34 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Every tool count and licence claim in the documentation now fails a test
+when it drifts, including on pages nothing used to read.** Two guards, both
+asserting the absence of the wrong thing rather than the presence of the
+right one, which is the distinction that cost this project two separate
+windows of selling terms it had already withdrawn.
+
+`tests/unit/test_tool_registry_claims.py` reads
+`server.server._tool_manager.list_tools()` and checks every count and list of
+MCP tools in the README and docs against it, including the README table as a
+set in both directions. A tool documented but not registered is the worse
+error of the two: a reader writes the call and gets a protocol error. Its
+second test fails on a count no entry covers, because the website's
+`llms.txt` said "Four, over stdio" for the whole life of `trace_cause` while
+a tool-count check in the same CI passed, having compared two other files
+that were both right.
+
+`tests/unit/test_licence_claims.py` walked `README.md` and
+`docs/COMPLIANCE.md`, the two files that were found wrong in November. It
+walks every page the project publishes now, with each exclusion argued:
+`CHANGELOG.md` and `NOTICE` record the relicence deliberately, `docs/designs/`
+are dated design records that describe three MCP tools because that is what
+was planned. It also no longer needs a sentence to impose an obligation
+before it objects: naming BSL 1.1 as the current licence is caught too, which
+is what a stale link label does. Bare figures are still allowed inside a
+window that withdraws them, because "free only below fifty people and $5M of
+revenue. That is withdrawn" is the sentence a reader who saw this in October
+needs, and banning the figure would ban the correction along with the claim.
+
 **A fact can now record whether it was ever checked, and by whom.**
 `confidence` says how the writer came by a claim, which is a statement about
 their process: an agent that inferred something confidently and wrongly leaves
