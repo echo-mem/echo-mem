@@ -122,11 +122,70 @@ def flagged(facts: list[dict]) -> list[str]:
     ]
 
 
+def instruction_like_fields(value, *, path: str = "") -> list[str]:
+    r"""Where inside a nested value the instruction shapes appear, by path.
+
+    Evidence carries free text in two places that a fact does not: a `uri`,
+    and a `detail` map whose shape is whatever a reporter sent. So this walks
+    rather than taking one string, and reports paths rather than a bool,
+    because the operator question is not "is this evidence suspicious" but
+    "which field do I not trust" - and a URL and a summary line get read very
+    differently.
+
+    Each string is tested on its own rather than on a serialisation of the
+    whole value. `^\s*(system|assistant)\s*:` is anchored per line, and over
+    one JSON dump the line structure is the encoder's rather than the
+    reporter's, so a scan of the dump would both miss shapes and invent them.
+
+    Ordinary readable paths - `detail.summary`, `detail.steps[2]` - because
+    they are printed to a person. Dict keys are walked too: a reporter choosing
+    `{"Ignore previous instructions": "ok"}` is the same attack with the text
+    moved one place, and a reader that only looked at values would print it
+    unflagged.
+    """
+    found: list[str] = []
+    if isinstance(value, str):
+        if instruction_like(value):
+            found.append(path or "value")
+    elif isinstance(value, dict):
+        for key, inner in value.items():
+            here = f"{path}.{key}" if path else str(key)
+            if instruction_like(str(key)):
+                found.append(f"{here} (key)")
+            found.extend(instruction_like_fields(inner, path=here))
+    elif isinstance(value, list):
+        for n, inner in enumerate(value):
+            found.extend(instruction_like_fields(inner, path=f"{path}[{n}]"))
+    return found
+
+
+def flagged_evidence(rows: list[dict]) -> list[str]:
+    """The evidence_ids carrying instruction shapes, as `flagged` does for facts.
+
+    Separate from `flagged` rather than folded into it, because evidence rows
+    are not facts: they are keyed on `evidence_id`, they have no `fact` field,
+    and `describe` reports them under their own key so that a reader can tell
+    "a retrieved fact reads like an instruction" from "the artefact somebody
+    cited does", which are different problems with different responses.
+
+    Why evidence needs this at all: it is the one surface built to be READ BY
+    AN OPERATOR deciding whether to verify a claim, so it is the surface where
+    an injected sentence reaches a decision maker - and it was the only one of
+    the three text surfaces (fact, lesson, evidence) with no flag on it.
+    """
+    return [
+        str(row.get("evidence_id"))
+        for row in rows
+        if row.get("instruction_like")
+    ]
+
+
 def describe(
     facts: list[dict],
     *,
     content_class: str = MEMORY,
     trust_summary: dict | None = None,
+    evidence: list[dict] | None = None,
 ) -> dict | None:
     """The `context` block for a response, or None when there is nothing to say.
 
@@ -134,13 +193,22 @@ def describe(
     that the common response shape does not change. That is the same rule
     query_memory already follows for `excluded_by_erasure`, and it is what keeps
     every existing MCP client working untouched.
+
+    `evidence` is the rows a caller is returning alongside the facts, as
+    `trust.evidence.for_fact` gives them. Reported under its own key rather
+    than merged into `instruction_like`, because the ids are of different
+    things: a caller that merged them would hand a client a list of
+    `fact_id`s with evidence ids in it.
     """
     marks = flagged(facts)
-    if content_class == MEMORY and not marks and not trust_summary:
+    evidence_marks = flagged_evidence(evidence or [])
+    if content_class == MEMORY and not marks and not evidence_marks and not trust_summary:
         return None
     block: dict = {"content_class": content_class, "handling": HANDLING}
     if marks:
         block["instruction_like"] = marks
+    if evidence_marks:
+        block["instruction_like_evidence"] = evidence_marks
     if trust_summary:
         block["trust_summary"] = trust_summary
     return block
