@@ -73,8 +73,8 @@ def word(n: int) -> str:
 #: of these sentences, the count stops being checked, and a guard that quietly
 #: stops checking is worse than no guard: it reports green.
 COUNT_CLAIMS = (
-    ("README.md", re.compile(r"^### The (\w+) MCP tools$", re.M)),
-    ("README.md", re.compile(r"\| \*\*v1a, built\*\*.*?(\w+) MCP tools", re.S)),
+    ("README.md", re.compile(r"^### The (\w+) MCP tools$", re.MULTILINE)),
+    ("README.md", re.compile(r"\| \*\*v1a, built\*\*.*?(\w+) MCP tools", re.DOTALL)),
     ("docs/INTELLIGENCE.md", re.compile(r"The (\w+) MCP tools are unchanged")),
 )
 
@@ -105,9 +105,11 @@ NOT_A_TOOL_COUNT = (
     (
         "README.md",
         "two tools claiming the same id",
-        "'tools' here means MCP clients - Cursor, Claude Desktop - sharing an "
-        "ECHO_MEMORY_AGENT_ID. src/echo_memory/cli/connect.py uses the word "
-        "the same way.",
+        (
+            "'tools' here means MCP clients - Cursor, Claude Desktop - sharing "
+            "an ECHO_MEMORY_AGENT_ID. src/echo_memory/cli/connect.py uses the "
+            "word the same way."
+        ),
     ),
 )
 
@@ -160,7 +162,7 @@ def test_no_tool_count_in_prose_is_left_unguarded():
     # the distinction is structural and not a judgement about one sentence.
     any_count = re.compile(
         r"\b(" + "|".join(WORDS[2:]) + r"|\d+)\s+(?:MCP\s+)?tools?\b"
-        r"(?!\s+calls?\b)", re.I)
+        r"(?!\s+calls?\b)", re.IGNORECASE)
 
     unguarded = []
     for name in SCANNED:
@@ -200,7 +202,7 @@ def test_the_readme_table_lists_exactly_the_registered_tools():
     section = text[text.index("### The seven MCP tools") :]
     section = section[: section.index("\n## ")]
 
-    listed = set(re.findall(r"^\| `(\w+)` \|", section, re.M))
+    listed = set(re.findall(r"^\| `(\w+)` \|", section, re.MULTILINE))
     published = registered_tools()
 
     assert listed == published, (
