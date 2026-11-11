@@ -207,8 +207,18 @@ def query_across(
             # test caught, and it is the sort of difference that would
             # otherwise show up as an unexplained delta in a benchmark months
             # later.
+            #
+            # The context block is the one exception, and it has to be: a
+            # single scope read is the COMMON case, so an envelope that only
+            # appeared on the fan out would mark almost nothing. It is added
+            # only when the caller asked for it, which is what keeps the
+            # default answer byte identical.
             if errors:
                 result["unreadable_scopes"] = errors
+            if with_context:
+                block = context_envelope.describe(result.get("facts") or [])
+                if block is not None:
+                    result["context"] = block
             return result
         for f in facts:
             f["source"] = gid

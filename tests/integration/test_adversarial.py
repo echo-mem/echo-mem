@@ -7,7 +7,7 @@ does hostile text aimed at the store rather than the model do any damage on
 the way through.
 
 Three real defects came out of writing it, all in files this stream does not
-own, all marked xfail below with what was measured:
+own, all three now fixed and asserted below rather than marked expected:
 
   1. `query_across(["one_scope"], ..., with_context=True)` returns no
      `context` block at all. The single scope early return - the thing that
@@ -141,11 +141,6 @@ def test_an_injection_mixed_with_real_memories_is_the_only_one_flagged(migrated_
 # --- the defects found while writing the above --------------------------
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="across.py returns before describe() on the single scope path; "
-           "measured 2026-11-11: context present for 2 scopes, absent for 1",
-)
 def test_a_single_scope_query_still_gets_the_context_block(migrated_db):
     """The single scope early return is load bearing - it is what makes
     query_across byte identical to query_memory - and it sits BEFORE the
@@ -165,11 +160,6 @@ def test_a_single_scope_query_still_gets_the_context_block(migrated_db):
     assert result["context"]["instruction_like"]
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="_agtype_str is str(v).strip('\"'), so JSON escapes survive. "
-           "Measured 2026-11-11: a stored newline reads back as backslash-n",
-)
 def test_a_fact_containing_a_newline_round_trips_verbatim(migrated_db):
     """Storage is correct and the read path is not.
 
@@ -192,11 +182,6 @@ def test_a_fact_containing_a_newline_round_trips_verbatim(migrated_db):
     assert result["facts"][0]["fact"] == text
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason="the escaping above removes every line start, defeating the "
-           "line anchored pattern; measured 2026-11-11",
-)
 def test_a_line_anchored_injection_is_flagged_as_retrieved(migrated_db):
     """Where the two defects meet, and the reason this one is worth its own
     test rather than a note on the last.

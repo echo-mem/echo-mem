@@ -893,7 +893,29 @@ def _digest_candidates(
 
 
 def _agtype_str(v):
-    return str(v).strip('"') if v is not None else None
+    """An agtype scalar as the string it actually holds.
+
+    AGE hands back a JSON encoded value, so a fact containing a newline arrives
+    as `"line one\\nline two"`. Stripping the quotes left the escape sequences
+    as literal backslash-n, which meant every fact containing a newline, a
+    quote or a backslash was returned subtly wrong: the dashboard rendered it
+    wrong, `export` wrote it wrong, and anything matching line starts could not
+    see them at all. Found by an adversarial test for a line anchored prompt
+    injection, which arrived unflagged because the detector's `^` had nothing
+    to anchor to.
+
+    Decoded rather than stripped. The fallback is the old behaviour for
+    anything that is not valid JSON, because a read path is the wrong place to
+    start raising on data that is already stored.
+    """
+    if v is None:
+        return None
+    raw = str(v)
+    try:
+        decoded = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw.strip('"')
+    return decoded if isinstance(decoded, str) else raw.strip('"')
 
 
 def _fetch_facts(conn, edge_ids: list[str]) -> dict[str, dict]:
