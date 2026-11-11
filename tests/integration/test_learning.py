@@ -23,7 +23,9 @@ module is present the fixture uses it instead, and these become end to end.
 
 The stand-in is deliberately not a stub of `lessons`. Nothing here replaces a
 query, a threshold or a decision - only the answer to "has anybody checked
-this claim", which is the one input that genuinely lives in another stream.
+this claim", which is the one input that genuinely lives in another stream. Its
+signatures are Stream 4's, confirmed rather than guessed: `states_of` for the
+batch, `state_of` for one, both returning a state for every id passed in.
 """
 
 from __future__ import annotations
@@ -51,6 +53,13 @@ OTHER_DECISION = "switch-to-postgres"
 
 VERIFY_MODULE = "echo_memory.trust.verify"
 
+#: Probed once at import, not per test. `find_spec` imports the parent package,
+#: and `echo_memory/__init__.py` hashes the whole source tree at import to
+#: stamp `writer_version` - so the probe costs an rglob and a read of every
+#: .py file in the package. Once is nothing; once per test is that many
+#: full-tree reads for an answer that cannot change during a run.
+TRUST_IS_PRESENT = importlib.util.find_spec(VERIFY_MODULE) is not None
+
 
 @pytest.fixture
 def embedder():
@@ -65,14 +74,18 @@ def verify_state():
     Yields `mark(conn, group_id, fact_id, state)`. See the module docstring for
     why a stand-in is acceptable here and what it does not cover.
     """
-    if importlib.util.find_spec(VERIFY_MODULE) is not None:
+    if TRUST_IS_PRESENT:
         verify = importlib.import_module(VERIFY_MODULE)
 
         def mark_real(conn, group_id, fact_id, state):
+            # Signatures confirmed against Stream 4: `state` is positional,
+            # `verifier_kind`, `verifier_id` and `method` are keyword-only and
+            # required, and the return is the row id rather than a dict.
             verify.record(
-                conn, group_id, fact_id, state=state,
-                method="integration-test", verifier="tests",
+                conn, group_id, fact_id, state,
                 verifier_kind=states.SERVICE,
+                verifier_id="tests",
+                method="integration-test",
             )
 
         yield mark_real
@@ -80,14 +93,20 @@ def verify_state():
 
     recorded: dict[tuple[str, str], str] = {}
     module = types.ModuleType(VERIFY_MODULE)
-    # Only `state_of` - the one thing lessons asks for. A stand-in that also
-    # answered questions nothing asks would be a second implementation of
-    # Stream 4 rather than a seam in this test.
-    module.state_of = (  # type: ignore[attr-defined]
-        lambda conn, group_id, edge_id: recorded.get(
-            (group_id, str(edge_id)), states.UNVERIFIED
-        )
-    )
+
+    def state_of(conn, group_id, edge_id, *, now=None):
+        return recorded.get((group_id, str(edge_id)), states.UNVERIFIED)
+
+    def states_of(conn, group_id, edge_ids, *, now=None):
+        # Every id passed in comes back, which is the real module's contract
+        # and the reason `candidates` does not need a default on its lookup.
+        return {str(e): state_of(conn, group_id, e) for e in edge_ids}
+
+    # Only the two state lookups, which are the whole of what lessons asks of
+    # this module. A stand-in that also answered questions nothing asks would
+    # be a second implementation of Stream 4 rather than a seam in this test.
+    module.state_of = state_of  # type: ignore[attr-defined]
+    module.states_of = states_of  # type: ignore[attr-defined]
     sys.modules[VERIFY_MODULE] = module
 
     def mark_stub(conn, group_id, fact_id, state):
@@ -169,6 +188,37 @@ def test_two_verified_successes_make_one_verified_causal_lesson(
         assert {o["outcome"] for o in row["outcomes"]} == {
             "checkout-error-rate-2026-11", "settlement-lag-2026-11",
         }
+
+
+def test_every_supporter_carries_an_evidence_count_that_gates_nothing(
+    migrated_db, embedder, verify_state
+):
+    """`n_evidence` is context on the row and decides nothing.
+
+    The invariant worth holding is that the key is always present, so a reader
+    never has to tell "no evidence" from "the field is missing". Its value
+    distinguishes a third thing: `None` means no evidence layer was available
+    to ask, where `0` would be a claim that nothing backs this fact.
+
+    It must not be a gate. A reporter attaching its own deploy log to its own
+    outcome is the same opinion twice, so a count that admitted an outcome into
+    support would route around the reporter/verifier split. Both lessons here
+    have a count and neither needed one to exist.
+    """
+    with connect(migrated_db) as conn:
+        _two_verified_successes(conn, embedder, verify_state)
+
+        rows = lessons.candidates(conn, GROUP)
+        assert len(rows) == 1
+        for observation in rows[0]["outcomes"]:
+            assert "n_evidence" in observation
+            count = observation["n_evidence"]
+            if TRUST_IS_PRESENT:
+                assert isinstance(count, int) and count >= 0
+            else:
+                # No evidence module to ask, so the honest answer is that
+                # nobody can say - not that nothing backs it.
+                assert count is None
 
 
 def test_one_outcome_is_an_anecdote_and_yields_no_lesson(
@@ -261,7 +311,12 @@ def test_an_evidence_backed_supporter_keeps_the_basis_correlational(
     not establish that the decision behind it was right, so one merely
     evidence-backed supporter makes the whole row correlational. Promoting on a
     majority would mean the strongest label in this system could be reached
-    without anybody having verified anything."""
+    without anybody having verified anything.
+
+    Note what `evidence_backed` is here: a state somebody recorded, not one
+    derived from evidence rows existing. Attaching an artefact moves nothing on
+    its own, which is why this test sets the state rather than attaching a log
+    and expecting a promotion."""
     with connect(migrated_db) as conn:
         _decide(conn, embedder, DECISION, "decide-payments-razorpay")
         strong = _observe(

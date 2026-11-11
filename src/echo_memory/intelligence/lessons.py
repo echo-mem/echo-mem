@@ -67,6 +67,23 @@ _logger = get_logger("lessons")
 #: The trust states an outcome must be in to support a lesson. `unverified` is
 #: absent, which is the whole filter: a pattern across claims nobody checked is
 #: a pattern in what got reported, not in what happened.
+#:
+#: Both members are states a verifier records deliberately. `evidence_backed`
+#: is NOT derived from evidence existing - a fact with five evidence rows reads
+#: `unverified` until somebody says the evidence was sufficient - and the
+#: counted-evidence alternative was considered here and rejected. Asking "does
+#: this outcome have an artefact behind it" is one query and would be cheap,
+#: and it would let a CI reporter attach its own deploy log to its own outcome
+#: and thereby admit that outcome into lesson support. That is precisely the
+#: elevation `events.envelope.REQUIRES_VERIFY` exists to deny: a reporter may
+#: attach evidence and may not say the evidence was sufficient.
+#:
+#: The cost of that choice is that this filter keeps nothing until somebody
+#: records a verification, so a scope full of outcomes can yield no lessons
+#: with nothing wrong. That is why `candidates` logs how many observations were
+#: in a supporting state rather than only how many lessons came out: "0 of 12
+#: supporting" is a configuration problem, and an empty list on its own cannot
+#: be told apart from a scope that genuinely disagrees with itself.
 SUPPORTING_STATES = frozenset({states.VERIFIED, states.EVIDENCE_BACKED})
 
 #: The hint that makes a decision-to-outcome edge part of a chain. One value,
@@ -159,6 +176,18 @@ def _trust_states(conn, group_id: str, fact_ids: list[str]) -> dict[str, str]:
     `trust.states` IS imported at module scope, because that is the state
     vocabulary rather than the implementation, and the two have different
     lifetimes: the words were agreed before anything used them.
+
+    `states_of` in preference to a call per edge, because this reads the state
+    of every outcome edge in the scope and a read path cannot afford one query
+    per fact. It returns a state for every id passed in, `unverified` for the
+    ones with no row, so the caller's `.get` default is a belt rather than the
+    mechanism. `state_of` is the fallback only so that a build with the one and
+    not the other still answers correctly, slowly.
+
+    `now` is deliberately not passed. It is a seam for testing against the
+    database's clock, and a read path that supplied its own would decide for
+    itself whether a verification had expired - which is the kind of second
+    opinion about time that turned 24ms of container skew into a day.
     """
     if not fact_ids:
         return {}
@@ -170,10 +199,44 @@ def _trust_states(conn, group_id: str, fact_ids: list[str]) -> dict[str, str]:
             extra={"group_id": group_id, "detail": "every fact read as unverified"},
         )
         return {}
-    batch = getattr(verify, "state_of_many", None)
+    batch = getattr(verify, "states_of", None)
     if batch is not None:
         return {str(k): v for k, v in batch(conn, group_id, list(fact_ids)).items()}
     return {str(f): verify.state_of(conn, group_id, f) for f in fact_ids}
+
+
+def _evidence_counts(conn, group_id: str, fact_ids: list[str]) -> dict[str, int] | None:
+    """How many evidence rows back each outcome, or None if nothing can say.
+
+    Context, never a gate, and the distinction is the whole reason this is a
+    separate function from `_trust_states`. Evidence count is a computed signal
+    and a reporter controls both sides of it: a CI runner attaching its own
+    deploy log to its own outcome is the same opinion twice, not a second one.
+    Letting it admit an outcome into lesson support would route straight around
+    `events.envelope.REQUIRES_VERIFY`. So it rides on the row and decides
+    nothing. See SUPPORTING_STATES.
+
+    What it earns its query for is telling two empty answers apart. No lessons
+    with no evidence anywhere means nothing is reporting. No lessons with
+    twelve evidence rows means artefacts are arriving and nobody is
+    adjudicating them, which is the likely state of a new install because
+    `evidence_backed` is never derived from evidence existing. Those are
+    different problems with different owners and an empty list says neither.
+
+    None rather than zeroes when the evidence layer is absent. Zero would read
+    as "nothing backs this fact", which is a claim about the data; the honest
+    answer on a build with no evidence module is that nobody can say.
+    """
+    if not fact_ids:
+        return {}
+    try:
+        evidence = importlib.import_module("echo_memory.trust.evidence")
+    except ImportError:
+        return None
+    counted = evidence.count_for(conn, group_id, list(fact_ids))
+    # Every id passed in comes back with a zero for the ones nothing backs, so
+    # the field is never absent from a row. The default is a belt.
+    return {str(f): int(counted.get(str(f), 0)) for f in fact_ids}
 
 
 def candidates(
@@ -217,7 +280,12 @@ def candidates(
     if not observations:
         return []
 
-    trust = _trust_states(conn, group_id, [o["fact_id"] for o in observations])
+    fact_ids = [o["fact_id"] for o in observations]
+    trust = _trust_states(conn, group_id, fact_ids)
+    # Annotation only. Read for every observation rather than only the
+    # supporters, because the number that tells two empty answers apart is the
+    # one over everything that was reported.
+    backing = _evidence_counts(conn, group_id, fact_ids)
 
     by_decision: dict[str, list[dict]] = defaultdict(list)
     for observation in observations:
@@ -228,15 +296,22 @@ def candidates(
         # so they cannot dilute agreement either way. See SIGN_VALUE.
         if vocabulary.SIGN_VALUE.get(observation["sign"], 0) == 0:
             continue
-        by_decision[observation["decision_node_id"]].append({**observation, "trust": state})
+        by_decision[observation["decision_node_id"]].append({
+            **observation,
+            "trust": state,
+            # Named so it cannot be mistaken for a verdict. Not `backed`, not
+            # `support`: a count of artefacts, which is context a reader may
+            # weigh and this module does not.
+            "n_evidence": None if backing is None else backing.get(observation["fact_id"], 0),
+        })
 
     rows: list[dict[str, Any]] = []
     for node_id, supported in by_decision.items():
         counts: dict[str, int] = defaultdict(int)
         for observation in supported:
             counts[observation["sign"]] += 1
-        # Sorted rather than Counter.most_common, so a tie resolves on the sign
-        # name instead of on dict insertion order. A tie cannot clear
+        # An explicit key rather than Counter.most_common, so a tie resolves on
+        # the sign name instead of on dict insertion order. A tie cannot clear
         # REQUIRED_AGREEMENT at 1.0 anyway; this is so that the row a future
         # lower threshold would produce is reproducible.
         sign, support = min(counts.items(), key=lambda item: (-item[1], item[0]))
@@ -264,10 +339,22 @@ def candidates(
 
     # Strongest support first, then by decision id so the order is fixed.
     rows.sort(key=lambda row: (-row["support"], row["decision_node_id"]))
+    # `supporting` is the number that makes an empty answer readable. Without
+    # it, "no lessons" covers two completely different situations: a scope
+    # whose outcomes disagree, which is working correctly, and a scope where
+    # nobody has recorded a verification, which is a configuration problem
+    # nothing else would report. `evidence_backed` is never derived from
+    # evidence existing, so the second case is the likely one on a new install.
     _logger.info(
         "lesson_candidates",
         extra={"group_id": group_id, "decisions": len(decisions),
-               "observations": len(observations), "lessons": len(rows)},
+               "observations": len(observations),
+               "supporting": sum(len(v) for v in by_decision.values()),
+               # The pair that makes an empty answer readable: zero supporting
+               # with zero evidence means nothing is reporting, zero supporting
+               # with evidence arriving means nobody is adjudicating it.
+               "evidence_rows": None if backing is None else sum(backing.values()),
+               "lessons": len(rows)},
     )
     return rows
 
