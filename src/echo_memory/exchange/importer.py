@@ -332,6 +332,42 @@ def register_export(
 # --- accepting a bundle -------------------------------------------------
 
 
+def _check_size(facts: list[dict], manifest: bundle_format.Manifest) -> None:
+    """Refuse an oversized bundle before anything else is done with it.
+
+    First, and cheaper than everything it precedes. `bundle.parse` already
+    refuses these, and this is not redundant: `import_bundle` is a public
+    function and nothing makes a caller parse first. The test suite calls it
+    with a facts list directly, and so would anything that built a bundle in
+    memory - so a ceiling that lived only in the format reader would be a
+    ceiling the writer did not have.
+
+    Before the signature check, deliberately, which is the one ordering
+    decision here worth arguing. `import_bundle`'s docstring says the first
+    three steps are load-bearing in order, and they are: signature, then
+    digest, then replay, all before the first row is written. This goes ahead
+    of them because the digest is recomputed over every claim - so on a 10
+    million claim bundle the safety checks are themselves the denial of
+    service, and a length comparison that costs nothing has to come first.
+    Nothing is written either way, which is the property that order has to
+    preserve.
+    """
+    if len(facts) > bundle_format.MAX_FACTS:
+        raise ImportRefused(
+            f"{len(facts)} claims were supplied, over the "
+            f"{bundle_format.MAX_FACTS} limit; this bundle is too large to "
+            f"import. Every fact is written inside one transaction holding "
+            f"the scope's advisory lock, so a bundle's claim count is how "
+            f"long this import blocks every other writer in that scope."
+        )
+    if manifest.fact_count > bundle_format.MAX_FACTS:
+        raise ImportRefused(
+            f"the manifest declares {manifest.fact_count} facts, over the "
+            f"{bundle_format.MAX_FACTS} limit; this bundle is too large to "
+            f"import"
+        )
+
+
 def _check_importable(facts: list[dict]) -> None:
     """Refuse the whole bundle rather than skip a fact this store cannot hold.
 
@@ -428,9 +464,13 @@ def import_bundle(
     replayed bundle_id each has to be found BEFORE the first row is written, or
     the refusal leaves facts behind that nothing will clean up.
 
+      0. the size, against `bundle.MAX_FACTS`. Ahead of the other three
+         because the digest is recomputed over every claim, so on a huge
+         bundle the safety checks are themselves the denial of service
       1. the signature, against `trusted_keys` the caller supplied
       2. the content digest, recomputed from the claims themselves
-      3. the bundle_id, against what has already been imported
+      3. the bundle_id and this import's scope, against what this scope has
+         already imported
 
     Then, inside one transaction so a failure part way leaves neither a
     registry row nor a partial scope:
@@ -450,6 +490,8 @@ def import_bundle(
     which is a mislabelled provenance, the one field an imported fact exists to
     carry correctly.
     """
+    _check_size(facts, manifest)
+
     ok, reason = signing.check(manifest, trusted_keys=trusted_keys)
     if not ok:
         _logger.warning(
