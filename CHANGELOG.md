@@ -7,7 +7,7 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
-## Unreleased
+## 0.6.0
 
 **Two keys that were global are now scoped, so one tenant can no longer take
 an identifier from another.** `event_inbox.event_id` and
