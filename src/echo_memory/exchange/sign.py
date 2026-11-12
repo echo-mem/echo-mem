@@ -104,7 +104,7 @@ class SignatureError(Exception):
     """A key or a signature is unusable, and the message says which."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, repr=False)
 class TrustedKey:
     """One anchor: a key id, the algorithm it may be used with, and the key.
 
@@ -116,6 +116,26 @@ class TrustedKey:
     alg: str
     #: An ed25519 public key, or an HMAC shared secret.
     material: bytes
+
+    def __repr__(self) -> str:
+        """The id, the algorithm and a length. Never the material.
+
+        For an HMAC anchor `material` IS the shared secret, and a frozen
+        dataclass's generated repr prints it in full - including from inside a
+        dict, which is the exact shape the logging helpers pass as
+        `extra={"fields": ...}`. Anchors are handed to `check`, whose whole
+        job is composing operator-facing refusal text, so the distance between
+        this object and a log line is one accidental interpolation. That is a
+        leak no reviewer would catch, because `f"{anchor}"` looks harmless.
+
+        Redacting here rather than at each call site means the safe thing is
+        what happens by default and there is no site to forget. `describe`
+        and `alg` already carry everything a report legitimately needs.
+        """
+        return (
+            f"TrustedKey(key_id={self.key_id!r}, alg={self.alg!r}, "
+            f"material=<{len(self.material)} bytes redacted>)"
+        )
 
     def describe(self) -> str:
         """What this anchor's signatures are worth, in one phrase, so a report

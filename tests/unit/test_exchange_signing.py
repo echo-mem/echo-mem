@@ -249,3 +249,33 @@ def test_an_anchor_says_what_its_signatures_are_worth():
     assert "holder of the private key" in sign.trust_anchor("k1", env=ENV).describe()
     hmac_anchor = sign.TrustedKey("h1", sign.ALG_HMAC, bytes.fromhex(HMAC_SECRET))
     assert "includes you" in hmac_anchor.describe()
+
+
+def test_an_anchor_never_renders_its_key_material():
+    """An HMAC anchor's material IS the shared secret, and anchors are passed
+    to `check`, which exists to compose operator-facing text. The frozen
+    dataclass's generated repr printed the secret in full, from inside a dict
+    too - the shape `extra={"fields": ...}` uses. Every rendering path is
+    checked because `__str__` and an f-string reach repr by a different route
+    than `repr()` does, and a container renders its elements with repr even
+    when the caller never asked for one.
+    """
+    anchor = sign.TrustedKey("h1", sign.ALG_HMAC, bytes.fromhex(HMAC_SECRET))
+    renderings = (
+        repr(anchor),
+        str(anchor),
+        f"{anchor}",
+        repr({"fields": {"anchors": {"h1": anchor}}}),
+        repr([anchor]),
+    )
+    for rendered in renderings:
+        assert HMAC_SECRET not in rendered
+        # The bytes repr of the same secret, which is what actually leaked.
+        assert "\\xab" not in rendered
+        assert "redacted" in rendered
+
+    # Redacted, not withheld: the id and algorithm are what a report needs,
+    # and verification still reads the material.
+    assert "h1" in repr(anchor)
+    assert sign.ALG_HMAC in repr(anchor)
+    assert anchor.material == bytes.fromhex(HMAC_SECRET)
