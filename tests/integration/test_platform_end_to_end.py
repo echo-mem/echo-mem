@@ -38,10 +38,10 @@ from echo_memory.trust import evidence, states, verify
 ACCOUNT = "acct-platform"
 DEV = f"acct:{ACCOUNT}:memory:dev:shared"
 PROD = f"acct:{ACCOUNT}:memory:prod:shared"
-SECRETS = f"acct:{ACCOUNT}:memory:secrets:shared"
+VAULT = f"acct:{ACCOUNT}:memory:vault:shared"
 
 DECISION = "migrate-payments-to-razorpay"
-SECRET = "the production signing key rotates on the first of every month"
+VAULT_FACT = "the production signing key rotates on the first of every month"
 
 # A deterministic signing key, so the bundle half does not depend on key
 # material in the environment. 32 bytes of hex: ed25519 when `cryptography` is
@@ -139,7 +139,7 @@ def test_six_capabilities_compose(migrated_db, exchange_keys):
            "dev deploys run against staging before anything else")
     _write(conn, embedder, PROD, "Deploy", "Release",
            "prod deploys run only from the release branch")
-    _write(conn, embedder, SECRETS, "Key", "Rotation", SECRET)
+    _write(conn, embedder, VAULT, "Key", "Rotation", VAULT_FACT)
 
     # --- A: a decision, then its outcome reported by a machine, twice
     first = inbox.enqueue(conn, PROD, _envelope(
@@ -202,7 +202,7 @@ def test_six_capabilities_compose(migrated_db, exchange_keys):
     )
     assert answer["facts"], answer
     assert all(f["source"] in authorised for f in answer["facts"])
-    assert SECRET not in [f["fact"] for f in answer["facts"]]
+    assert VAULT_FACT not in [f["fact"] for f in answer["facts"]]
     block = answer["routing"]
     assert "chosen" in block and "rejected" in block
     assert block["budget"]["estimated_tokens"] <= 400
@@ -251,13 +251,13 @@ def test_an_unauthorised_memory_never_appears_at_any_budget(migrated_db):
     fewer facts and never other facts."""
     conn = connect(migrated_db)
     embedder = LocalEmbedder()
-    _write(conn, embedder, SECRETS, "Key", "Rotation", SECRET)
+    _write(conn, embedder, VAULT, "Key", "Rotation", VAULT_FACT)
     _write(conn, embedder, DEV, "Deploy", "Staging", "dev deploys run against staging")
 
     for budget in (None, 1, 20, 200, 5000):
-        answer = assemble(conn, [DEV], SECRET, 10, embedder, token_budget=budget)
+        answer = assemble(conn, [DEV], VAULT_FACT, 10, embedder, token_budget=budget)
         texts = [f["fact"] for f in answer["facts"]]
-        assert SECRET not in texts, f"leaked at budget {budget}"
+        assert VAULT_FACT not in texts, f"leaked at budget {budget}"
         assert all("signing key" not in t for t in texts)
 
 
@@ -399,10 +399,10 @@ def test_routing_never_widens_past_what_it_was_given(migrated_db):
     been re-checked."""
     conn = connect(migrated_db)
     embedder = LocalEmbedder()
-    _write(conn, embedder, SECRETS, "Key", "Rotation", SECRET)
+    _write(conn, embedder, VAULT, "Key", "Rotation", VAULT_FACT)
     _write(conn, embedder, DEV, "Deploy", "Staging", "dev deploys run against staging")
 
-    scores = routing.score_scopes(conn, [DEV], SECRET)
+    scores = routing.score_scopes(conn, [DEV], VAULT_FACT)
     assert {s.group_id for s in scores} == {DEV}
-    chosen, _ = routing.select(conn, [DEV], SECRET)
-    assert SECRETS not in chosen
+    chosen, _ = routing.select(conn, [DEV], VAULT_FACT)
+    assert VAULT not in chosen
