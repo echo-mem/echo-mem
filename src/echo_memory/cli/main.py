@@ -18,6 +18,7 @@ from echo_memory.cli import (
     adopt,
     calibrate,
     distil,
+    exchange,
     forget,
     health,
     infer_causal,
@@ -27,6 +28,7 @@ from echo_memory.cli import (
     reattribute_cmd,
     retain,
     stop_gate,
+    trust,
     unmerge,
     verify,
 )
@@ -315,6 +317,22 @@ def _add_project_parsers(sub) -> None:
         "--log", action="store_true",
         help="every erasure recorded for this scope. What a restore has to replay",
     )
+
+    # Its own parsers, defined next to its own code. Like `forget`, none of
+    # these is an MCP tool: handing an organisation's memory to another
+    # organisation is a person's decision, not a step in an agent's loop.
+    exchange.add_parser(sub)
+
+    # Same shape and the same rule, one notch stronger. Verification decides
+    # WHICH facts a read returns rather than their order, so a tool for it
+    # would let any agent holding a key promote its own claims - the elevation
+    # events.envelope.REQUIRES_VERIFY exists to deny.
+    #
+    # Not to be confused with `verify` directly below, which checks the
+    # attestation chain. The collision is unfortunate and the names are both
+    # already right for what they do: one asks whether the store has been
+    # tampered with, the other records that a human checked a claim.
+    trust.add_parser(sub)
 
     rt = sub.add_parser(
         "retain", help="how long this scope keeps a fact, and enforcing it"
@@ -786,6 +804,8 @@ _PROJECT_COMMANDS = {
     "calibrate": calibrate.run,
     "distil": distil.run,
     "forget": forget.run,
+    "exchange": exchange.run,
+    "trust": trust.run,
     "retain": retain.run,
     "verify": verify.run,
     "merge": merge.run,
@@ -1170,6 +1190,10 @@ def main(argv: list[str] | None = None) -> int:
                 # number reported as a finding.
                 ("+ expansion at 0.5", {"graph_hops": 1, "expansion_weight": 0.5}),
                 ("+ expansion at 0.2", {"graph_hops": 1, "expansion_weight": 0.2}),
+                # Look at the content once more at the end. The fusion
+                # chooses the candidates, cosine to the query orders them.
+                ("+ rerank", {"rerank": True}),
+                ("+ rerank + hop", {"rerank": True, "graph_hops": 1}),
                 ("+ salience", {"use_salience": True}),
             ]
 

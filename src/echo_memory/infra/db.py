@@ -2,6 +2,7 @@
 and ag_catalog on the search_path before any Cypher call (see PR0a's spike
 notes in the design doc's Foundational spike section)."""
 
+import json
 import os
 
 import psycopg
@@ -10,6 +11,53 @@ from pgvector.psycopg import register_vector
 from echo_memory.infra.logging import get_logger
 
 GRAPH_NAME = "echo_memory"
+
+
+def agtype_str(v):
+    """An agtype scalar as the string it actually holds.
+
+    AGE hands back a JSON encoded value, so a fact containing a newline arrives
+    as the six characters `"a\\nb"`. Three separate copies of this function
+    used to strip the outer quotes and stop, which left every escape sequence
+    literal: a stored newline read back as backslash-n, and a fact whose text
+    legitimately began and ended with a quote lost both.
+
+    It lives here rather than in any one of the three callers because it had
+    already been copied twice, and a decoder copied three times is a decoder
+    that will be fixed once. Found through a security consequence rather than a
+    rendering one: a line anchored injection pattern could not match retrieved
+    text, because the escaping had removed every line start there was.
+
+    The fallback is the old behaviour for anything that is not valid JSON. A
+    read path is the wrong place to start raising on data already stored.
+
+    ## Only for the Cypher path
+
+    This decodes what `SELECT * FROM cypher(...) AS (x agtype)` returns. It
+    must NOT be applied to a per-property SQL projection - `(e.properties ->>
+    '"fact"'::agtype)` - because that operator returns the real text, already
+    decoded. Running it over a value that is itself valid JSON rewrites it:
+    the stored text `"ship it"` comes back without its quotes.
+
+    That is not hypothetical. Collapsing the four copies into this one
+    function reached `ingestion/neighbourhood.py`, whose only read is a `->>`
+    projection, and reintroduced the quote loss there. Migration 0036 states
+    the same distinction from the other end, as the reason the attestation
+    read cannot move to `->>` without moving its decode with it.
+
+    Callers on the Cypher path: cli/graph.py, cli/export.py and
+    query_memory._fetch_facts. Everything reading through `->>` - bm25.py,
+    scratchpad.py, routing.py, intelligence/lessons.py, neighbourhood.py -
+    uses the value as it arrives.
+    """
+    if v is None:
+        return None
+    raw = str(v)
+    try:
+        decoded = json.loads(raw)
+    except (ValueError, TypeError):
+        return raw.strip('"')
+    return decoded if isinstance(decoded, str) else raw.strip('"')
 
 _logger = get_logger("db")
 

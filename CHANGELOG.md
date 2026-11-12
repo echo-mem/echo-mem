@@ -7,7 +7,498 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
-## Unreleased
+## 0.6.0
+
+**Two keys that were global are now scoped, so one tenant can no longer take
+an identifier from another.** `event_inbox.event_id` and
+`bundle_registry.bundle_id` were both deployment-wide primary keys, which made
+the idempotency namespace shared by every scope on the installation.
+
+Measured: scope A enqueues `deploy-abc1234` and is accepted; scope B enqueues
+the same id and is told `duplicate: true`, which is the answer that means stop
+retrying. The row stays A's, so B's event is never applied and B is never told
+- and the envelope's own guidance is to build ids from the reporter's run
+(`deploy-{commit}-{env}`), which makes two customers deploying one open source
+commit ordinary rather than contrived. On the bundle side the refusal read
+"bundle '<id>' was already imported here on <timestamp> and is 'quarantined'",
+handing one account another account's import date, direction and trust state;
+it also meant a partner could not send one bundle to two accounts, and one
+account could not import a bundle into two of its own memories.
+
+Migrations `0037` and `0038` widen both keys onto `group_id`. Both are
+widenings - the old key was unique over the narrow column, so no existing pair
+can collide - and both downgrades are lossy and say so. What is unchanged is
+the half the keys were right about: a replay into the *same* scope is still
+refused, with a test of its own so that widening cannot quietly lose it. An
+ambiguous bundle id is refused by `promote`, `revoke` and `reject` rather than
+guessed, and `echo-memory exchange` gains `--group-id` for naming one.
+
+**A bundle now has a size.** Nothing bounded one: a ten million claim file was
+read whole into memory, hashed, held as a list of dicts, and written fact by
+fact inside one transaction holding the scope's advisory lock. `MAX_FACTS`
+10,000, `MAX_BLOB_BYTES` 16 MiB and `MAX_MANIFEST_BYTES` 64 KiB are refused in
+`bundle.parse` before the bytes they bound are read, and again in
+`import_bundle`, which is public and which nothing makes a caller parse first.
+The fact ceiling is a lock-hold budget rather than a memory one: imported facts
+measured at 16.9 ms each, so 10,000 is about 2.8 minutes of held lock with an
+in-process embedder and more with a network one. For scale, this project's own
+largest live scope holds 1,485 facts. The declared `fact_count` and the real
+parsed count are both checked, because a manifest claiming ten facts in a blob
+of ten thousand attacks exactly the reader that trusts the cheap number.
+
+**An inbox now has a depth.** `MAX_PENDING_PER_SCOPE`, 100, settable with
+`ECHO_MEMORY_MAX_PENDING_EVENTS`. Before it, 200 events from one actor into one
+scope were 200 accepted pending rows with no limit anywhere;
+`MAX_PAYLOAD_BYTES` bounds one event at 64 KiB, which bounds a row and not a
+queue. This bounds the queue rather than the rate and says so in the refusal -
+the drain is what relieves it, so the caller's correct response is to wait. It
+is a backstop for self-hosted deployments and for anything calling `enqueue`
+directly; the hosted door rate limits with the credential that knows who is
+calling. Counted on pending rows alone, so an applied history is not a lifetime
+quota.
+
+**Evidence text is flagged like fact text.** An evidence `uri` carrying an
+injection in a query parameter, and a `detail` map carrying one under a
+`summary` key, round tripped verbatim and nothing flagged either field.
+Evidence is the one surface built to be read by an operator deciding whether to
+verify a claim, so it is where an injected sentence reaches a decision maker,
+and it was the only one of the three text surfaces - fact, lesson, evidence -
+without a flag. `trust.evidence.for_fact` now returns an `instruction_like`
+list naming the paths, `echo-memory trust show` prints a warning against each,
+and the context block reports them under `instruction_like_evidence`. The
+detector and its pattern list are unchanged, so neither measured rate moves.
+The text is still stored and shown verbatim: an attacker's URL is evidence of
+the attack, and truncating it would destroy what the operator needs.
+
+**Every tool count and licence claim in the documentation now fails a test
+when it drifts, including on pages nothing used to read.** Two guards, both
+asserting the absence of the wrong thing rather than the presence of the
+right one, which is the distinction that cost this project two separate
+windows of selling terms it had already withdrawn.
+
+`tests/unit/test_tool_registry_claims.py` reads
+`server.server._tool_manager.list_tools()` and checks every count and list of
+MCP tools in the README and docs against it, including the README table as a
+set in both directions. A tool documented but not registered is the worse
+error of the two: a reader writes the call and gets a protocol error. Its
+second test fails on a count no entry covers, because the website's
+`llms.txt` said "Four, over stdio" for the whole life of `trace_cause` while
+a tool-count check in the same CI passed, having compared two other files
+that were both right.
+
+`tests/unit/test_licence_claims.py` walked `README.md` and
+`docs/COMPLIANCE.md`, the two files that were found wrong in November. It
+walks every page the project publishes now, with each exclusion argued:
+`CHANGELOG.md` and `NOTICE` record the relicence deliberately, `docs/designs/`
+are dated design records that describe three MCP tools because that is what
+was planned. It also no longer needs a sentence to impose an obligation
+before it objects: naming BSL 1.1 as the current licence is caught too, which
+is what a stale link label does. Bare figures are still allowed inside a
+window that withdraws them, because "free only below fifty people and $5M of
+revenue. That is withdrawn" is the sentence a reader who saw this in October
+needs, and banning the figure would ban the correction along with the claim.
+
+**A fact can now record whether it was ever checked, and by whom.**
+`confidence` says how the writer came by a claim, which is a statement about
+their process: an agent that inferred something confidently and wrongly leaves
+exactly the same row as one that read it off a deploy log. Three new tables
+close that gap.
+
+`evidence` holds the artefact - a deployment, a test run, a human correction,
+a metric, a document, an attestation head recorded elsewhere - with a digest
+of what it said at the time, so a document edited after it was cited is
+distinguishable from one that was not. `fact_evidence` links one artefact to
+every claim it backs, and the link is a separate call from recording the
+artefact because late arrival is the normal case: the test run that confirms a
+decision happens after the decision was written.
+
+`fact_verification` is the check itself, append only, newest row per fact
+wins. Six states rather than a score, for the reason `trust/states.py` gives
+at length: the one calibration this project has measured came out AUC 0.766
+with a 95% interval of [0.437, 0.968] over five positives, an interval that
+includes chance. Exactly one state, `rejected`, removes a fact from an answer,
+and only an authorised verifier can set it.
+
+**An expired verification degrades a fact, it never hides one.** A `verified`
+row whose `expires_at` has passed reads as `stale` and the row is left
+untouched. The fact is still returned and still findable, only ranked lower.
+A lapsed check is not a refutation, and rewriting the row to say so would
+destroy the evidence that the check ever passed. Expiry is judged against the
+database's clock rather than the caller's, because a fact that flips between
+`verified` and `stale` depending on which process asked is the container-skew
+bug this project has already shipped once, with a worse symptom.
+
+**Verifications get their own tamper-evident chain, separate from the facts'.**
+`verification_attestation` mirrors `fact_attestation` and shares nothing with
+it. Pouring verifications into the existing chain would mean every check
+shifts the sequence numbers a fact's own digest chains through, so recording a
+verification would alter the evidence about the claim being verified.
+
+`ECHO_MEMORY_VERIFICATION_KEYS` holds `key_id:hexkey` pairs and
+`ECHO_MEMORY_VERIFICATION_KEY_ID` names the one that signs, so a key can be
+rotated: each link records the key that signed it and is verified with that
+key. Without this, rotating would make the entire audit trail read as forged,
+which is the same as having no rotation at all. A link whose key is no longer
+configured is reported as unverifiable rather than altered, because being
+unable to check a link is not evidence that it changed. As with
+`fact_attestation`, unkeyed this is only as strong as a record of the head
+kept outside the database, and `report().strength` says which is in force
+rather than implying a guarantee that is not there.
+
+Migrations 0031 and 0032. Nothing on the read path consumes these yet.
+
+**`echo-memory trust`: the command that records a verification, which nothing
+could do.** `trust/verify.record` shipped with migration 0032 and had no
+caller. No CLI command, no HTTP route, no console page, and correctly no MCP
+tool, so the only way to set a trust state was to import the module and write
+Python. The one reachable command named `verify` checks the attestation chain
+and has nothing to do with trust states, which made the gap look filled.
+
+The effect reached further than the feature. `intelligence/lessons.py` counts
+only outcomes whose state is `verified` or `evidence_backed`, and neither is
+ever derived - `evidence_backed` is recorded by a verifier like any other
+state, deliberately, so that a reporter cannot promote its own outcome by
+attaching its own deploy log. With nothing able to record either, every scope
+in every deployment held zero supporting outcomes, and `lessons.candidates`
+returned an empty list indistinguishable from a scope whose outcomes genuinely
+disagree.
+
+`trust show` is one fact's state, every check it has ever had, and its
+evidence. `trust list` is the scope by state. `trust verify`, `trust dispute`
+and `trust reject` record the three states an authorised verifier sets on
+purpose. `trust evidence` records an artefact and links it. `trust lessons` is
+what the scope currently supports and, when that is nothing, which of the
+three bars was not cleared and the command that fixes it.
+
+There is no `--confirm`, because nothing here deletes: `fact_verification` is
+append only and a wrong call is corrected by recording the right one, with the
+mistake left readable. `--verifier` is required instead, and an empty one
+refused, including on `dispute` - a verification nobody can be identified by
+is one nobody can be held to, and it would still count towards a lesson.
+`--expires` requires a timezone offset, for the reason the event envelope
+refuses a naive instant: expiry is judged against the database's clock, and
+24ms of container skew has already turned three days into four here.
+
+Not an MCP tool, and `tests/integration/test_erasure.py` reads the live
+registry so that registering one later fails. Verification is the only thing
+in this store that decides WHICH facts a read returns rather than the order
+they come back in.
+
+**Outcomes can be reported by machines, and conclusions are derived from them
+rather than stored.** Until now this store could record that a decision was
+made and never that it worked. The half that was missing arrives as two new
+tables' worth of plumbing and no new data model: a decision is a `Node`, an
+outcome is a `Node`, and "this decision led to that outcome" is a `FACT` edge
+with `causal_hint=led_to`. So `trace_cause` already walks it, supersession
+already retires an outcome that turns out wrong, erasure already reaches it and
+attestation already covers it.
+
+Reporters are CI runs, deploys and test suites, none of which speaks MCP. They
+send a validated envelope to `public.event_inbox` (migration 0033) and a single
+drain per graph applies it later. The latency is forced, not chosen:
+`write_episode` locks per scope while Apache AGE keeps its label catalogue per
+graph, so two writers in two scopes of one graph still corrupt it - four
+benchmark shards writing four scopes killed three of the four with `relation
+"echo_memory.-775.1utterance" does not exist`, and the run looked complete from
+outside. A multi-tenant endpoint that writes straight through is that condition
+permanently.
+
+`event_id` is caller-supplied and the primary key, so a CI system that retries
+on a timeout gets a free duplicate rather than a second deployment record or a
+dropped one. An event is applied through `write_episode` and never around it,
+and its result is checked: `unchanged` and a deliberately fact-free episode
+count as applied, everything else is a `rejected` row carrying the reason.
+
+A **lesson** - "deciding X tends to go badly" - is derived at read time and
+never written. It needs two agreeing outcomes, unanimous, each `verified` or
+`evidence_backed`; `mixed` and `unknown` outcomes are evidence the decision was
+taken and are dropped before any counting, so ten of them yield nothing rather
+than something weak. The basis is `verified_causal` only when every supporter
+was verified by an authorised verifier naming a method, and `correlational`
+otherwise, because evidence is not proof. Retiring one supporting outcome
+weakens the lesson immediately and deletes nothing, which a stored conclusion
+could not do.
+
+`claim.verified` events need verification authority the reporting types do not.
+A CI token can attach evidence all day and cannot say the evidence was
+sufficient, and `verified` is the only state a lesson counts as causal.
+
+Migration 0034 adds three partial indexes so asking for a scope's decisions
+does not scan its nodes. `Node.type` stays free text: the server calls no model
+and cannot tell a node typed `decision` from a decision, so the reserved words
+are a convention the reading layer honours rather than a constraint that would
+refuse nodes customers already have.
+
+There is still no inference provider. `infra/provider.py` ships `NullProvider`,
+`load({})` returns it, and a provider may only ever propose `correlational`
+candidates off any read or write path.
+
+**Memory can cross an organisational boundary, as a signed file rather than an
+API.** `echo-memory exchange` builds a redacted bundle from one scope, signs
+it, and on the other side verifies it and writes its facts into a quarantine
+scope that ordinary retrieval is not given. There is no endpoint one store
+calls on another, no shared trust root, and no live protocol.
+
+An imported fact is somebody else's claim and is treated as one. It lands at
+`confidence: inferred` whatever the exporter called it, carries content class
+`imported-untrusted` and trust state `unverified`, and becomes readable only
+when a named verifier promotes the bundle. `readable_scopes` is the only
+function that hands out an import scope and it hands out promoted ones, so a
+caller building its list from there cannot include a quarantined bundle by
+accident.
+
+Four decisions worth stating because each of them is a way this could have
+been worse:
+
+- **Redaction runs before signing.** The signature covers what was actually
+  sent, so a recipient verifying it is verifying the bundle they received
+  rather than one redacted afterwards - and a carrier that strips claims from
+  a signed bundle cannot be mistaken for the exporter having done it.
+  `exchange export` prints the audit, counted by the rule that removed each
+  claim, before anything is written.
+- **`verify` takes its trust anchors as an argument and has no default.** A
+  verifier that reads its anchors from the same place the bundle came from is
+  not verifying anything. An empty anchor set refuses every bundle, including
+  a correctly signed one.
+- **The signature algorithm comes from the anchor, never from the bundle.** An
+  ed25519 anchor is a public key, published by design. If the bundle chose,
+  anyone holding that key could use it as an HMAC shared secret and sign as
+  its owner; there is a test for exactly that forgery.
+- **An imported fact gets a new local `graphid`.** An AGE graphid is unique
+  per database rather than globally, so two deployments will issue the same
+  one for unrelated facts. The origin survives as
+  `provenance.origin = "<deployment_id>:<original_fact_id>"`, and nothing
+  joins on it. An attestation chain is also per scope, so an imported fact
+  cannot carry the origin's; the manifest records the exporter's chain head
+  instead, for comparison against one they published somewhere the importer's
+  database cannot reach.
+
+A replayed `bundle_id` is refused, because a bundle is a file and a file gets
+replayed - and the second import would write every fact again as new local
+nodes nothing afterwards could tell apart. Signature, digest and replay are
+all checked before the first row is written, and the writes are one
+transaction, so a bundle holding one fact this store cannot accept is refused
+whole rather than leaving a subset nobody can identify.
+
+**Revoking a bundle cannot recall facts already returned into an agent's
+context.** They are in that conversation's history, in whatever the agent
+wrote from them, and in anything downstream that kept the output. That is a
+property of having handed data over rather than a gap, no further work here
+would change it, and `exchange export` says so before it writes a bundle,
+which is the last point at which the decision is still yours.
+
+None of these is an MCP tool. `migration 0035` adds `bundle_registry`.
+
+**An account, memory or bundle id containing `:` is now refused rather than
+building an import scope out of it.** An import scope is
+`acct:<account>:memory:<memory>:import:<bundle_id>` and `readable_scopes`
+finds a memory's promoted imports by prefix, so a name carrying the separator
+supplied its own segments. A memory called `main:import:x:memory:other`
+produced a scope that prefix-matched memory `main`, and `readable_scopes` -
+which is the function that is meant to be the enforcement, the one place an
+import scope is handed out - returned it to a reader of `main`. One segment
+earlier the same input crossed accounts. Both were measured against a real
+database rather than reasoned about. The hosted service was never exposed to
+this: its account ids are generated hex, its memory keys are validated, and it
+does not call these functions. A self-hosted deployment passing `--account` or
+`--memory` was, which is why the check is in the one place the shape is
+derived rather than at the call sites.
+
+**A trust anchor no longer renders its key material.** `sign.TrustedKey` is a
+frozen dataclass, so the generated repr printed `material` in full - and for
+an HMAC anchor `material` IS the shared secret. Measured: `f"{anchor}"` gave
+`TrustedKey(key_id='h1', alg='hmac-sha256', material=b'\xab\xab...')`, and the
+same from inside a dict, which is the shape the logging helpers pass as
+`extra={"fields": ...}`. Anchors are handed to `sign.check`, whose job is
+composing operator-facing refusal text, so one accidental interpolation stood
+between a key and a log file. No call site did it and nothing in the released
+package logged a key; what was wrong was that the default was a leak waiting
+for a careless edit. The id, the algorithm and a byte count render now, and
+`describe` and `alg` already carried what a report legitimately needs. Trust
+anchors also have one name instead of three: the keyword argument on `check`,
+`verify` and `import_bundle` is `anchors`, and `parse_trusted` is
+`parse_anchors`.
+
+**Two writers in two scopes of one graph were never serialised, and nothing
+tested it.** `write_episode` takes a per-scope advisory lock, so two agents
+writing one scope are safe and there is a test. Apache AGE's label catalogue
+is per GRAPH, so two writers in different scopes take different keys and
+proceed genuinely concurrently, which is the condition that killed three of
+four benchmark shards with `relation "echo_memory.-775.1utterance" does not
+exist`.
+
+`infra/graphlock.py` adds `graph_write_gate`, a graph wide lock, wired into
+`write_episode` through `infra/graph_gate.py` and **off unless an operator
+asks for it** with `ECHO_MEMORY_MAX_GRAPH_WRITERS=1`.
+
+The default was reversed from one writer per graph on this stream's own
+evidence: the gate costs 2.6x to 2.8x write throughput, the fault did not
+reproduce in about 30,000 concurrent cross scope episodes, and a normal
+deployment is one writer per scope. An explicit but unparseable value still
+fails safe at 1, because a typo must not silently remove a protection somebody
+believed they had switched on.
+
+The cost is real and is stated where the gate is. Eight writers, 500
+one-fact episodes each into its own scope, Postgres 16 with AGE under Colima:
+
+| configuration | run 1 | run 2 | episodes/s |
+|---|---|---|---|
+| no gate | 46.5s | 40.2s | 86 to 100 |
+| gate, limit 1 | 122.1s | 112.8s | 33 to 35 |
+| one writer alone, 500 episodes | 11.1s | | 45 |
+
+Eight gated writers are **slower than one unimpeded writer**, because the
+handoff is not free. Size an ingress for one writer's throughput minus a
+quarter.
+
+**The write-path corruption did not reproduce on this hardware, and the tests
+say so rather than implying otherwise.** 4, 8 and 16 concurrent cross-scope
+writers, about 30,000 episodes, zero errors and an intact label catalogue every
+time. `tests/integration/test_graph_concurrency.py` carries the full table of
+what was tried and is a regression guard, not a reproduction. What it does show
+positively is that cross-scope writers overlap in time today, so the hazard
+window is real whether or not a laptop can make AGE fall into it.
+
+**The corruption that WAS captured is a different mechanism, and the gate does
+not cover it.** On 2026-11-11, during `alembic downgrade base` with five
+databases of one container each running their own migrate and drop_graph cycle:
+
+    psycopg.errors.InternalError_: label (relation) cache corrupted
+    [SQL: DELETE FROM alembic_version WHERE alembic_version.version_num = '0001']
+
+That is DDL contention, not write contention: nothing in it went through
+`write_episode`. It also surfaced on a DELETE against a plain table, because
+AGE checks its label cache on statements that never mention a graph, so a
+poisoned backend fails on whatever it does next and the whole thing arrives
+looking like a migration bug.
+
+**Two limits on the gate follow, and the second is structural.** It is not on
+the DDL path. And advisory lock keys are scoped to a database: measured
+directly, two connections to two databases of one instance both acquired the
+same key at once, with `pg_locks` carrying the database oid as part of the lock
+identity. So no advisory lock can serialise another database's DDL, and if the
+cross-database part of that report is causal then this is the wrong shape of
+fix entirely. The answers there are a runner that does not migrate several
+databases at once, or one Postgres per stream.
+
+`test_concurrent_graph_ddl_does_not_corrupt_the_label_cache` is the harness for
+settling which reading is right. It is **skipped by default and destructive**:
+it reproduces a bug that poisons backends, so running it on a shared instance
+can fail other people's runs in ways that look like their own migration bugs.
+
+**`hashtext` is 32 bit, which makes one of this package's stated guarantees
+false at a measurable rate.** `attest()` says it locks per scope "because
+scopes are tenants, and one account's writes must not be able to block
+another's". Over 400,000 group ids in this store's shape, `hashtext` gives 22
+colliding pairs and `lock_key`'s 64 bit derivation gives 0. A collision is
+not corruption; it is two tenants blocking each other for the length of a
+write, silently, looking like latency.
+
+**What `instruction_like` catches is now a number.** `retrieval/envelope.py`
+says false negatives are expected, which is the right claim and the wrong one
+to leave unquantified. Measured over a 32 shape attack corpus and 24 real
+memories: **26 of 32 flagged (recall 0.812)** and **4 of 24 benign memories
+flagged (false positive rate 0.167)**. Both are pinned exactly, in both
+directions, so broadening a pattern means re-reading the benign side rather
+than passing a `>=`.
+
+The four false positives are all genuine memory shapes - "you are now the
+owner of the org", "the new rules of the billing plan" - which is why
+`flagged` reports instead of dropping. Of the eight misses, four are one
+narrow gap: `above` is in the ignore/disregard alternation and was meant to
+be caught, but one intervening article defeats it, so "ignore the above" does
+not match.
+
+**Counters and timers that cannot log user memory.** `infra/metrics.py` is a
+dict under a lock, emitted as one JSON line through the existing logger, with
+an OpenTelemetry bridge on by default. `opentelemetry-api` turns out to be
+present in every install already, as a transitive dependency of `mcp` rather
+than anyone's choice; with no SDK configured its record costs 0.044 us and
+nothing leaves the process. `ECHO_MEMORY_OTEL=0` turns it off. Label keys
+that would carry fact, entity or query text are replaced with a visible
+marker rather than dropped, and a label whose value varies per call cannot
+grow the registry without bound. **Nothing calls it yet** - there is no
+`counter()` or `timer()` in `src/`, only in its tests - so an operator running
+a collector gets nothing from this engine today, and the 0.044 us figure is
+the cost of a call that would be made rather than one that is. Which writes
+and reads deserve a counter is a separate judgement from what a counter may
+record, and the module docstring now says so where a reader would otherwise
+infer it is instrumented. `infra/provider.py` gets the same note for the same
+reason: nothing consults `load()`, so a named provider is ignored rather than
+refused.
+
+**The one agtype decoder is for the Cypher path only, and had reached a
+projection that is not one.** Collapsing the four copies into
+`infra.db.agtype_str` reached `ingestion/neighbourhood.py`, whose only read is
+a per-property `->>` projection - and `->>` returns the real text, where
+`RETURN e.fact` returns a JSON encoded scalar. So the decoder was being run
+over a value that was already decoded, which rewrites anything that happens to
+be valid JSON: the stored fact `"ship it"` came back without its quotes, and a
+literal backslash-n came back as a newline. That is the same data fidelity bug
+the single decoder was written to fix, reintroduced by the fix, on the one call
+site that never had it - and migration 0036 had stated the distinction in the
+same commit. Fixed, with a test that writes a quoted fact and a quoted entity
+name and reads both back through the write path's suggestion. `agtype_str` now
+names which callers are on which side, and `retrieval/across.py` stops
+stripping quotes off a group id for the same reason.
+
+**Migration 0036 adds no index, and records what was checked.** Every table
+was listed against its indexes and the nine with only a primary key were each
+checked against how they are queried; in every case the key is the access
+path. The one real gap cannot be fixed with an index: `attestation.claims_of`
+reads one fact by id on the write path, through Cypher, and AGE expands the
+match before filtering, so the plan is a sequential scan of `FACT`. Adding an
+unconditional id index changes neither the plan nor the time (3.75ms against
+3.74ms at 3,000 edges); the same read against the edge table directly is an
+Index Only Scan at 0.026ms. An index that does not change a plan costs write
+amplification and leaves a comment claiming a query is fast.
+
+**Several scopes are routed rather than fanned out, and the answer fits a token
+budget.** `query_across` costs one full `query_memory` per scope, so an account
+with eight memories paid eight times over for an answer that lived in one.
+`retrieval/routing.py` decides which scopes are worth asking with **zero model
+calls**, generalising the technique `needs_expansion` already uses: tokenise the
+query, find the nodes whose name contains a term, count the live facts hanging
+off them. One indexed query per scope, and no embedder anywhere near it, because
+a vector probe per scope IS a query_memory and routing has to be cheaper than
+the thing it decides about.
+
+`routing.select` keeps the scope a caller named as its default whatever it
+scored, and refuses a default from outside the authorised scopes. Routing that
+can exclude a configured scope loses data and the answer comes back shaped
+exactly like a correct one.
+
+`retrieval/context.py`'s `assemble` composes routing, `query_across` and the
+budget. With one scope and no budget it returns exactly what `query_across`
+returns, byte for byte, so every published number is still the baseline. The
+answer carries which scopes were asked, which were rejected and why, and what a
+budget dropped, because an answer thinned by a budget otherwise looks exactly
+like a thin store.
+
+Weights proposed from the scores are **untuned**, as `weights_for` says in as
+many words; `propose_weights=False` is plain RRF.
+
+**The derived scratchpad has a number, and it loses.** `retrieval/scratchpad.py`
+shipped on BEAM's claim that "the scratchpad alone suffices" and no measurement.
+`eval/scratchpad_eval.py` compares it against `query_memory` at matched token
+spend over a 60-fact synthetic corpus:
+
+| shape | measure | query_memory | scratchpad | Δ | 95% CI |
+|---|---|---:|---:|---:|---|
+| entity_pair | MRR | 0.9639 | 0.0347 | -0.9292 | [-0.9736, -0.8764] |
+| entity_pair | recall@10 | 1.0000 | 0.0667 | -0.9333 | [-0.9833, -0.8667] |
+| prose | MRR | 1.0000 | 0.0347 | -0.9653 | [-0.9958, -0.9222] |
+
+No interval contains zero. The block reaches the ranker's recall at 16x the
+tokens, at which point it holds the whole scope and is the "inject everything"
+baseline rather than a cheaper context.
+
+The limitation is written down beside the result: `build_cases` makes one case
+per fact, so presence is `k/n` by construction and the experiment **cannot
+credit or discredit centrality ranking at all**. It is also the question
+distribution least favourable to any query-independent block, and it is not the
+one LIGHT's ablation ran on. Nothing about `scratchpad.py` changes on the
+strength of it. See docs/BENCHMARKS.md.
 
 **The ablation table reports an interval for recall@10, and it changes what
 several past experiments mean.** Until now `compare` bootstrapped the
@@ -36,6 +527,79 @@ recall@10 with ΔMRR inside noise.
 
 `Result` keeps the per-case rank for this. `hits_at` counts the same thing and
 cannot be resampled: a bootstrap needs the per-case values, not their total.
+
+**The embedding model is selectable, and it is the ceiling.** `LocalEmbedder`
+has described `all-MiniLM-L6-v2` as "a placeholder default pending real
+quality tuning, not a considered final choice" since the first commit. On
+this author's store its embeddings have an effective rank of **43 of 384** by
+participation ratio, with half the variance in nineteen dimensions and a
+shared mean direction of norm 0.416. Anisotropy that severe is why unrelated
+facts score as similar, and it is what `recall@1` of 0.087 on BEAM's 1M split
+looks like from the outside.
+
+`ECHO_MEMORY_EMBEDDING_MODEL` selects another one. **No default changes.**
+
+Bounded by the schema on purpose: the embedding column is `vector(384)`, so
+an unknown name is refused with the list of known 384-dimension models
+*before* a few hundred megabytes are downloaded, and the loaded model's real
+width is checked as well.
+
+**The fusion never looked at the content again, and that was three failures
+in one.** Reciprocal rank fusion sees rank position and nothing else, so every
+list it is handed gets a top slot worth `1/(k+1)` whoever produced it. The
+graph hop (-0.142 MRR on entity_pair), routing it per query (-0.0002 on the
+shape it was built for) and session expansion (-0.107 hit@10 on BEAM 100K) all
+added a list ordered by something that was not the query, and all three lost.
+
+`query_memory(rerank=True)` reorders the fused candidates by similarity to the
+query before truncating. The fusion still chooses which candidates are in
+play, which is what it is good at; cosine decides their order, which it cannot
+do at all. The embeddings are already stored and indexed, so this scores at
+most `LIST_DEPTH` of them.
+
+Measured on this author's store, n=200 per shape:
+
+| shape | shipping | + rerank | + rerank + hop |
+|---|---|---|---|
+| entity_pair MRR | 0.741 | **0.848** | 0.848 |
+| multihop MRR | 0.176 | 0.209 | **0.221** |
+| multihop recall@10 | 0.570 | 0.680 | **0.720** |
+
+Intervals clear of zero on both: +0.1063 [+0.0622, +0.1501] and +0.0444
+[+0.0270, +0.0618].
+
+It also **rescues the graph hop**. Alone the hop costs -0.215 MRR on
+entity_pair; with the rerank that damage is gone and multi hop gains, because
+the hop was always finding the second fact and ranking it badly. Still off by
+default until BEAM confirms it on questions nobody derived.
+
+**The embedder never saw half the text.** `all-MiniLM-L6-v2` truncates its
+input at 256 word pieces, about 1,500 characters. The benchmark loaders
+chunked at `MAX_FACT = 3500`, which is `write_episode`'s refusal limit and
+has nothing to do with the embedding window. Nothing had ever compared the
+two numbers.
+
+The consequence is silent. A 3,000 character turn is stored whole, embedded
+to its first ~1,500, and the back half can never be retrieved by the vector
+channel because the model never read it. BEAM's turns are median 1,226
+characters with p90 3,226, so this is most of its long ones, and it explains
+the shape of those results: `session@10` 0.945 against `hit@10` 0.621 is what
+"the turn is findable through its neighbours but its own tail is invisible"
+looks like.
+
+Chunking is now bounded by `EMBED_WINDOW = 1100`. On a BEAM conversation that
+turns 32 stored turns into 66 retrievable units, median 850 characters, every
+one inside the window, with the text unchanged.
+
+It cuts the context cost at the same time: a returned unit was a 2,200
+character turn of which a line or two was relevant, so thirty of them cost
+about 16,400 tokens. At this size the same thirty cost about a third of that.
+
+**The chunker also cut mid word.** When no sentence or paragraph boundary fell
+in the back half of the window it cut at the window edge, leaving half a token
+in each chunk - a word neither the embedder nor BM25 can match. Latent while
+the window was 3,500 characters and the fixtures had boundaries; the moment it
+shrank it started landing inside words. It falls back to the last space now.
 
 
 **Benchmark scopes are keyed on the dataset file, and the old ids do not

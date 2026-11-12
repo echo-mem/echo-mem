@@ -57,8 +57,22 @@ MAX_FACTS_CONSULTED = 3
 
 
 def _clean(value) -> str:
-    """AGE returns strings as quoted agtype."""
-    return str(value).strip('"')
+    """The stored text, unchanged, with an absent property as "".
+
+    Deliberately NOT infra.db.agtype_str, which is the decoder for the Cypher
+    path. `_endpoints` below projects each property with `->>`, and the two
+    reads return different things: `->>` hands back the real text, while
+    `RETURN e.fact` hands back a JSON encoded scalar, so a two-line fact
+    arrives as the six characters `"a\\nb"` there and as two lines here.
+    Migration 0036 states the same distinction from the performance end.
+
+    Decoding this one as JSON looks harmless and is not. A fact or an entity
+    name that is itself valid JSON gets rewritten: the text `"ship it"` loses
+    both quotes, and a literal backslash-n becomes a newline. That is the
+    fidelity bug the single decoder was written to fix, reintroduced on the
+    one call site that never had it.
+    """
+    return "" if value is None else str(value)
 
 
 def _endpoints(conn, edge_ids: list[str]) -> list[dict]:

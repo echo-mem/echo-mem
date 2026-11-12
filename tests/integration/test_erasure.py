@@ -440,6 +440,48 @@ def test_no_tool_published_over_mcp_can_erase():
     )
 
 
+def test_no_tool_published_over_mcp_can_grant_trust_or_export():
+    """The same argument as erasure, for the two powers added since.
+
+    Verification decides what retrieval returns, so a tool that could set a
+    state would let any agent holding a key promote its own claims - which is
+    the elevation events.envelope.REQUIRES_VERIFY exists to deny, and denying
+    it in one layer while publishing a tool for it in another would be
+    pointless. Exchange hands one organisation's memory to another, and
+    `promote` decides that an imported bundle may be read at all.
+
+    None of these is a step in an agent's loop. They are a person's decision,
+    and the operator CLI is where a person makes it.
+
+    Reads the live registry rather than the source for the same reason the
+    erasure guard does: this fails when somebody registers one, not when
+    somebody names a function.
+    """
+    from echo_memory import server
+
+    published = {t.name for t in server.server._tool_manager.list_tools()}
+
+    assert published, "precondition: the server publishes some tools"
+    forbidden = {
+        # Trust: setting a state, or approving the rules that set one.
+        "verify", "verify_fact", "record_verification", "set_verification",
+        "reject_fact", "dispute_fact", "approve_policy",
+        # The names `cli/trust.py` introduces. Added here rather than only in
+        # test_cli_trust.py so that this list stays the one place to read for
+        # "what must never be a tool", and so that deleting that file cannot
+        # also delete the guard.
+        "trust", "trust_verify", "trust_reject", "trust_dispute",
+        "trust_evidence", "trust_lessons", "record_evidence", "link_evidence",
+        # Exchange: sending, accepting, or making an import readable.
+        "export", "export_bundle", "import", "import_bundle",
+        "promote", "promote_bundle", "revoke", "revoke_bundle", "exchange",
+    }
+    assert not (published & forbidden), (
+        f"trust and exchange must not be reachable over MCP: "
+        f"{sorted(published & forbidden)}"
+    )
+
+
 def test_an_as_of_answer_says_what_erasure_removed(migrated_db):
     """The honesty cost of erasure, paid out loud.
 
@@ -487,3 +529,106 @@ def test_an_erasure_before_the_as_of_moment_is_not_reported(migrated_db):
     past = query_memory(conn, GROUP, UNRELATED, 10, embedder, as_of=after_erasure)
 
     assert "excluded_by_erasure" not in past
+
+
+def test_erasure_reaches_the_intelligence_tables(migrated_db):
+    """A deletion request has to reach every table holding the subject's data,
+    and five were added after this module was written.
+
+    Split the way the rest of erase() splits. A pointer and a piece of content
+    are deleted; a record that something happened is kept with its prose
+    stripped, because the record is what makes a chain over it mean anything
+    and an id on its own is not content.
+    """
+    import json
+    from datetime import UTC, datetime
+
+    from echo_memory.events import envelope as events
+    from echo_memory.events import inbox
+    from echo_memory.trust import evidence as evidence_mod
+    from echo_memory.trust import states, verify
+
+    conn = connect(migrated_db)
+    embedder = _embedder()
+    _seed(conn, embedder)
+
+    subject_edge, other_edge = (
+        str(r[0]) for r in conn.execute(
+            f"""SELECT e.id FROM {GRAPH}."FACT" e
+                 WHERE {_GROUP.replace('properties', 'e.properties')} = %s
+                 ORDER BY CASE WHEN {_FACT.replace('properties', 'e.properties')}
+                               LIKE %s THEN 0 ELSE 1 END, e.id""",
+            (GROUP, f"%{SUBJECT}%"),
+        ).fetchall()[:2]
+    )
+
+    shared = evidence_mod.record(
+        conn, GROUP, "human_correction", uri="https://tickets.example/9001",
+        detail={"note": f"{SUBJECT} asked for a correction"},
+        reporter_agent="claude-code",
+    )
+    evidence_mod.link(conn, GROUP, subject_edge, shared)
+    evidence_mod.link(conn, GROUP, other_edge, shared)
+
+    private = evidence_mod.record(
+        conn, GROUP, "human_correction", uri="https://tickets.example/9002",
+        detail={"note": f"{SUBJECT} home address"}, reporter_agent="claude-code",
+    )
+    evidence_mod.link(conn, GROUP, subject_edge, private)
+
+    verify.record(
+        conn, GROUP, subject_edge, states.VERIFIED, verifier_kind=states.HUMAN,
+        verifier_id="reviewer", method=f"spoke to {SUBJECT} directly",
+        detail=f"{SUBJECT} confirmed by email",
+    )
+
+    inbox.enqueue(conn, GROUP, events.Envelope(
+        event_id="erasure-reach-0001",
+        event_type=events.OUTCOME_OBSERVED,
+        occurred_at=datetime.now(UTC),
+        actor=events.Actor(agent="ci-reporter"),
+        scope=events.Scope(memory=None, scope="shared"),
+        payload={"decision": "d", "outcome": "o", "sign": "success",
+                 "detail": f"reported by {SUBJECT}"},
+    ))
+    # mark() takes the scope now: migration 0037 keyed the inbox on
+    # (group_id, event_id), because a global event_id made one tenant's
+    # idempotency namespace visible to another.
+    inbox.mark(conn, GROUP, "erasure-reach-0001", inbox.APPLIED,
+               edge_ids=[subject_edge])
+
+    erasure.erase(
+        conn, GROUP, erasure.plan(conn, GROUP, entity=SUBJECT), requested_by="test",
+    )
+
+    assert conn.execute(
+        "SELECT count(*) FROM public.fact_evidence WHERE edge_id = %s::graphid",
+        (subject_edge,),
+    ).fetchone()[0] == 0
+
+    remaining = {
+        r[0] for r in conn.execute(
+            "SELECT id FROM public.evidence WHERE group_id = %s", (GROUP,)
+        ).fetchall()
+    }
+    assert private not in remaining, "evidence nothing points at any more must go"
+    assert shared in remaining, "evidence a surviving fact still cites must stay"
+
+    row = conn.execute(
+        """SELECT method, detail FROM public.fact_verification
+            WHERE edge_id = %s::graphid""",
+        (subject_edge,),
+    ).fetchone()
+    assert row is not None, "deleting the row would break verification_attestation"
+    assert row[0] == "redacted"
+    assert row[1] is None
+
+    event = conn.execute(
+        """SELECT envelope, applied_edge_ids FROM public.event_inbox
+            WHERE event_id = %s""",
+        ("erasure-reach-0001",),
+    ).fetchone()
+    assert event is not None, "the idempotency key must survive an erasure"
+    assert event[0].get("redacted") is True
+    assert SUBJECT not in json.dumps(event[0])
+    assert subject_edge not in [str(x) for x in (event[1] or [])]

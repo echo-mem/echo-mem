@@ -283,6 +283,40 @@ alembic downgrade -1                       # roll back one step
 
 ## Common issues
 
+- **A killed integration run poisons the next one, and the damage looks like a code
+  failure.** `migrated_db` runs `alembic downgrade base` after each test, so a run
+  interrupted part way - Ctrl-C, a `pkill`, a timeout - leaves the database at some
+  mid-chain revision with that test's data still in it. `_assert_clean_base` does not
+  repair that, on purpose: it only cleans up when alembic says `base`, because a
+  mid-chain revision is a genuine migration bug and should be seen rather than swept
+  up. The next run then starts on top of somebody else's facts.
+
+  What that looks like is not a database error. It is `write_episode` returning
+  `not_stored: "unchanged"` because the fact it was about to write is already there,
+  so the failure reads as "this feature stopped working". Measured once: a killed run
+  produced 4 failures and 3 errors across `test_attestation.py`,
+  `test_unattributed_facts.py` and `test_unmerge.py`, none of which had anything to do
+  with the change under test; the same three files passed 33/33 on a fresh database.
+
+  So after any interrupted run, recreate the database before believing the next one:
+
+  ```bash
+  docker exec echo-mem-db-test-1 psql -U postgres -c "DROP DATABASE <name>"
+  docker exec echo-mem-db-test-1 psql -U postgres -c "CREATE DATABASE <name>"
+  ```
+
+- **The suite stalls with no active query and almost no CPU.** It is fetching the
+  embedding model's metadata from HuggingFace, not running a test. Check with
+  `lsof -p <pid> -i` for a connection to an `https` endpoint that is not your
+  database. The model is cached after the first run, so pin the hub to the cache:
+
+  ```bash
+  HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 pytest tests/integration
+  ```
+
+  `all-MiniLM-L6-v2` is the only model the suite needs, so offline changes nothing
+  about what is tested once it has been downloaded once.
+
 - **`alembic upgrade head` fails with "role postgres does not exist" even though
   `docker compose up` succeeded.** Something else on your machine (a native Postgres
   install, a homebrew service, an SSH tunnel) is already listening on 5432, and your

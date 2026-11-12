@@ -8,10 +8,7 @@ import json
 from datetime import UTC, datetime
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
-
-
-def _agtype_str(v):
-    return str(v).strip('"') if v is not None else None
+from echo_memory.infra.db import agtype_str as _agtype_str
 
 
 def _fetch_nodes(conn, group_id: str) -> list[dict]:

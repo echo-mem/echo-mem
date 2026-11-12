@@ -9,6 +9,7 @@ import uuid
 import psycopg
 
 from echo_memory import attestation
+from echo_memory.infra import graph_gate
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.logging import get_logger, log_write_episode
 from echo_memory.infra.project import UNKNOWN as PROJECT_UNKNOWN
@@ -649,6 +650,15 @@ def write_episode(
             conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtext(%s))", (f"episode|{group_id}",)
             )
+            # And optionally a graph wide one, for the case the per scope lock
+            # cannot cover: AGE's label catalogue is per GRAPH, so two writers
+            # in two scopes take different keys above and still meet inside
+            # AGE. Off unless an operator asks, because it costs 2.6x write
+            # throughput and the fault did not reproduce in 30,000 concurrent
+            # cross scope episodes here - see infra/graphlock.py for the
+            # measurements and for why the default is what it is. The person
+            # who needs it is the one running four of something.
+            graph_gate.enter(conn)
             call_count = _increment_write_episode_count(conn, group_id)
             # Corpus statistics for the lexical ranker, rebuilt every few
             # hundred writes rather than per write or never. Inside this

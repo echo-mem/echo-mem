@@ -100,7 +100,7 @@ docker compose exec -T db psql -U postgres -d echo_cloud \
 That is stated rather than glossed because it is the question a reviewer
 should ask. The connection never leaves the machine: the database is a
 container on the same host, reached over a Docker bridge address, and its port
-is not reachable from outside the instance — only 80 and 443 are open, and a
+is not reachable from outside the instance: only 80 and 443 are open, and a
 direct connection to 5433 from the internet is refused. So the traffic is not
 exposed to a network an attacker can be on, and TLS between two processes on
 one host would protect against an attacker who already has that host.
@@ -254,6 +254,57 @@ tool list so adding either later fails loudly: irreversible deletion one
 prompt injection away from any agent holding a key is not a trade worth
 making.
 
+### What erasure does with the verification and event records
+
+Five tables arrived after this path was written, and they are split the same
+way the rest of it splits: what is content is deleted, and what is a record
+that something happened is kept with its prose stripped.
+
+| Table | What happens |
+|---|---|
+| `fact_evidence` | deleted. It is a pointer |
+| `evidence` | deleted, but only a row nothing points at any more |
+| `fact_verification` | the row stays. `method`, `detail` and `scope` are stripped |
+| `event_inbox` | the row stays. `event_id` is kept, the envelope is replaced with `{"redacted": true, "event_type": ...}`, and the erased edges are removed from `applied_edge_ids` |
+| `bundle_registry` | untouched. See below |
+
+**An evidence row is many to many**, so one artefact can back a claim about the
+subject and a claim about somebody else. Deleting it on the strength of the
+first would take away a surviving fact's provenance, so a row is removed only
+once nothing cites it. There is a test over exactly that pair.
+
+**A verification row survives an erasure on purpose, still carrying the
+`edge_id` of a fact that is gone.** Two reasons, and both are the same
+reasoning `audit_entry` already gets. The row is the record that a claim was
+checked, by whom and when, which is what makes the chain over it mean anything.
+And deleting it would break `verification_attestation` the way deleting a fact
+breaks `fact_attestation`, which this module deliberately does not repair: a
+visible gap that can be reconciled against `erasure_event` is more honest than
+a rewritten chain. So `method`, `detail` and `scope` go, because free text is
+where personal data goes, and the row stays.
+
+**An inbox row survives for a different reason: `event_id` is the only thing
+stopping a replay.** Delete it and the reporter's next retry is accepted as a
+new event, which would rewrite exactly what was just erased. So the key stays,
+the envelope goes, because once the edges are gone the payload is the last copy
+of what a reporter sent.
+
+Both survivals mean an auditor finds a row pointing at a fact that no longer
+exists, and that is the intended reading rather than a loose end: it says an
+erasure happened here, and `erasure_event` says when, who asked and under which
+ticket.
+
+**Stripping a verification changes its digest, so the verification chain then
+reports that link as `altered`.** Measured rather than inferred: a scope whose
+chain reported clean before an erasure reported one `altered` link afterwards,
+with nothing `vanished` and no broken links. That is erasure doing its job and
+is the same thing `verify` already reports for a legitimately rewritten fact.
+It is worth knowing before somebody reads it as tampering, and worth knowing in
+one other respect: **`echo-memory verify` does not read this chain.** It covers
+`fact_attestation` only, so the verification chain is checked by calling
+`trust.chain_report` from Python, and nothing reconciles its findings against
+`erasure_event` automatically.
+
 ### What this does not do
 
 **There is no default policy.** A scope with no policy keeps its facts, and
@@ -266,6 +317,17 @@ question on an operator's behalf, in the direction of deleting their data.
 and without `--confirm` it only reports what would go. When enforcement runs
 is an operational choice, so it belongs in whatever invokes it rather than in
 a column here.
+
+**`bundle_registry` is out of scope, deliberately.** An export or import row
+describes a *bundle*: its id, the peer it went to or came from, a redaction
+policy id, a fact count and a digest. It is not about a subject, and it is the
+record that answers "what did we send them" once the file is gone, so erasing
+it would remove the evidence of the transfer rather than the subject's data.
+
+The consequence belongs to the operator rather than to this code. **A
+deployment that puts personal data in a redaction policy id or a peer account
+name has to handle that itself**, because nothing here can tell such a string
+from the label it is meant to be.
 
 ## Whether provenance can be trusted
 
@@ -331,6 +393,197 @@ does. A legitimate rewrite - `merge` repointing an edge, a causal pass
 retyping a fact - is reported and labelled with the audit entry that accounts
 for it rather than hidden, so a reader still sees that the fact is not what
 was attested.
+
+## Whether a claim was ever checked
+
+Provenance answers who asserted something. It does not answer whether anybody
+went and looked. `confidence` on a fact says `extracted`, `inferred` or
+`ambiguous`, which describes how the writer came by the claim, so an agent that
+inferred something confidently and wrongly leaves exactly the same row as one
+that read it off a deploy log.
+
+Three tables record the other half. `evidence` holds the artefact: a
+deployment, a test run, a human correction, a metric, an external document or
+an attestation head recorded elsewhere, with `uri` saying where it is and
+`content_digest` saying what it said at the time, which is the difference
+between citing a document and citing a document that has since been rewritten.
+`fact_evidence` links one artefact to every claim it backs, as a separate call,
+because the test run that confirms a decision happens after the decision was
+written. `fact_verification` is the check itself.
+
+### Six states, and which of them can remove a fact from an answer
+
+| State | Kind | Set by |
+|---|---|---|
+| `unverified` | advisory | nothing. Every fact written before this existed |
+| `evidence_backed` | advisory | a verifier, recording that the evidence was sufficient |
+| `verified` | **authoritative** | a verifier, naming a method and optionally a policy |
+| `disputed` | **authoritative** | a verifier. Returned with the contradiction, not suppressed |
+| `stale` | advisory | computed, when a `verified` row's `expires_at` has passed |
+| `rejected` | **authoritative** | a verifier. The only state that removes a fact from an answer |
+
+An advisory state may change the order facts come back in and may not change
+which facts come back. That line is what stops a rule becoming a denial of
+service on an organisation's own memory: something that could mark a thousand
+facts `stale` can reorder them and cannot hide one.
+
+`fact_verification` is append only. Nothing updates and nothing deletes, so
+"verified on the 3rd, disputed on the 9th, verified again on the 11th" stays
+answerable and "who changed their mind" has an answer rather than a last word.
+The current state of a fact is the newest row for its edge.
+
+An expired verification **degrades a fact and never hides one**. The row is
+left exactly as it was and reads back as `stale`; the fact is still returned
+and still findable. Rewriting the row would destroy the evidence that the check
+ever passed, which is the only thing a reader can use to decide whether to
+re-run it. Expiry is judged against the database's clock rather than the
+caller's, so a fact cannot flip between `verified` and `stale` depending on
+which process asked.
+
+Verification is off on the read path by default, behind
+`ECHO_MEMORY_TRUST_RETRIEVAL`. Every existing store has no verification rows at
+all, so turning it on by default would change nothing for anybody except by
+adding two queries per read.
+
+### A second attestation chain, which does not move the first
+
+`verification_attestation` mirrors `fact_attestation` and shares nothing with
+it. Each verification gets a digest over its own claims, chained to the
+previous one in the same scope, so no edit to a check is silent.
+
+Two chains rather than one, and the reason is a property a compliance reader
+should check for themselves. `fact_attestation` is dense per scope and
+`echo-memory verify` recomputes the whole of it, so appending verifications to
+it would mean every check shifts the sequence numbers a fact's own digests
+chain through: **recording a verification would alter the evidence about the
+claim being verified.** Separately, `attestation.COVERED` is untouched by this
+work, so a digest or head recorded before any of it existed still recomputes to
+the same value. There is a test asserting the fact chain is bit identical
+across a verification, and a second asserting that tampering with a
+verification leaves the fact chain clean.
+
+The digest covers `edge_id`, `state`, `verifier_kind`, `verifier_id`, `method`,
+`policy_id`, `evidence_ids`, `scope`, `verified_at` and `expires_at`.
+`verified_at` is covered so a check cannot be backdated into an interval it was
+not made in, and `expires_at` so a lapsed check cannot be quietly extended,
+which is the cheapest useful edit available against this table and would leave
+a `stale` fact reading as `verified` with nothing out of place.
+
+### Keys, rotation, and what the report is worth
+
+`ECHO_MEMORY_VERIFICATION_KEYS` holds `key_id:hexkey` pairs, comma separated,
+and `ECHO_MEMORY_VERIFICATION_KEY_ID` names the one that signs from now on.
+Keyed, each digest is HMAC-SHA256 and cannot be recomputed without the key.
+Unkeyed it is SHA-256, and the chain is then only as strong as a record of the
+head kept outside this database. With neither, this detects corruption and
+careless edits and nothing more. The same two conditions `fact_attestation`
+already has, stated the same way.
+
+**Rotation is by `key_id` recorded on each link.** A link signed last quarter is
+checked with last quarter's key, so introducing a new key does not turn the
+audit trail into forgeries. Without the per link key id it would, and a scheme
+whose rotation invalidates the audit trail is one nobody rotates, which is the
+same as having no rotation at all.
+
+The report distinguishes four findings rather than merging them, because they
+have different causes and different answers:
+
+| Finding | Means |
+|---|---|
+| `altered` | a verification's digest no longer matches its content |
+| `broken_links` | a link's `prev_digest` does not match the digest before it |
+| `vanished` | a link's verification row is gone. Nothing deletes from this table by design, so unlike a missing fact there is no erasure that accounts for it |
+| `unverifiable` | the link was signed with a `key_id` this process does not have |
+
+`unverifiable` is deliberately **not** counted as unclean. Being unable to
+check a link is not evidence that it changed, and a report that conflates those
+two is a false accusation every time a key is retired.
+
+`report().strength` states in one phrase whether the chain is keyed, unkeyed,
+or part of each, and a mixed chain is called out separately from rotation:
+rotation is several `key_id`s all keyed, which is the system working, while
+mixed keying means part of the chain can be recomputed by anybody with SQL
+access.
+
+**It does not authenticate the verifier.** `verifier_id` is a string the caller
+supplies, exactly as `agent_id` is. The chain proves the recorded verifier has
+not changed since the row was written, not that it was true at the time.
+
+**Attaching evidence is not verification, and cannot become it.** A fact with
+five evidence rows reads `unverified` until somebody records that the evidence
+was sufficient. That separation is what makes a reporter credential safe to
+issue: a CI token may attach its own deploy log to its own outcome all day and
+cannot say the log was enough.
+
+## What left this deployment, and what arrived
+
+`echo-memory exchange` is the only path by which memory crosses an
+organisational boundary, and `bundle_registry` is the record of every crossing
+in either direction. It is not an MCP tool, and there is a test that reads the
+published tool list so adding one later fails.
+
+An **export** row records the bundle id, the scope it was built from, the
+redaction policy that produced it, the fact count, the content digest, the
+signature algorithm and key id, the exporter's attestation head at build time,
+and the recipient as the operator named them. Its state is `created` and never
+anything else: this deployment cannot observe what happened to a file after it
+was written, and a row claiming `delivered` would assert something nothing saw.
+The policy audit, counted by the rule that removed each claim, is stored on the
+row, so "what did we send them" is answerable once the file is gone.
+
+An **import** row records the same fields plus the peer's deployment and
+account, and moves through states that are each a decision somebody took:
+
+| State | Meaning |
+|---|---|
+| `quarantined` | written to a scope ordinary retrieval is never given |
+| `promoted` | a named verifier accepted it. `promoted_at` and `promoted_by` are recorded |
+| `rejected` | a verifier looked and said no. Nothing was ever trusted, so nothing was withdrawn |
+| `revoked` | was trusted and is not any more. `revoked_at` and the reason are recorded |
+
+`promote` and `reject` both require a `verifier_id` and refuse without one. The
+engine cannot check whether that verifier is entitled to decide, because it has
+no concept of a principal; the capability lives in the hosted service as
+`trust.verify`. Requiring the argument regardless is the point: the only
+question anybody asks about an imported scope six months later is who accepted
+it.
+
+Facts arriving in a bundle go through the ordinary write path, so each one gets
+an audit entry and a link in **this** deployment's attestation chain. They
+cannot carry the exporter's chain, because a chain is per scope. What the
+manifest records instead is the exporter's chain head at build time, for
+comparison against a head the exporter published somewhere the importer's
+database cannot reach, which is the external witness argument applied across an
+organisational boundary.
+
+### An export cannot be undone
+
+**Facts already handed over cannot be recalled.** Revoking a bundle stops a
+scope being readable here from that moment; it does not reach the recipient,
+and for the sending side there is nothing to revoke at all. A claim returned
+into an agent's context is in that conversation's history, in whatever the agent
+wrote from it, and in anything downstream that kept the output.
+
+That is a property of having handed data over rather than a gap in this
+implementation, and no further work here would change it. It is stated at the
+**export** confirmation, before a file is written, because that is the last
+point at which the decision is still the operator's.
+
+### What redaction does and does not catch
+
+A policy narrows what leaves a scope the operator already chose to send. The
+scope is the control; the policy is a filter on top of it.
+
+`drop_entity_types` matches a string the writer chose. An entity's `type` is
+free text, not a category this store validates, so dropping type `person`
+catches a convention and not a class of data: a store whose writers used
+`human`, `employee` or `x` keeps every one of them. `drop_matching` is a short
+list of high signal shapes, so it catches an address or a recognisable key
+prefix and a person's name in ordinary prose matches nothing.
+
+A clean audit therefore says "none of these rules fired". It does not say "no
+personal data is leaving", and a review that reads it as the second has read it
+wrong.
 
 ## Supply chain and build integrity
 

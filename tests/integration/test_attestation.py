@@ -14,10 +14,12 @@ erasure accounts for must not read as evidence removal.
 
 from __future__ import annotations
 
+import json
 import os
 
 import pytest
 from fake_embedder import REFERENCE, VectorEmbedder
+from hash_embedder import HashEmbedder
 
 from echo_memory import attestation, erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
@@ -370,3 +372,127 @@ def test_attesting_a_fact_that_is_not_there_is_refused(migrated_db):
     with connect(migrated_db) as conn, \
             pytest.raises(attestation.AttestationError, match="no fact"):
         attestation.attest(conn, GROUP, "999999")
+
+
+# --- the two readers must agree, forever ---------------------------------
+
+
+def _claims_through_cypher(conn, group_id: str, edge_id: str) -> dict:
+    """What `claims_of` used to do, kept here on purpose.
+
+    `claims_of` reads the edge and node tables now, because asking through
+    Cypher left the pattern unbound and AGE expanded every FACT edge in the
+    graph before filtering by id: 6.785 ms against 0.694 ms at 5,807 edges, on
+    the write path, once per fact.
+
+    The two reads do not return the same bytes. Cypher returns JSON quoted
+    agtype and `->>` returns raw text, and 51 of 63 fields differ in their raw
+    form across facts containing newlines, quotes, backslashes, unicode, tabs
+    and JSON-looking text. They agree once decoded, and that agreement is what
+    makes the change safe, because this function feeds the digest.
+
+    So the old reader lives in the test rather than in the module. If either
+    side drifts, this fails. Without it the failure mode is silent and total:
+    every fact in every store reports as altered, and nothing says why.
+    """
+    row = conn.execute(
+        f"""SELECT * FROM cypher('{GRAPH}', $$
+            MATCH (a)-[e:FACT]->(b)
+            WHERE id(e) = $eid AND e.group_id = $gid
+            RETURN a.name, b.name, e.relation_type, e.fact, e.confidence,
+                   e.causal_hint, e.t_valid, e.agent_id, e.project,
+                   e.provenance
+        $$, %s) AS (source agtype, target agtype, relation_type agtype,
+                     fact agtype, confidence agtype, causal_hint agtype,
+                     t_valid agtype, agent_id agtype, project agtype,
+                     provenance agtype)""",
+        (json.dumps({"eid": int(edge_id), "gid": group_id}),),
+    ).fetchone()
+    assert row is not None
+    values = [attestation._value(x) for x in row]
+    covered = dict(zip(attestation.COVERED, values[2:9], strict=True))
+    provenance = values[9] or {}
+    return {
+        "group_id": group_id,
+        "source": values[0],
+        "target": values[1],
+        **covered,
+        "session_id": provenance.get("session_id")
+        if isinstance(provenance, dict) else None,
+    }
+
+
+HOSTILE_FACTS = [
+    ("plain", "billing uses Razorpay", "led_to"),
+    ("newline", "line one\nline two\nline three", "caused_by"),
+    ("quotes", 'he said "deploy from release" and meant it', None),
+    ("backslash", r"the path is C:\Users\work\thing", None),
+    ("unicode", "the cafe costs 500 rupees, naive", None),
+    ("json_text", '{"not": "a map", "just": "text"}', None),
+    ("tab", "a\tb\tc", None),
+    ("colon", "note: the ratio is 3:1 at 09:30", None),
+]
+
+
+def test_both_readers_decode_a_fact_identically(migrated_db):
+    """The equivalence the digest rests on, over text chosen to break a naive
+    decoder. Checked field by field rather than by comparing digests, so a
+    failure says WHICH property moved."""
+    conn = connect(migrated_db)
+    embedder = HashEmbedder()
+
+    for i, (name, text, hint) in enumerate(HOSTILE_FACTS):
+        fact = {
+            "source": f"S{i}", "target": f"T{i}", "relation_type": "uses",
+            "fact": text, "confidence": "extracted",
+        }
+        if hint:
+            fact["causal_hint"] = hint
+        out = write_episode(
+            conn, GROUP, f"hostile{i}",
+            [{"name": f"S{i}", "type": "tool"}, {"name": f"T{i}", "type": "tool"}],
+            [fact], None, embedder, assume_new=True,
+        )
+        edge_id = str((out.get("edges_created") or [None])[0])
+        assert edge_id != "None", f"{name} was not stored: {out}"
+
+        from_tables = attestation.claims_of(conn, GROUP, edge_id)
+        from_cypher = _claims_through_cypher(conn, GROUP, edge_id)
+        assert from_tables == from_cypher, (
+            f"the readers disagree on {name!r}: "
+            f"{ {k: (from_tables.get(k), from_cypher.get(k)) for k in set(from_tables) | set(from_cypher) if from_tables.get(k) != from_cypher.get(k)} }"
+        )
+
+
+def test_every_stored_digest_still_recomputes(migrated_db):
+    """The whole point, stated as the assertion a release should care about.
+
+    Writes a populated scope, then recomputes every digest from the chain's own
+    prev_digest and the claims as read today. A reader change that altered any
+    covered value would break this for every row at once.
+    """
+    conn = connect(migrated_db)
+    embedder = HashEmbedder()
+    for i in range(25):
+        write_episode(
+            conn, GROUP, f"bulk{i}",
+            [{"name": f"N{i}", "type": "t"}, {"name": f"M{i}", "type": "t"}],
+            [{"source": f"N{i}", "target": f"M{i}", "relation_type": "uses",
+              "fact": f"fact {i} with enough text to be realistic",
+              "confidence": "extracted"}],
+            None, embedder, assume_new=True,
+        )
+
+    rows = conn.execute(
+        """SELECT edge_id::text, seq, prev_digest, digest
+             FROM public.fact_attestation WHERE group_id = %s ORDER BY seq""",
+        (GROUP,),
+    ).fetchall()
+    assert len(rows) >= 25
+
+    for edge_id, seq, prev, stored in rows:
+        claims = attestation.claims_of(conn, GROUP, edge_id)
+        again = attestation.digest(prev, attestation.canonical(claims))
+        assert again == stored, f"digest moved at seq {seq} for edge {edge_id}"
+
+    assert attestation.report(conn, GROUP).is_clean()

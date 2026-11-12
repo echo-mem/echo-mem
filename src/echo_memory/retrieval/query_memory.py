@@ -12,6 +12,7 @@ import time
 
 from echo_memory import erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
+from echo_memory.infra.db import agtype_str as _agtype_str
 from echo_memory.infra.logging import get_logger, log_query_memory
 from echo_memory.retrieval import bm25, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
@@ -493,12 +494,23 @@ def _graph_candidates(
     # fact_group_start_idx and fact_group_end_idx, both (group_id, start_id) and
     # (group_id, end_id), have existed since migration 0013. This is the query
     # they were built for.
+    #
+    # The seeds CTE filters on group_id too, and that matters more now than it
+    # did. While retrieval was single scope the seeds could only ever come from
+    # this scope's own candidate lists, so filtering them was redundant. With
+    # query_across fanning out over several scopes, a seed list is assembled
+    # from several, and an unfiltered seeds CTE would walk from one scope's
+    # nodes into another's neighbourhood. The neighbour filter below would
+    # still refuse to RETURN the foreign edge, so this was never a leak - but
+    # "cannot return it" is a weaker guarantee than "never walks there", and
+    # the cost of the stronger one is one indexed predicate.
     live_n2 = live_clause("n2", as_of)
     rows = conn.execute(
         f"""WITH seeds AS (
                 SELECT e.id AS seed, e.start_id, e.end_id
                 FROM {GRAPH}."FACT" e
                 WHERE e.id = ANY(SELECT unnest(%s::text[])::graphid)
+                  AND (e.properties ->> '"group_id"'::agtype) = %s
             ),
             ends AS (
                 SELECT seed, start_id AS node FROM seeds
@@ -511,7 +523,7 @@ def _graph_candidates(
               ON (n2.start_id = ends.node OR n2.end_id = ends.node)
             WHERE (n2.properties ->> '"group_id"'::agtype) = %s
               AND {live_n2}""",
-        ([str(i) for i in seed_edge_ids], group_id),
+        ([str(i) for i in seed_edge_ids], group_id, group_id),
     ).fetchall()
 
     order = {edge_id: i for i, edge_id in enumerate(seed_edge_ids)}
@@ -599,6 +611,53 @@ USE_SALIENCE = os.environ.get("ECHO_MEMORY_SALIENCE", "").lower() in ("1", "true
 ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
     "1", "true", "yes",
 )
+
+# Whether the fused candidates are reordered by similarity to the query before
+# being truncated. Off until the eval says otherwise, like every other change
+# to what a query returns.
+RERANK = os.environ.get("ECHO_MEMORY_RERANK", "").lower() in ("1", "true", "yes")
+
+# Whether verification state is allowed to affect a read, and whether derived
+# lessons enter as a channel. Both default OFF, which is not timidity: every
+# existing store has no verification rows at all, so turning these on by
+# default would change nothing for anybody except by adding two queries per
+# read. They become worth defaulting on when a store has verifications in it,
+# which is a decision for a release note rather than for this constant.
+#
+# The split between them matters. TRUST_RETRIEVAL does two different things -
+# it SUPPRESSES rejected facts, which is authoritative, and it reweights the
+# rest, which is advisory. LESSONS only ever reweights. Nothing here can add a
+# candidate; see trust/states.py and salience.py for why that restraint is the
+# whole design.
+TRUST_RETRIEVAL = os.environ.get("ECHO_MEMORY_TRUST_RETRIEVAL", "").lower() in (
+    "1", "true", "yes",
+)
+LESSON_CHANNEL = os.environ.get("ECHO_MEMORY_LESSONS", "").lower() in (
+    "1", "true", "yes",
+)
+
+
+def _trust():
+    """The verification module, or None when it is not installed.
+
+    Imported lazily and tolerantly on purpose. The intelligence capabilities
+    ship as separate modules and a self-hosted install may be running a build
+    without them; a read path that raises ImportError because an optional
+    feature is absent is worse than one that simply does not apply it.
+    """
+    try:
+        from echo_memory.trust import verify
+    except ImportError:
+        return None
+    return verify
+
+
+def _lessons():
+    try:
+        from echo_memory.intelligence import lessons
+    except ImportError:
+        return None
+    return lessons
 
 
 def needs_expansion(conn, group_id: str, query: str) -> bool:
@@ -834,10 +893,6 @@ def _digest_candidates(
     return [str(edge_id) for (edge_id,) in rows]
 
 
-def _agtype_str(v):
-    return str(v).strip('"') if v is not None else None
-
-
 def _fetch_facts(conn, edge_ids: list[str]) -> dict[str, dict]:
     """Batch-fetch fact/confidence/causal_hint/provenance/agent_id/project for a
     set of edge ids via one Cypher UNWIND query, not N+1 lookups.
@@ -990,10 +1045,12 @@ def query_memory(
     digest: bool = False, lexical_only: bool = False,
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
+    rerank: bool | None = None,
     expansion_weight: float | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
     about: list[str] | None = None,
+    trust: bool | None = None, lessons: bool | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -1177,11 +1234,65 @@ def query_memory(
                 # content channel's. Full weight here would reintroduce
                 # exactly the problem the weight exists to test.
                 weights.append(expansion_weight or 1.0)
+        # Trust and lessons, last and in that order, over the candidates the
+        # content channels already found. Same restraint as salience: they
+        # reorder an answer and can never add to one. A fact nothing scored
+        # arriving with a top slot worth 1/(k+1) is the single mechanism behind
+        # three failed experiments, and a trust state is no more a signal about
+        # this query than a recall count is.
+        trusting = TRUST_RETRIEVAL if trust is None else trust
+        lessoning = LESSON_CHANNEL if lessons is None else lessons
+        advisory = []
+        if trusting and (verify := _trust()) is not None:
+            advisory.append(verify.ranked(conn, group_id, sorted(content, key=content.get, reverse=True)))
+        if lessoning and (lesson_mod := _lessons()) is not None:
+            advisory.append(lesson_mod.for_query(conn, group_id, sorted(content, key=content.get, reverse=True)))
+        for extra in advisory:
+            lists.append(extra)
+            if weights is not None:
+                weights.append(expansion_weight or 1.0)
         fused = (
             reciprocal_rank_fusion(lists, k=k, weights=weights)
-            if (hops or salient) else content
+            if (hops or salient or advisory) else content
         )
         by_score = sorted(fused, key=fused.get, reverse=True)
+
+        # Suppression is the one authoritative thing a trust state does, and it
+        # happens BEFORE truncation rather than after. A rejected fact filtered
+        # out of the final ten would have already cost a real fact its slot,
+        # which is a quietly thinner answer - the failure nobody notices.
+        if trusting and (verify := _trust()) is not None:
+            gone = verify.suppressed(conn, group_id, by_score)
+            if gone:
+                by_score = [e for e in by_score if e not in gone]
+
+        # Reciprocal rank fusion sees rank POSITION and nothing else. That is
+        # its virtue - it needs no comparable scores - and it is the single
+        # mechanism behind three failed experiments: the graph hop (-0.142 MRR
+        # on entity_pair), routing it per query (-0.0002 on the shape it was
+        # built for), and session expansion (-0.107 hit@10 on BEAM 100K). Each
+        # added a list, each list was ordered by something that was not the
+        # query, and each spent a top slot worth 1/(k+1) on a fact nothing had
+        # scored.
+        #
+        # So look at the content once more at the end. The fusion decides
+        # which candidates are in play, which is what it is good at, and
+        # cosine to the query decides their order, which it cannot do at all.
+        # Cheap: the embeddings are already stored and already indexed, and
+        # this scores at most LIST_DEPTH of them.
+        reranking = RERANK if rerank is None else rerank
+        if reranking and query_embedding is not None and by_score:
+            pool = by_score[:LIST_DEPTH]
+            scored = _missing_similarity(conn, group_id, query_embedding, pool)
+            # A candidate the vector channel already scored keeps that score;
+            # one only the lexical channel or an expansion found gets the
+            # number computed here. Ties fall back to the fused order rather
+            # than to an arbitrary one, so a rerun ranks the same.
+            order = {edge_id: i for i, edge_id in enumerate(pool)}
+            by_score = sorted(
+                pool,
+                key=lambda e: (-(similarity.get(e, scored.get(e, 0.0))), order[e]),
+            ) + by_score[LIST_DEPTH:]
         # Diversify before truncating, not after: the point is to choose which
         # top_k, and slicing first throws away the candidates MMR would swap in.
         ranked_ids = (
