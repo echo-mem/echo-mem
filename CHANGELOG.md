@@ -7,6 +7,42 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## 0.6.1
+
+**A deployment that was not starting from scratch could not reach this
+schema.** Migrations 0030 and 0033 name `graphid`, which lives in
+`ag_catalog`, and Alembic's connection does not put that schema on the
+search_path. Neither migration set it. Both passed anyway, in every test and
+every CI run, because those all migrate from base: 0026's `SET` was still in
+force in the same session by the time 0030 ran, and 0032's by the time 0033
+did.
+
+A real deployment does not migrate from base. It resumes from wherever it is,
+in a new session, and the predecessor never executes. Measured, against a
+restore of the live store:
+
+    base -> 0028   OK
+    0028 -> head   FAILED   type "graphid" does not exist
+
+The failing start revisions were 0027, 0028 and 0029, which die at 0030, and
+0032, which dies at 0033. The live store was at 0028, so this was the upgrade
+path of the only deployment there is, and 0.6.0 could not be installed over
+it. 0.5.7 carried the same defect for the same reason.
+
+Both migrations now set the search_path themselves. It is session-local and
+idempotent, so setting it twice costs nothing, and the property worth holding
+is that each migration is self-sufficient rather than that today's revisions
+happen to line up. Verified by applying all 38 migrations one at a time, each
+in its own process and therefore its own session, which is every resume point
+at once: 38 of 38, ending at 0038.
+
+`tests/unit/test_migration_search_path.py` fails when a migration names an
+ag_catalog type without setting the path first. It checks the text rather than
+running anything, because proving it by execution needs a separate database
+per start revision to assert something local to each file. It also asserts
+that it matched at least seven migrations, so that the guard cannot pass by
+having gone blind.
+
 ## 0.6.0
 
 **Two keys that were global are now scoped, so one tenant can no longer take
