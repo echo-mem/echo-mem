@@ -66,6 +66,22 @@ depends_on = None
 
 
 def upgrade() -> None:
+    # ag_catalog on the search_path FIRST, because `graphid` below is an
+    # ag_catalog type and Alembic's connection does not put it there.
+    #
+    # This migration used to inherit the setting from an earlier one in the
+    # same Alembic session, which is why nothing caught it: CI and every test
+    # migrate from base, so 0026's `SET` was always still in force by the time
+    # this ran. A deployment already sitting at 0027, 0028 or 0029 starts a
+    # fresh session here, 0026 never executes, and this failed with
+    # `type "graphid" does not exist`. The same held here for a deployment at
+    # 0032, where 0032's own `SET` had run in a previous session.
+    #
+    # So every migration that names an ag_catalog type sets this itself. It is
+    # session-local and idempotent, so paying for it twice costs nothing, and
+    # `tests/unit/test_migration_search_path.py` fails when a new migration
+    # forgets.
+    op.execute('SET search_path = ag_catalog, "$user", public')
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS public.event_inbox (
