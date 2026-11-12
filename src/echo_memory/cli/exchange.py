@@ -45,7 +45,7 @@ def _print_preview(claims: list[dict]) -> None:
         print(f"  ... and {len(claims) - PREVIEW} more")
 
 
-def _trusted(args) -> dict[str, sign.TrustedKey]:
+def _anchors(args) -> dict[str, sign.TrustedKey]:
     """The trust anchors this import will be verified against.
 
     Assembled from what the operator passed and from nowhere else. There is no
@@ -58,7 +58,7 @@ def _trusted(args) -> dict[str, sign.TrustedKey]:
         spec = ",".join(
             filter(None, (spec, Path(args.trust_file).read_text().strip()))
         )
-    return sign.parse_trusted(spec) if spec.strip() else {}
+    return sign.parse_anchors(spec) if spec.strip() else {}
 
 
 # --- export -------------------------------------------------------------
@@ -196,8 +196,8 @@ def _import(args, config, conn) -> int:
         print(f"error: {e}")
         return 2
 
-    trusted = _trusted(args)
-    ok, reason = sign.check(manifest, trusted_keys=trusted)
+    anchors = _anchors(args)
+    ok, reason = sign.check(manifest, anchors=anchors)
 
     account = args.account or config.user_id
     memory = args.memory or args.scope
@@ -254,7 +254,7 @@ def _import(args, config, conn) -> int:
             account=account,
             memory=memory,
             embedder=embedder,
-            trusted_keys=trusted,
+            anchors=anchors,
             deployment_id=args.deployment_id,
         )
     except importer.ImportRefused as e:
@@ -389,7 +389,7 @@ def _list(args, config, conn) -> int:
 
 def _anchor(args, config, conn) -> int:
     """Print the trust anchor a partner needs to verify this deployment's
-    bundles, in the form `parse_trusted` reads."""
+    bundles, in the form `parse_anchors` reads."""
     try:
         anchor = sign.trust_anchor(args.key_id)
     except sign.SignatureError as e:

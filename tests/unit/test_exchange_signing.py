@@ -61,10 +61,10 @@ def test_ed25519_is_available_here():
 
 def test_sign_and_verify_round_trip_ed25519():
     manifest = _signed()
-    trusted = {"k1": sign.trust_anchor("k1", env=ENV)}
+    anchors = {"k1": sign.trust_anchor("k1", env=ENV)}
 
-    assert sign.verify(manifest, trusted_keys=trusted)
-    ok, reason = sign.check(manifest, trusted_keys=trusted)
+    assert sign.verify(manifest, anchors=anchors)
+    ok, reason = sign.check(manifest, anchors=anchors)
     assert ok and "ed25519" in reason
 
 
@@ -72,9 +72,9 @@ def test_sign_and_verify_round_trip_hmac():
     """The documented fallback for a deployment without `cryptography`, and it
     has to work on a deployment that has it or nobody would find out."""
     manifest = _signed(alg=sign.ALG_HMAC, key_id="h1")
-    trusted = {"h1": sign.TrustedKey("h1", sign.ALG_HMAC, bytes.fromhex(HMAC_SECRET))}
+    anchors = {"h1": sign.TrustedKey("h1", sign.ALG_HMAC, bytes.fromhex(HMAC_SECRET))}
 
-    ok, reason = sign.check(manifest, trusted_keys=trusted)
+    ok, reason = sign.check(manifest, anchors=anchors)
     assert ok
     assert "no more" in reason, "an HMAC pass must not imply it identified the sender"
 
@@ -101,11 +101,11 @@ def test_a_tampered_manifest_fails():
     """Every field is covered, not just the digest. A bundle must not be
     re-labelled with a different account and keep its signature."""
     manifest = _signed()
-    trusted = {"k1": sign.trust_anchor("k1", env=ENV)}
+    anchors = {"k1": sign.trust_anchor("k1", env=ENV)}
 
     altered = bundle.Manifest(**{**manifest.to_dict(), "account": "acct-victim"})
-    assert sign.verify(altered, trusted_keys=trusted) is False
-    _ok, reason = sign.check(altered, trusted_keys=trusted)
+    assert sign.verify(altered, anchors=anchors) is False
+    _ok, reason = sign.check(altered, anchors=anchors)
     assert "does not match the manifest" in reason
 
 
@@ -113,20 +113,20 @@ def test_a_tampered_content_digest_fails():
     """The field that binds the manifest to the facts. Swapping it is how one
     would pair a valid manifest with somebody else's claims."""
     manifest = _signed()
-    trusted = {"k1": sign.trust_anchor("k1", env=ENV)}
+    anchors = {"k1": sign.trust_anchor("k1", env=ENV)}
     altered = bundle.Manifest(
         **{**manifest.to_dict(), "content_digest": "sha256:" + "f" * 64}
     )
-    assert sign.verify(altered, trusted_keys=trusted) is False
+    assert sign.verify(altered, anchors=anchors) is False
 
 
 def test_an_unknown_key_id_is_refused_with_a_reason():
     """Never a pass. Accepting an unknown key would make the anchor set
     decorative."""
     manifest = _signed(key_id="k2")
-    trusted = {"k1": sign.trust_anchor("k1", env=ENV)}
+    anchors = {"k1": sign.trust_anchor("k1", env=ENV)}
 
-    ok, reason = sign.check(manifest, trusted_keys=trusted)
+    ok, reason = sign.check(manifest, anchors=anchors)
     assert ok is False
     assert "k2" in reason
     assert "not a trusted key" in reason
@@ -136,14 +136,14 @@ def test_an_empty_trusted_set_refuses_everything():
     """Including a correctly signed bundle. A verifier that trusts nothing has
     verified nothing, and the honest answer is a refusal rather than a pass."""
     manifest = _signed()
-    assert sign.verify(manifest, trusted_keys={}) is False
-    _ok, reason = sign.check(manifest, trusted_keys={})
+    assert sign.verify(manifest, anchors={}) is False
+    _ok, reason = sign.check(manifest, anchors={})
     assert "no trusted keys" in reason
 
 
 def test_an_unsigned_bundle_is_refused():
     ok, reason = sign.check(
-        _manifest(), trusted_keys={"k1": sign.trust_anchor("k1", env=ENV)}
+        _manifest(), anchors={"k1": sign.trust_anchor("k1", env=ENV)}
     )
     assert ok is False
     assert "unsigned" in reason
@@ -155,8 +155,8 @@ def test_the_right_key_for_the_wrong_manifest_is_refused():
     second = _manifest(bundle_id="b-2")
     assert first.signature is not None
     forged = second.signed(first.signature)
-    trusted = {"k1": sign.trust_anchor("k1", env=ENV)}
-    assert sign.verify(forged, trusted_keys=trusted) is False
+    anchors = {"k1": sign.trust_anchor("k1", env=ENV)}
+    assert sign.verify(forged, anchors=anchors) is False
 
 
 def test_a_published_ed25519_anchor_cannot_be_replayed_as_an_hmac_secret():
@@ -177,7 +177,7 @@ def test_a_published_ed25519_anchor_cannot_be_replayed_as_an_hmac_secret():
         sign.sign(manifest.unsigned(), alg=sign.ALG_HMAC, env=attacker_env)
     )
 
-    ok, reason = sign.check(forged, trusted_keys={"k1": anchor})
+    ok, reason = sign.check(forged, anchors={"k1": anchor})
     assert ok is False
     assert "comes from the trust anchor" in reason
 
@@ -185,7 +185,7 @@ def test_a_published_ed25519_anchor_cannot_be_replayed_as_an_hmac_secret():
 def test_an_incomplete_signature_is_refused():
     manifest = _manifest().signed({"alg": sign.ALG_ED25519, "key_id": "k1"})
     ok, reason = sign.check(
-        manifest, trusted_keys={"k1": sign.trust_anchor("k1", env=ENV)}
+        manifest, anchors={"k1": sign.trust_anchor("k1", env=ENV)}
     )
     assert ok is False
     assert "incomplete" in reason
@@ -196,7 +196,7 @@ def test_a_non_hex_signature_value_is_refused_rather_than_raising():
         {"alg": sign.ALG_ED25519, "key_id": "k1", "value": "not-hex"}
     )
     ok, reason = sign.check(
-        manifest, trusted_keys={"k1": sign.trust_anchor("k1", env=ENV)}
+        manifest, anchors={"k1": sign.trust_anchor("k1", env=ENV)}
     )
     assert ok is False
     assert "not hex" in reason
@@ -233,13 +233,13 @@ def test_a_malformed_key_spec_names_the_entry():
         sign.signing_keys({sign.KEYS_ENV: "justakey"})
 
 
-def test_parse_trusted_requires_the_algorithm_to_be_declared():
+def test_parse_anchors_requires_the_algorithm_to_be_declared():
     """A 32 byte HMAC secret and an ed25519 public key are both 32 bytes, so
     the length cannot be used to infer which this is."""
     with pytest.raises(sign.SignatureError, match="not key_id:alg:hexkey"):
-        sign.parse_trusted(f"k1:{SEED}")
+        sign.parse_anchors(f"k1:{SEED}")
 
-    anchors = sign.parse_trusted(f"k1:ed25519:{SEED},h1:hmac-sha256:{HMAC_SECRET}")
+    anchors = sign.parse_anchors(f"k1:ed25519:{SEED},h1:hmac-sha256:{HMAC_SECRET}")
     assert anchors["k1"].alg == sign.ALG_ED25519
     assert anchors["h1"].alg == sign.ALG_HMAC
 

@@ -1118,8 +1118,8 @@ from echo_memory.exchange import sign
 
 signature = sign.sign(manifest.unsigned())            # uses the env keys
 anchor = sign.trust_anchor("k1")                       # what a partner needs
-anchors = sign.parse_trusted("k1:ed25519:abc123...")   # key_id:alg:hexkey
-ok, reason = sign.check(manifest, trusted_keys=anchors)
+anchors = sign.parse_anchors("k1:ed25519:abc123...")   # key_id:alg:hexkey
+ok, reason = sign.check(manifest, anchors=anchors)
 ```
 
 `ECHO_MEMORY_EXCHANGE_KEYS` holds the signing keys and
@@ -1151,7 +1151,7 @@ nothing will clean up:
 0. the size, against `bundle.MAX_FACTS`. First, because the digest below is
    recomputed over every claim, so on a huge bundle the safety checks are
    themselves the denial of service
-1. the signature, against the `trusted_keys` the caller supplied
+1. the signature, against the `anchors` the caller supplied
 2. the content digest, recomputed from the claims themselves
 3. the `bundle_id` **and this import's scope**, against what that scope has
    already imported

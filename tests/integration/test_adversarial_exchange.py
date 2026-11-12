@@ -138,11 +138,11 @@ def _anchor():
 
 
 def _import(conn, manifest, facts, *, account=OUR_ACCOUNT, memory=OUR_MEMORY,
-            embedder=None, trusted=None):
+            embedder=None, anchors=None):
     return importer.import_bundle(
         conn, manifest=manifest, facts=facts, account=account, memory=memory,
         embedder=embedder or HashedEmbedder(),
-        trusted_keys=_anchor() if trusted is None else trusted,
+        anchors=_anchor() if anchors is None else anchors,
         deployment_id=LOCAL_DEPLOY,
     )
 
@@ -469,7 +469,7 @@ def test_a_valid_signature_over_somebody_elses_facts_writes_nothing(
     manifest_b, blob_b = _export(conn, second_scope)
     _, facts_b = bundle_format.parse(json.dumps(manifest_b.to_dict()).encode(), blob_b)
 
-    ok, reason = sign.check(manifest_a, trusted_keys=_anchor())
+    ok, reason = sign.check(manifest_a, anchors=_anchor())
     assert ok, reason
     before = _total_facts(conn)
 

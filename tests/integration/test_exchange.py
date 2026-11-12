@@ -115,7 +115,7 @@ def _anchor(env=None) -> dict[str, sign.TrustedKey]:
 
 
 def _import(conn, manifest, facts, *, account=ACCOUNT_US, memory="shared",
-            trusted=None):
+            anchors=None):
     return importer.import_bundle(
         conn,
         manifest=manifest,
@@ -123,7 +123,7 @@ def _import(conn, manifest, facts, *, account=ACCOUNT_US, memory="shared",
         account=account,
         memory=memory,
         embedder=HashedEmbedder(),
-        trusted_keys=_anchor() if trusted is None else trusted,
+        anchors=_anchor() if anchors is None else anchors,
         deployment_id=LOCAL,
     )
 
@@ -406,7 +406,7 @@ def test_an_empty_trusted_set_refuses_and_writes_nothing(migrated_db):
 
         before = _total_facts(conn)
         with pytest.raises(importer.ImportRefused, match="no trusted keys"):
-            _import(conn, manifest, facts, trusted={})
+            _import(conn, manifest, facts, anchors={})
         assert _total_facts(conn) == before
 
 
@@ -712,7 +712,7 @@ def test_export_with_confirm_writes_a_signed_bundle_and_records_it(
         manifests[0].read_bytes(), blobs[0].read_bytes()
     )
     assert len(claims) == 3
-    assert sign.verify(manifest, trusted_keys=_anchor())
+    assert sign.verify(manifest, anchors=_anchor())
 
     with connect(migrated_db) as conn:
         rows = importer.listing(conn)
@@ -865,7 +865,7 @@ def test_the_anchor_command_prints_a_public_key_not_the_seed(
     out = capsys.readouterr().out
     assert SEED not in out, "the anchor command printed the private seed"
     assert "safe to publish" in out
-    anchors = sign.parse_trusted(out.splitlines()[0])
+    anchors = sign.parse_anchors(out.splitlines()[0])
     assert anchors["partner-2026"].alg == sign.ALG_ED25519
 
 

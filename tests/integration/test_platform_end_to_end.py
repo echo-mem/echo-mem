@@ -231,7 +231,7 @@ def test_six_capabilities_compose(migrated_db, exchange_keys):
     landed = importer.import_bundle(
         conn, manifest=parsed_manifest, facts=parsed_facts,
         account="acct-other", memory="shared-in", embedder=embedder,
-        trusted_keys=exchange_keys, deployment_id="deploy-b",
+        anchors=exchange_keys, deployment_id="deploy-b",
     )
     quarantine = landed["group_id"]
     assert ":import:" in quarantine
@@ -379,7 +379,7 @@ def test_a_bundle_with_a_bad_signature_writes_nothing(migrated_db, exchange_keys
         importer.import_bundle(
             conn, manifest=manifest, facts=facts, account="acct-other",
             memory="shared-in", embedder=embedder,
-            trusted_keys={
+            anchors={
                 "somebody-else": sign.trust_anchor("somebody-else", env={
                     sign.KEYS_ENV: "somebody-else:" + "22" * 32,
                     sign.KEY_ID_ENV: "somebody-else",

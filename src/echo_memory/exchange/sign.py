@@ -279,7 +279,7 @@ def trust_anchor(key_id: str, *, env: Mapping[str, str] | None = None) -> Truste
     return TrustedKey(key_id=key_id, alg=ALG_HMAC, material=material)
 
 
-def parse_trusted(spec: str) -> dict[str, TrustedKey]:
+def parse_anchors(spec: str) -> dict[str, TrustedKey]:
     """Trust anchors from `key_id:alg:hexkey[,...]`, for the CLI.
 
     The algorithm is in the spec because the operator supplying the anchor is
@@ -315,7 +315,7 @@ def parse_trusted(spec: str) -> dict[str, TrustedKey]:
 def check(
     manifest: Manifest,
     *,
-    trusted_keys: Mapping[str, TrustedKey],
+    anchors: Mapping[str, TrustedKey],
 ) -> tuple[bool, str]:
     """Whether this manifest's signature holds, and why.
 
@@ -330,7 +330,7 @@ def check(
             "the bundle is unsigned. An unsigned bundle has no sender, so "
             "there is nothing to trust and nothing to hold responsible."
         )
-    if not trusted_keys:
+    if not anchors:
         return False, (
             "no trusted keys were supplied, so no signature can be accepted. "
             "A verifier with an empty anchor set has verified nothing, and "
@@ -346,11 +346,11 @@ def check(
             f"value present={bool(value)}"
         )
 
-    anchor = trusted_keys.get(str(key_id))
+    anchor = anchors.get(str(key_id))
     if anchor is None:
         return False, (
             f"signed with key {key_id!r}, which is not a trusted key here "
-            f"(trusted: {', '.join(sorted(trusted_keys)) or 'none'}). An "
+            f"(trusted: {', '.join(sorted(anchors)) or 'none'}). An "
             f"unknown key is a refusal, never a pass: accepting one would "
             f"make the anchor set decorative."
         )
@@ -405,16 +405,16 @@ def _altered(key_id) -> str:
     )
 
 
-def verify(manifest: Manifest, *, trusted_keys: Mapping[str, TrustedKey]) -> bool:
+def verify(manifest: Manifest, *, anchors: Mapping[str, TrustedKey]) -> bool:
     """Whether this manifest's signature holds, against anchors the caller
     supplies.
 
-    `trusted_keys` is a required keyword argument and there is no default. A
+    `anchors` is a required keyword argument and there is no default. A
     verifier that read its trust anchors from the same place the bundle came
     from would not be verifying anything; see the module note.
 
     `check` returns the same answer with the reason attached, and every caller
     that reports to a person should use that instead.
     """
-    ok, _reason = check(manifest, trusted_keys=trusted_keys)
+    ok, _reason = check(manifest, anchors=anchors)
     return ok

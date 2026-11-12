@@ -460,7 +460,7 @@ def import_bundle(
     account: str,
     memory: str,
     embedder,
-    trusted_keys,
+    anchors,
     deployment_id: str,
 ) -> dict:
     """Verify a bundle and write its facts into a quarantine scope.
@@ -473,7 +473,7 @@ def import_bundle(
       0. the size, against `bundle.MAX_FACTS`. Ahead of the other three
          because the digest is recomputed over every claim, so on a huge
          bundle the safety checks are themselves the denial of service
-      1. the signature, against `trusted_keys` the caller supplied
+      1. the signature, against `anchors` the caller supplied
       2. the content digest, recomputed from the claims themselves
       3. the bundle_id and this import's scope, against what this scope has
          already imported
@@ -498,7 +498,7 @@ def import_bundle(
     """
     _check_size(facts, manifest)
 
-    ok, reason = signing.check(manifest, trusted_keys=trusted_keys)
+    ok, reason = signing.check(manifest, anchors=anchors)
     if not ok:
         _logger.warning(
             "bundle_rejected",
