@@ -304,6 +304,21 @@ does not call these functions. A self-hosted deployment passing `--account` or
 `--memory` was, which is why the check is in the one place the shape is
 derived rather than at the call sites.
 
+**A trust anchor no longer renders its key material.** `sign.TrustedKey` is a
+frozen dataclass, so the generated repr printed `material` in full - and for
+an HMAC anchor `material` IS the shared secret. Measured: `f"{anchor}"` gave
+`TrustedKey(key_id='h1', alg='hmac-sha256', material=b'\xab\xab...')`, and the
+same from inside a dict, which is the shape the logging helpers pass as
+`extra={"fields": ...}`. Anchors are handed to `sign.check`, whose job is
+composing operator-facing refusal text, so one accidental interpolation stood
+between a key and a log file. No call site did it and nothing in the released
+package logged a key; what was wrong was that the default was a leak waiting
+for a careless edit. The id, the algorithm and a byte count render now, and
+`describe` and `alg` already carried what a report legitimately needs. Trust
+anchors also have one name instead of three: the keyword argument on `check`,
+`verify` and `import_bundle` is `anchors`, and `parse_trusted` is
+`parse_anchors`.
+
 **Two writers in two scopes of one graph were never serialised, and nothing
 tested it.** `write_episode` takes a per-scope advisory lock, so two agents
 writing one scope are safe and there is a test. Apache AGE's label catalogue
