@@ -7,6 +7,34 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## Unreleased
+
+**Dropping a scratch scope left fourteen tables behind.** `drop_scope` deleted
+from five tables while nineteen carry a `group_id`, so every benchmark scope
+cleared on a resume kept its attestation chain, its BM25 statistics, its
+inbox, its evidence and its retention policy. Found as 634 `fact_attestation`
+rows in a benchmark database whose facts were gone, which
+`attestation.report` would have called vanished facts with no erasure to
+account for them.
+
+It also deleted `audit_entry` without first clearing `trial_observation`,
+which has a foreign key to it. That never fired only because benchmark scopes
+carry no trial observations.
+
+This is the `eval` harness path, used by `eval --context --sweep` and by
+`eval-external` when it rewrites a scope a killed run left half written. It is
+not the erasure path, which is edge-scoped and deliberately redacts rather
+than deletes so the audit trail survives; a scratch scope has no audit trail
+worth keeping, so everything keyed on it now goes.
+
+Two tests, both reading the catalogue rather than a second hand-written list.
+One fails when a migration adds a scoped table `SCOPE_TABLES` does not name.
+The other writes a fact, asserts something was attested, drops the scope and
+counts rows in every table the catalogue says is scoped. That second one was
+circular in its first draft: checking only the tables the list named, it
+passed with the list shrunk back to its original five while fourteen tables
+kept their rows.
+
 ## 0.6.1
 
 **A deployment that was not starting from scratch could not reach this

@@ -129,13 +129,65 @@ def materialise(conn, scope: str, corpus, embedder) -> None:
         )
 
 
+#: `eval_judgement` and `eval_run` hold rows for a scope without carrying a
+#: `group_id` of their own: they hang off `eval_question`. They go first, by
+#: subquery, because the foreign key points the other way.
+SCOPE_CHILD_DELETES = (
+    ("eval_judgement", "question_id"),
+    ("eval_run", "question_id"),
+)
+
+#: Every table that holds a scope's rows, keyed on `group_id`, children before
+#: parents for the three foreign keys among them: `fact_evidence` -> `evidence`
+#: and `trial_observation` -> `audit_entry`, with `eval_question` after the two
+#: above.
+#:
+#: Listed rather than discovered, and then checked against the catalogue by
+#: `test_drop_scope_covers_every_scoped_table`, which fails when a migration
+#: adds a table this does not name. The list drifted once already: it held five
+#: tables while the schema had nineteen, so a dropped benchmark scope left
+#: behind its attestation chain, its BM25 statistics and its inbox. 634
+#: orphaned `fact_attestation` rows were found that way, and `report` would
+#: have called every one of them a vanished fact with no erasure to explain it.
+SCOPE_TABLES = (
+    "fact_evidence",
+    "trial_observation",
+    "eval_question",
+    "evidence",
+    "audit_entry",
+    "bundle_registry",
+    "causal_hint_scan",
+    "erasure_event",
+    "event_inbox",
+    "fact_attestation",
+    "fact_embedding",
+    "fact_verification",
+    "group_state",
+    "lexical_scope",
+    "lexical_term",
+    "node_embedding",
+    "read_event",
+    "retention_policy",
+    "verification_attestation",
+)
+
+
 def drop_scope(conn, scope: str) -> None:
     """A scratch scope that outlived the measurement would show up in status,
-    health and every future eval as though someone had written it."""
-    # Both embedding tables carry group_id as a plain column, so the scratch
-    # rows go without touching the graph.
-    conn.execute("DELETE FROM public.node_embedding WHERE group_id = %s", (scope,))
-    conn.execute("DELETE FROM public.fact_embedding WHERE group_id = %s", (scope,))
+    health and every future eval as though someone had written it.
+
+    Dropped outright rather than redacted, which is what separates this from
+    `erasure`: there is no audit trail worth preserving for a scope the harness
+    invented, so everything keyed on it goes.
+    """
+    for table, column in SCOPE_CHILD_DELETES:
+        conn.execute(
+            f"DELETE FROM public.{table} WHERE {column} IN "
+            f"(SELECT id FROM public.eval_question WHERE group_id = %s)",
+            (scope,),
+        )
+    # The graph before the tables that describe it, so a failure part way
+    # through cannot leave rows pointing at nodes that are already gone.
     conn.execute(
         f"""SELECT * FROM cypher('{GRAPH}', $$
             MATCH (n:Node) WHERE n.group_id = $gid
@@ -143,9 +195,8 @@ def drop_scope(conn, scope: str) -> None:
         $$, %s) AS (x agtype)""",
         (json.dumps({"gid": scope}),),
     ).fetchall()
-    conn.execute("DELETE FROM public.audit_entry WHERE group_id = %s", (scope,))
-    conn.execute("DELETE FROM public.group_state WHERE group_id = %s", (scope,))
-    conn.execute("DELETE FROM public.read_event WHERE group_id = %s", (scope,))
+    for table in SCOPE_TABLES:
+        conn.execute(f"DELETE FROM public.{table} WHERE group_id = %s", (scope,))
 
 
 def measure(conn, group_id: str, embedder, steps: int = STEPS, progress=None) -> list[Point]:
