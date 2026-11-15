@@ -160,3 +160,85 @@ def test_a_rebuilt_prefix_does_not_lose_facts_to_ambiguity(migrated_db):
         drop_scope(conn, scope)
 
     assert written == 2, "a fact was deferred for ambiguity and silently lost"
+
+
+def test_drop_scope_covers_every_scoped_table(migrated_db):
+    """`drop_scope` must name every table that holds a scope's rows.
+
+    The list drifted once: it deleted from five tables while the schema had
+    nineteen carrying `group_id`, so every benchmark scope dropped on a resume
+    left its attestation chain, its BM25 statistics and its inbox behind. The
+    evidence was 634 `fact_attestation` rows in a benchmark database whose
+    facts were gone, which `attestation.report` would have called vanished
+    facts with no erasure to account for them.
+
+    Checked against the catalogue rather than a second hand-written list,
+    because two lists maintained by hand drift the same way one does. A
+    migration that adds a scoped table now fails here until `SCOPE_TABLES`
+    names it.
+    """
+    from echo_memory.eval.sweep import SCOPE_TABLES
+
+    conn = connect(migrated_db)
+    scoped = {
+        row[0]
+        for row in conn.execute(
+            """SELECT table_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND column_name = 'group_id'"""
+        ).fetchall()
+    }
+
+    # Neither direction is allowed to drift: a table the schema has and the
+    # list does not is the bug above, and a table the list has and the schema
+    # does not is a DELETE that would raise the first time it ran.
+    assert scoped, "no scoped tables found; this check has gone blind"
+    assert set(SCOPE_TABLES) == scoped, (
+        f"not dropped: {sorted(scoped - set(SCOPE_TABLES))}; "
+        f"named but absent from the schema: {sorted(set(SCOPE_TABLES) - scoped)}"
+    )
+
+
+def test_drop_scope_leaves_nothing_behind(migrated_db):
+    """The property the list exists for, asserted by counting rows.
+
+    Against the CATALOGUE, not against `SCOPE_TABLES`. Checking the tables the
+    list names would only ever confirm that the DELETEs that were written ran,
+    which is circular: with the list shrunk back to its original five this
+    test passed while fourteen tables kept their rows. The catalogue does not
+    care what the list says.
+    """
+    conn = connect(migrated_db)
+    embedder = _HashEmbedder()
+    scope = "sweep:leftovers"
+    write_episode(
+        conn, scope, "s1",
+        [{"name": "Alpha", "type": "tool"}, {"name": "Beta", "type": "tool"}],
+        [{"source": "Alpha", "target": "Beta", "relation_type": "uses",
+          "fact": "alpha uses beta for the leftovers check",
+          "confidence": "extracted"}],
+        {}, embedder,
+    )
+
+    # A mark, so this cannot pass by having written nothing: the attestation
+    # row is the one the original defect left behind.
+    before = conn.execute(
+        "SELECT count(*) FROM public.fact_attestation WHERE group_id = %s", (scope,)
+    ).fetchone()[0]
+    assert before > 0, "nothing was attested, so the drop below proves nothing"
+
+    drop_scope(conn, scope)
+
+    scoped = sorted(
+        row[0]
+        for row in conn.execute(
+            """SELECT table_name FROM information_schema.columns
+                WHERE table_schema = 'public' AND column_name = 'group_id'"""
+        ).fetchall()
+    )
+    left = {
+        table: conn.execute(
+            f"SELECT count(*) FROM public.{table} WHERE group_id = %s", (scope,)
+        ).fetchone()[0]
+        for table in scoped
+    }
+    assert not {t: n for t, n in left.items() if n}, f"rows survived drop_scope: {left}"
