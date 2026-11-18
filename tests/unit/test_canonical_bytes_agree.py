@@ -22,7 +22,8 @@ of the three. That drift is invisible until two digests over the same claim
 disagree, at which point the question "was this tampered with" has no answer.
 
 What it does not catch: the digest functions themselves, which legitimately
-differ. `attestation.digest` reads its key from the environment,
+differ. `attestation.digest` takes a key from
+the environment and a flag saying which algorithm a link was written under,
 `vattest.digest` takes the material as an argument so a key can be rotated per
 link, and `bundle.digest_of` chains nothing because a bundle is one object.
 Those are three designs, not three copies.

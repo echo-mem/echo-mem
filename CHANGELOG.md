@@ -9,6 +9,39 @@ the pull requests, which carry the reasoning rather than just the diff.
 
 ## Unreleased
 
+**Verification read the key from the environment instead of from the link.**
+Every row in `fact_attestation` records the `keyed` flag it was written under,
+and `report` ignored it: each digest was recomputed with whatever
+`ECHO_MEMORY_ATTESTATION_KEY` held at the time of the call. So the first time
+an operator followed this package's own advice and turned the key on, every
+fact written before it was reported altered. Measured on a store with the key
+newly set: 3 of 3 pre-existing facts reported altered by a report that said
+`keyed: false` in the same output.
+
+Each link is now checked with the algorithm it was written under. Turning the
+key on leaves the existing chain verifiable and makes new links unforgeable,
+which is what `mixed_keying` already described and what the feature was always
+meant to allow.
+
+A keyed link verified where the key is absent is now `unverifiable` rather than
+`altered`: a reviewer's laptop, a restored dump or a CI job without the secret
+reports "I could not check these", not "your store was rewritten". Unverifiable
+links do not make a report unclean, because an absence of evidence is not
+evidence of tampering, but `verify` no longer prints "nothing has changed
+behind this store's back" over a chain it could only read half of.
+
+`digest` now refuses to compute a keyed digest with no key instead of falling
+back to SHA-256, since a fallback returns a number that is merely different and
+every caller reads a difference as tampering.
+
+`fact_attestation` records whether a row was keyed and not which key, so
+rotating the key still reports every keyed link as altered at once.
+`Report.likely_wrong_key` names that pattern - all keyed links failing, chain
+unbroken - for what it almost always is, and `verify` prints it instead of
+leaving an operator to conclude their store was forged. Carrying a `key_id` per
+link, the way `trust/vattest.py` already does, needs a migration and a
+backfill.
+
 **Dropping a scratch scope left fourteen tables behind.** `drop_scope` deleted
 from five tables while nineteen carry a `group_id`, so every benchmark scope
 cleared on a resume kept its attestation chain, its BM25 statistics, its

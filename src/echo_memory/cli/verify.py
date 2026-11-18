@@ -89,12 +89,28 @@ def run(args, config, conn) -> int:
         for a in report.altered:
             why = a["explanation"] or "NO RECORDED MUTATION ACCOUNTS FOR THIS"
             print(f"  seq {a['seq']:>6}  {a['edge_id']}  {why}")
-        if unexplained:
+        if report.likely_wrong_key:
+            print(
+                f"\nEvery keyed link failed and the chain is unbroken, which "
+                f"is what a different {attestation.KEY_ENV} looks like, not "
+                f"what tampering looks like: rewriting all of them would mean "
+                f"recomputing the whole tail, and the key is what prevents "
+                f"that. Check the variable before reading this as a finding."
+            )
+        elif unexplained:
             print(
                 "\nAn unexplained change is the finding this command exists "
                 "for: the fact is not what was written and nothing in the "
                 "audit log says it should have changed."
             )
+
+    if report.unverifiable:
+        print(
+            f"\n{len(report.unverifiable)} link(s) were attested with "
+            f"{attestation.KEY_ENV} set and could not be checked, because "
+            f"this process does not have it. Not a finding about those facts: "
+            f"they were not checked at all."
+        )
 
     if report.broken_links:
         print(f"\n{len(report.broken_links)} broken link(s) in the chain:")
@@ -117,7 +133,17 @@ def run(args, config, conn) -> int:
         )
 
     if report.is_clean():
-        print("\nNothing has changed behind this store's back.")
+        # Qualified when some links were not checked. "Nothing has changed"
+        # over a chain this process could only read half of is the sentence a
+        # reader would quote, and it would not be true.
+        if report.unverifiable:
+            print(
+                f"\nNothing has changed in the "
+                f"{report.n_attested - len(report.unverifiable)} link(s) that "
+                f"could be checked."
+            )
+        else:
+            print("\nNothing has changed behind this store's back.")
     print(f"\n{_strength_note(report)}")
 
     return 0 if report.is_clean() else 1
