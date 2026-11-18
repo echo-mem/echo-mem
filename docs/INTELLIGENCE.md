@@ -1480,6 +1480,7 @@ Every variable this branch adds, plus the two retrieval flags that gate it.
 | `ECHO_MEMORY_TRUST_RETRIEVAL` | **unset, off** | Lets verification reach a read: suppresses `rejected` before truncation and reweights the rest. Two extra queries per read |
 | `ECHO_MEMORY_LESSONS` | **unset, off** | Lets derived lessons enter as a reordering channel. Never adds a candidate |
 | `ECHO_MEMORY_RERANK` | **unset, off** | Reorders the fused candidates by cosine to the query before truncating |
+| `ECHO_MEMORY_EXPANSION` | `structural` | What the graph hop may traverse when it runs. `authored` traverses only edges a caller typed as a relation between claims, then the facts on the far end. Does not turn the hop on; an unrecognised value raises at import |
 | `ECHO_MEMORY_MAX_GRAPH_WRITERS` | **unset, gate off** | 1 takes a graph wide write lock. Above 1 turns the gate off. Present but unparseable fails safe at 1. Costs 2.6x to 2.8x write throughput when on |
 | `ECHO_MEMORY_VERIFICATION_KEYS` | unset, unkeyed | `key_id:hexkey[,...]` for the verification chain. A malformed entry raises |
 | `ECHO_MEMORY_VERIFICATION_KEY_ID` | unset, first entry | Which of those signs from now on. A named key that is absent raises |

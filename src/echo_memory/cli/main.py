@@ -1190,6 +1190,14 @@ def main(argv: list[str] | None = None) -> int:
                 # number reported as a finding.
                 ("+ expansion at 0.5", {"graph_hops": 1, "expansion_weight": 0.5}),
                 ("+ expansion at 0.2", {"graph_hops": 1, "expansion_weight": 0.2}),
+                # The same hop restricted to links a caller asserted, which is
+                # the distinction SoMem's graph view rests on. On a scope with
+                # no authored links this returns nothing and must therefore
+                # score exactly the same as shipping - a row of zeroes here is
+                # a statement about the corpus, not about the channel.
+                ("+ authored hop", {"graph_hops": 1, "expansion": "authored"}),
+                ("+ authored hop at 0.5",
+                 {"graph_hops": 1, "expansion": "authored", "expansion_weight": 0.5}),
                 # Look at the content once more at the end. The fusion
                 # chooses the candidates, cosine to the query orders them.
                 ("+ rerank", {"rerank": True}),
