@@ -35,10 +35,14 @@ reason is the finding: authored links are almost never written. In the store
 this was built against, 6 hints across 2,001 facts, 3 of them in the scope that
 holds 438. A hint is only written by a caller that read one in what a session
 said, and almost nothing asks them to. So the ablation's `+ authored hop` row
-should score identically to shipping on every corpus this project has, and an
-integration test pins that a scope with no asserted links expands to nothing at
-all, so a flat row reads as a statement about the corpus rather than as a
-channel that ran and did nothing. The two things that change it are the
+scores identically to shipping on every corpus this project has. Measured
+rather than predicted, on 40 `entity_single` cases against a LoCoMo scope with
+0 hints across 689 facts: shipping MRR 0.0140, `+ authored hop` MRR 0.0140,
+and the reciprocal rank identical on every one of the 40 questions, while
+`+ graph hop` over the same cases differs. An integration test pins the same
+property from the other side, that a scope with no asserted links expands to
+nothing at all, so a flat row reads as a statement about the corpus rather than
+as a channel that ran and did nothing. The two things that change it are the
 write-time prompt and `echo-memory infer-causal-hints`, which reads each fact's
 own sentence and needs a model.
 
