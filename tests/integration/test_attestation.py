@@ -496,3 +496,133 @@ def test_every_stored_digest_still_recomputes(migrated_db):
         assert again == stored, f"digest moved at seq {seq} for edge {edge_id}"
 
     assert attestation.report(conn, GROUP).is_clean()
+
+
+# --- enabling, disabling and rotating the key ---------------------------
+
+
+def test_enabling_the_key_does_not_flag_every_fact_written_before_it(migrated_db):
+    """The defect this file exists to prevent, in the one shape it shipped in.
+
+    `report` recomputed every digest with whatever key the environment had at
+    the time of the call, while each row records the flag it was written
+    under. So the first time an operator set the key on a running store, every
+    fact written before it was reported altered - measured on a live store, 3
+    of 3, by a report that said `keyed=False` in the same breath.
+
+    That is the worst possible failure for this feature. It fires precisely
+    when somebody acts on the advice to turn the key on, it accuses them of
+    tampering with their own store, and the only way to make it stop is to
+    stop believing the report.
+    """
+    with connect(migrated_db) as conn:
+        _write(conn, "billing uses Razorpay")
+        _write(conn, "deploys run from main", source="deploys", target="main")
+        before = attestation.report(conn, GROUP)
+        assert before.is_clean() and before.keyed is False
+
+    os.environ[attestation.KEY_ENV] = "a-key-set-after-the-fact"
+    try:
+        with connect(migrated_db) as conn:
+            after = attestation.report(conn, GROUP)
+    finally:
+        del os.environ[attestation.KEY_ENV]
+
+    assert after.altered == [], (
+        "turning the key on reported facts written before it as altered"
+    )
+    assert after.is_clean()
+    assert after.keyed is False, "unkeyed rows were described as keyed"
+
+
+def test_a_keyed_link_with_no_key_is_unverifiable_not_altered(migrated_db):
+    """The other direction, and the difference between "I checked and it
+    failed" and "I could not check". Verifying a keyed store on a machine
+    without the key - a reviewer's laptop, a restored dump, CI - must not
+    report the whole store as forged."""
+    os.environ[attestation.KEY_ENV] = "a-test-key"
+    try:
+        with connect(migrated_db) as conn:
+            _write(conn, "billing uses Razorpay")
+            with_key = attestation.report(conn, GROUP)
+    finally:
+        del os.environ[attestation.KEY_ENV]
+
+    assert with_key.is_clean() and with_key.keyed is True
+
+    with connect(migrated_db) as conn:
+        without = attestation.report(conn, GROUP)
+
+    assert without.altered == [], "a link that could not be checked was called altered"
+    assert [u["seq"] for u in without.unverifiable] == [1]
+    assert "were not checked at all" in without.strength
+    # Absence of evidence, not evidence of tampering.
+    assert without.is_clean()
+
+
+def test_a_different_key_is_named_as_the_likely_cause(migrated_db):
+    """Every keyed link failing at once, with the chain unbroken, is what a
+    rotated key looks like. This table records that a row was keyed and not
+    which key, so the two are not distinguishable here - and a report that
+    stayed silent would be handing an operator an alarm about their whole
+    store when the cause is an environment variable."""
+    os.environ[attestation.KEY_ENV] = "the-original-key"
+    try:
+        with connect(migrated_db) as conn:
+            _write(conn, "billing uses Razorpay")
+            _write(conn, "deploys run from main", source="deploys", target="main")
+    finally:
+        del os.environ[attestation.KEY_ENV]
+
+    os.environ[attestation.KEY_ENV] = "a-different-key"
+    try:
+        with connect(migrated_db) as conn:
+            rotated = attestation.report(conn, GROUP)
+    finally:
+        del os.environ[attestation.KEY_ENV]
+
+    assert len(rotated.altered) == 2
+    assert rotated.keyed_checked == 2
+    assert rotated.broken_links == []
+    assert rotated.likely_wrong_key is True
+
+
+def test_one_tampered_fact_is_not_read_as_a_wrong_key(migrated_db):
+    """The counterpart, and the reason `likely_wrong_key` is a ratio rather
+    than a guess: a single altered fact among keyed links is the finding this
+    whole module exists for, and must not be explained away."""
+    os.environ[attestation.KEY_ENV] = "the-original-key"
+    try:
+        with connect(migrated_db) as conn:
+            edge_id = _write(conn, "billing uses Razorpay")
+            _write(conn, "deploys run from main", source="deploys", target="main")
+            _set_property(conn, edge_id, "fact", "billing uses Stripe")
+            tampered = attestation.report(conn, GROUP)
+    finally:
+        del os.environ[attestation.KEY_ENV]
+
+    assert [a["seq"] for a in tampered.altered] == [1]
+    assert tampered.keyed_checked == 2
+    assert tampered.likely_wrong_key is False
+    assert not tampered.is_clean()
+
+
+def test_a_keyed_digest_is_never_recomputed_unkeyed_by_accident(migrated_db):
+    """`digest` refuses rather than falling back, because a fallback returns a
+    number that is simply different and every caller reads that difference as
+    the fact having changed."""
+    body = attestation.canonical({"fact": "anything"})
+
+    with pytest.raises(attestation.KeyUnavailable):
+        attestation.digest(attestation.GENESIS, body, use_key=True)
+
+    os.environ[attestation.KEY_ENV] = "a-test-key"
+    try:
+        # And the inverse: a key in the environment does not change what an
+        # unkeyed link's digest is.
+        asked_unkeyed = attestation.digest(attestation.GENESIS, body, use_key=False)
+    finally:
+        del os.environ[attestation.KEY_ENV]
+
+    assert asked_unkeyed == attestation.digest(attestation.GENESIS, body)
+    assert asked_unkeyed.startswith("sha256:")

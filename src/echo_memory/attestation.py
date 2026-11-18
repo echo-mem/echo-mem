@@ -27,6 +27,26 @@ With neither, this detects corruption and careless edits and nothing else.
 `report` says which is in force rather than implying a guarantee that is not
 there.
 
+## Turning the key on later
+
+Each row records the `keyed` flag it was written under, and verification uses
+that row's flag rather than the setting in force when somebody asks. So
+enabling `ECHO_MEMORY_ATTESTATION_KEY` on a store that has been running
+unkeyed leaves every existing link verifiable exactly as before, and new links
+become unforgeable from that point. The chain is then `mixed_keying`, which
+`strength` says plainly, because the old part is still only as strong as an
+external record of the head.
+
+Turning it off, or verifying somewhere the key is not configured, is the other
+direction and cannot work: those links report as `unverifiable`, which is this
+report declining to claim something it cannot check rather than an accusation.
+
+What this table does not record is WHICH key, so rotating the key reports every
+keyed link as altered at once. `Report.likely_wrong_key` names that pattern for
+what it usually is instead of leaving a reader to conclude their store was
+rewritten. `trust/vattest.py` carries a `key_id` per link and rotates properly;
+doing the same here needs a migration and a backfill.
+
 ## What this does not prove
 
 **Not the author.** `agent_id` is still a string the writer supplies. The
@@ -98,6 +118,16 @@ class AttestationError(Exception):
     """The request names something that cannot be done, and why."""
 
 
+class KeyUnavailable(AttestationError):
+    """This link was keyed and this process has no key to check it with.
+
+    Its own type because the answer it produces is different from every other
+    failure here: not "this fact changed" but "I cannot tell", and a report
+    that could not tell those apart would call an entire store forged every
+    time somebody verified it on a machine without the key.
+    """
+
+
 def keyed() -> bool:
     return bool(os.environ.get(KEY_ENV, ""))
 
@@ -119,16 +149,36 @@ def canonical(claims: dict) -> bytes:
                       ensure_ascii=False).encode()
 
 
-def digest(prev: str, body: bytes) -> str:
+def digest(prev: str, body: bytes, *, use_key: bool | None = None) -> str:
     """One link. HMAC when a key is configured, plain SHA-256 otherwise.
 
     The previous digest is inside the hash rather than beside it, which is
     what makes this a chain: a changed link invalidates every link after it,
     so tampering with one fact means recomputing the whole tail.
+
+    `use_key` decides which of the two algorithms this is, and the default,
+    None, means "whatever is configured now". That default is right on the
+    write path and wrong on the read path, which is the defect this parameter
+    exists to fix. Every row records the `keyed` flag it was written under, so
+    a verification asks for that one explicitly: an unkeyed row is checked
+    unkeyed even on a machine that now has a key, and a keyed row is never
+    checked with the wrong algorithm.
+
+    Asking for a keyed digest with no key raises rather than falling back to
+    SHA-256. A fallback would produce a digest that is simply a different
+    number, and the caller would read that difference as the fact having
+    changed.
     """
     material = prev.encode() + b"\n" + body
     key = os.environ.get(KEY_ENV, "")
-    if key:
+    if use_key is None:
+        use_key = bool(key)
+    if use_key:
+        if not key:
+            raise KeyUnavailable(
+                f"this link was attested with {KEY_ENV} set and this process "
+                f"does not have it, so its digest cannot be recomputed"
+            )
         return "hmac-sha256:" + hmac.new(key.encode(), material, hashlib.sha256).hexdigest()
     return "sha256:" + hashlib.sha256(material).hexdigest()
 
@@ -307,9 +357,45 @@ class Report:
     #: Attestations whose fact is gone, reconciled against erasure_event.
     erased: int = 0
     vanished: list[str] = field(default_factory=list)
+    #: Links that were attested keyed while this process has no key. Not a
+    #: finding about the data: it is this report declining to claim something
+    #: it cannot check.
+    unverifiable: list[dict] = field(default_factory=list)
+    #: How many keyed links were actually recomputed. The denominator for
+    #: `likely_wrong_key`, and without it "3 altered" cannot be told apart
+    #: from "3 altered out of 3".
+    keyed_checked: int = 0
 
     def is_clean(self) -> bool:
+        """Whether anything was found wrong. Deliberately not false for
+        `unverifiable`: a link that could not be checked is an absence of
+        evidence, and calling it tampering would be a false accusation every
+        time somebody verifies a store on a machine without the key."""
         return not (self.altered or self.broken_links or self.vanished)
+
+    @property
+    def likely_wrong_key(self) -> bool:
+        """Every keyed link that was checked failed, and nothing else did.
+
+        One fact being altered is a finding. Every keyed fact in a scope being
+        altered, all at once, with the chain still continuous, is not a story
+        about the data: a rewrite that touched all of them would have to leave
+        `prev_digest` consistent at every link, which means recomputing the
+        whole tail, which a key is what prevents. The ordinary cause is that
+        `ECHO_MEMORY_ATTESTATION_KEY` is not the key these rows were written
+        with.
+
+        A judgement, not a measurement: this table records whether a row was
+        keyed and not which key, so a rotated key and a forged store are not
+        distinguishable here. Said as a suspicion so a reader checks the
+        variable before believing the alarm.
+        """
+        return (
+            self.keyed_checked > 0
+            and len(self.altered) == self.keyed_checked
+            and not self.broken_links
+            and all(a.get("keyed") for a in self.altered)
+        )
 
     @property
     def strength(self) -> str:
@@ -318,16 +404,26 @@ class Report:
         A report that says "verified" without this is the thing a reader would
         quote, and it would be wrong unkeyed and unwitnessed.
         """
+        caveat = ""
+        if self.unverifiable:
+            caveat = (
+                f"; {len(self.unverifiable)} link(s) were attested with a key "
+                f"this process does not have and were not checked at all"
+            )
         if self.mixed_keying:
             return (
                 "part of this chain is keyed and part is not; the unkeyed "
                 "part is only as strong as an external record of the head"
+                + caveat
             )
         if self.keyed:
-            return f"keyed, so a digest cannot be recomputed without {KEY_ENV}"
+            return (
+                f"keyed, so a digest cannot be recomputed without {KEY_ENV}"
+                + caveat
+            )
         return (
             "unkeyed, so this is only as strong as a record of the head kept "
-            "outside this database"
+            "outside this database" + caveat
         )
 
 
@@ -356,7 +452,7 @@ def report(conn, group_id: str) -> Report:
     out.mixed_keying = len(keyings) > 1
 
     expected_prev = GENESIS
-    for edge_id, seq, prev_digest, stored, _k, attested_at in rows:
+    for edge_id, seq, prev_digest, stored, row_keyed, attested_at in rows:
         if prev_digest != expected_prev:
             out.broken_links.append({
                 "seq": seq, "edge_id": edge_id,
@@ -374,12 +470,26 @@ def report(conn, group_id: str) -> Report:
             out.vanished.append(edge_id)
             continue
 
+        # The algorithm this row was written under, not the one configured
+        # now. Reading it from the environment instead is what made enabling
+        # a key report every pre-existing fact as altered: measured on a live
+        # store, 3 of 3, while the same report said keyed=False. Supersession
+        # was already protected from reading as tampering; this is the same
+        # promise for a setting change.
+        try:
+            recomputed = digest(prev_digest, body, use_key=row_keyed)
+        except KeyUnavailable:
+            out.unverifiable.append({"seq": seq, "edge_id": edge_id})
+            continue
+        if row_keyed:
+            out.keyed_checked += 1
+
         # Recomputed with the stored prev_digest rather than the expected one,
         # so a break earlier in the chain does not report every fact after it
         # as altered. One cause, one finding.
-        if digest(prev_digest, body) != stored:
+        if recomputed != stored:
             out.altered.append({
-                "seq": seq, "edge_id": edge_id,
+                "seq": seq, "edge_id": edge_id, "keyed": bool(row_keyed),
                 "explanation": _explain(conn, group_id, edge_id, attested_at),
             })
 
@@ -402,6 +512,7 @@ def report(conn, group_id: str) -> Report:
             "group_id": group_id, "n_attested": out.n_attested,
             "altered": len(out.altered), "broken_links": len(out.broken_links),
             "vanished": len(out.vanished), "keyed": out.keyed,
+            "unverifiable": len(out.unverifiable),
         }},
     )
     return out

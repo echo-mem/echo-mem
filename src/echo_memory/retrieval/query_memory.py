@@ -14,7 +14,7 @@ from echo_memory import erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.db import agtype_str as _agtype_str
 from echo_memory.infra.logging import get_logger, log_query_memory
-from echo_memory.retrieval import bm25, salience
+from echo_memory.retrieval import authored, bm25, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
 from echo_memory.retrieval.fusion import K as RRF_K
 
@@ -617,6 +617,33 @@ ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
 # to what a query returns.
 RERANK = os.environ.get("ECHO_MEMORY_RERANK", "").lower() in ("1", "true", "yes")
 
+# What the graph hop is allowed to traverse when it runs.
+#
+# `structural` is the hop as it has always been: every fact touching either
+# entity of a fact that matched. It is what measured -0.099 to -0.142 MRR on
+# three of four shapes.
+#
+# `authored` traverses only an edge a caller typed as a relation between
+# claims - today, one carrying a causal_hint - and then the facts on the far
+# end of it. See retrieval/authored.py for why that distinction is the one
+# SoMem's graph view rests on, and for the reason this cannot be measured on
+# real data yet: 6 authored links across 2,001 facts.
+#
+# This selects what the hop walks. It does not turn the hop on; graph_hops and
+# ECHO_MEMORY_ROUTE_EXPANSION still do that, and both are still off.
+EXPANSION_STRUCTURAL = "structural"
+EXPANSION_AUTHORED = "authored"
+EXPANSIONS = (EXPANSION_STRUCTURAL, EXPANSION_AUTHORED)
+EXPANSION = os.environ.get("ECHO_MEMORY_EXPANSION", EXPANSION_STRUCTURAL).strip().lower()
+if EXPANSION not in EXPANSIONS:
+    # Loudly, at import. A misspelt value that silently fell back to
+    # structural would be a setting that is right while the behaviour it names
+    # is absent, which this project has shipped twice and caught late both
+    # times.
+    raise ValueError(
+        f"ECHO_MEMORY_EXPANSION={EXPANSION!r} is not one of {list(EXPANSIONS)}"
+    )
+
 # Whether verification state is allowed to affect a read, and whether derived
 # lessons enter as a channel. Both default OFF, which is not timidity: every
 # existing store has no verification rows at all, so turning these on by
@@ -1046,7 +1073,7 @@ def query_memory(
     *, use_mmr: bool = False, floor: float | None = None, vector_only: bool = False,
     rrf_k: int | None = None, graph_hops: int | None = None,
     rerank: bool | None = None,
-    expansion_weight: float | None = None,
+    expansion_weight: float | None = None, expansion: str | None = None,
     lexical_bm25: bool | None = None, route_expansion: bool | None = None,
     as_of: int | None = None, use_salience: bool | None = None,
     about: list[str] | None = None,
@@ -1197,9 +1224,21 @@ def query_memory(
             # tell a multi hop question from a single hop one, rather than for
             # turning it on for everybody.
             seeds = sorted(content, key=content.get, reverse=True)[:GRAPH_SEEDS]
-            neighbours = _graph_candidates(
-                conn, group_id, seeds, LIST_DEPTH, as_of=as_of
-            )
+            # Which hop, chosen here rather than inside the walk, so the two
+            # stay separately measurable and the ablation can name one.
+            walking = expansion or EXPANSION
+            if walking not in EXPANSIONS:
+                raise ValueError(
+                    f"expansion={walking!r} is not one of {list(EXPANSIONS)}"
+                )
+            if walking == EXPANSION_AUTHORED:
+                neighbours = authored.candidates(
+                    conn, group_id, seeds, LIST_DEPTH, as_of=as_of
+                )
+            else:
+                neighbours = _graph_candidates(
+                    conn, group_id, seeds, LIST_DEPTH, as_of=as_of
+                )
             # Filtered here rather than in the traversal SQL. The hop walks
             # OUTWARD from what the content channels found, so unfiltered it
             # would put facts about other entities back into a scoped answer,
