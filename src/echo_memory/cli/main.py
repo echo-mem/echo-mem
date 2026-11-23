@@ -1203,6 +1203,24 @@ def main(argv: list[str] | None = None) -> int:
                 ("+ rerank", {"rerank": True}),
                 ("+ rerank + hop", {"rerank": True, "graph_hops": 1}),
                 ("+ salience", {"use_salience": True}),
+                # The chain between two named entities, as its own list. This
+                # is the v1b row: multihop is the shape it is built for and
+                # MRR 0.212 is the number it has to beat. The other three
+                # shapes are the control - a query naming one entity finds no
+                # pair and the channel returns nothing, so anything other than
+                # a flat row there means it is firing where it should not.
+                ("+ path channel", {"use_paths": True}),
+                # Two weights rather than one, for the reason the expansion
+                # rows give: a single arbitrary constant that happened to win
+                # would be a tuned number reported as a finding.
+                ("+ path at 0.5", {"use_paths": True, "path_weight": 0.5}),
+                ("+ path at 2.0", {"use_paths": True, "path_weight": 2.0}),
+                # Three edge chains. Available, unmeasured, and separated from
+                # the default so one row cannot be read as evidence for both.
+                ("+ path depth 3", {"use_paths": True, "path_depth": 3}),
+                # Against the hop rather than against shipping, since both
+                # claim the same shape and only one can be the answer to it.
+                ("+ path + hop", {"use_paths": True, "graph_hops": 1}),
             ]
 
         results = []

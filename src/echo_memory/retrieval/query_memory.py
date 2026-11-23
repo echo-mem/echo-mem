@@ -14,7 +14,7 @@ from echo_memory import erasure
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 from echo_memory.infra.db import agtype_str as _agtype_str
 from echo_memory.infra.logging import get_logger, log_query_memory
-from echo_memory.retrieval import authored, bm25, salience
+from echo_memory.retrieval import authored, bm25, paths, salience
 from echo_memory.retrieval.fusion import LIST_DEPTH, reciprocal_rank_fusion
 from echo_memory.retrieval.fusion import K as RRF_K
 
@@ -617,6 +617,20 @@ ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
 # to what a query returns.
 RERANK = os.environ.get("ECHO_MEMORY_RERANK", "").lower() in ("1", "true", "yes")
 
+# Whether the chain between two entities the query named enters as its own
+# ranked list. Off until the eval says otherwise, like everything else here.
+#
+# This is not the graph hop and does not turn it on. The hop expands to every
+# fact touching either endpoint of a seed; this returns the edges of a path and
+# returns them adjacent, which is the distinction retrieval/paths.py exists to
+# test. The number it has to beat is published: multihop MRR 0.212 internally,
+# and LoCoMo multi hop recall@1 0.088.
+USE_PATHS = os.environ.get("ECHO_MEMORY_PATHS", "").lower() in ("1", "true", "yes")
+
+# How deep a chain may be. Two is the shape the harness scores. See
+# retrieval/paths.py for why three is available and not enabled.
+PATH_DEPTH = int(os.environ.get("ECHO_MEMORY_PATH_DEPTH", paths.DEFAULT_MAX_DEPTH))
+
 # What the graph hop is allowed to traverse when it runs.
 #
 # `structural` is the hop as it has always been: every fact touching either
@@ -996,6 +1010,7 @@ def _missing_similarity(
 def _annotate(
     facts: list[dict], similarity: dict[str, float],
     vector_ids: set[str], lexical_ids: set[str], graph_ids: set[str],
+    path_ids: set[str] | None = None,
 ) -> None:
     """Say why each fact is in the answer, in place.
 
@@ -1017,15 +1032,21 @@ def _annotate(
                 is no embedding to compare against and no honest number to
                 give. Omitted rather than faked.
     matched     which channels found it, as information rather than quality.
-                `vector`, `lexical`, and `graph` for a fact the one hop
-                expansion reached. The hop is the only channel that ADDS
-                candidates the content channels did not return, so leaving it
-                out of this list did not mean an empty `matched` - it meant the
-                loop below skipped the fact entirely, and it came back with no
-                rank, no score and no matched at all. Salience appends a list
-                too, but it is a permutation of what the content channels
-                found and can reorder an answer without adding to one, so it
-                is not a channel in this sense and is deliberately absent.
+                `vector`, `lexical`, `graph` for a fact the one hop expansion
+                reached, and `path` for a fact lying on a chain between two
+                entities the query named. Those two ADD candidates the content
+                channels did not return, so leaving one out of this list did
+                not mean an empty `matched` - it meant the loop below skipped
+                the fact entirely, and it came back with no rank, no score and
+                no matched at all. Salience appends a list too, but it is a
+                permutation of what the content channels found and can reorder
+                an answer without adding to one, so it is not a channel in this
+                sense and is deliberately absent.
+
+                `path` is worth reading as evidence rather than as a score: it
+                says this fact is one link of a chain the retriever assembled,
+                and a caller showing its work can say which two things the
+                chain joined.
 
     The null that used to appear here caused real harm and the shape of it is
     worth keeping. score was omitted for lexical-only facts, a customer sorted
@@ -1046,6 +1067,7 @@ def _annotate(
         matched = [
             name for name, ids in (
                 ("vector", vector_ids), ("lexical", lexical_ids), ("graph", graph_ids),
+                ("path", path_ids or set()),
             )
             if edge_id in ids
         ]
@@ -1078,6 +1100,8 @@ def query_memory(
     as_of: int | None = None, use_salience: bool | None = None,
     about: list[str] | None = None,
     trust: bool | None = None, lessons: bool | None = None,
+    use_paths: bool | None = None, path_weight: float | None = None,
+    path_depth: int | None = None,
 ) -> dict:
     """top_k has no default here: DEFAULT_TOP_K=10 is applied at the MCP tool
     schema layer (PR5), which is the natural place to declare it, rather
@@ -1142,8 +1166,11 @@ def query_memory(
     similarity: dict[str, float] = {}
     query_embedding: list[float] | None = None
     # Empty on every path but a hop that actually ran, which keeps a digest
-    # annotating nothing - see _annotate.
+    # annotating nothing - see _annotate. Declared here rather than beside the
+    # channel for the same reason graph_ids is: _annotate runs on the digest
+    # and lexical_only paths too, where neither channel exists.
     graph_ids: list[str] = []
+    path_ids: list[str] = []
     if digest:
         ranked_ids = _digest_candidates(conn, group_id, top_k, as_of=as_of)
         vector_ids, lexical_ids = [], []
@@ -1182,7 +1209,13 @@ def query_memory(
         k = rrf_k if rrf_k is not None else RRF_K
         content = reciprocal_rank_fusion([vector_ids, lexical_ids], k=k)
         lists = [vector_ids, lexical_ids]
-        weights: list[float] | None = None
+        # One weight per list, kept alongside rather than rebuilt when a
+        # channel is appended. The previous shape - rebuild the whole list at
+        # the point the hop is added, then append to it in three more places -
+        # could not survive a second optional channel without the weights
+        # silently sliding onto the wrong one, which fusion.py refuses to let
+        # happen quietly and which no test distinguishes from a bad weight.
+        list_weights: list[float] = [1.0, 1.0]
         # Routed, not configured. graph_hops=None asks the router; an explicit
         # 0 or 1 overrides it, which is what the harness needs to score the
         # router against always-on and always-off.
@@ -1252,14 +1285,39 @@ def query_memory(
             graph_ids = neighbours
             lists.append(neighbours)
             # What a neighbour's top slot is worth against a match's top
-            # slot. None means the same, which is plain RRF and what the two
+            # slot. 1.0 means the same, which is plain RRF and what the two
             # failed attempts above both used. See fusion.py: the hypothesis
             # this exists to test is that expansion failed because of the
             # fusion rather than because of the walk, since the walk demonstrably
             # finds the second fact - multihop recall@10 0.635 to 0.769 - and
             # only ranks it badly.
-            if expansion_weight is not None:
-                weights = [1.0] * (len(lists) - 1) + [expansion_weight]
+            list_weights.append(expansion_weight or 1.0)
+
+        # The chain between two entities the query named, as its own list.
+        #
+        # Deliberately NOT gated on `hops`. The hop and this answer different
+        # questions and failed differently, so wiring one behind the other
+        # would make the ablation unable to name which of them moved a number.
+        #
+        # It is its own router and costs one indexed node lookup to decline: a
+        # query that names fewer than two entities in this scope returns []
+        # before any traversal, which is every query of the three shapes where
+        # expansion measured as harmful.
+        walking_paths = USE_PATHS if use_paths is None else use_paths
+        if walking_paths:
+            path_ids = paths.candidates(
+                conn, group_id, query, LIST_DEPTH, as_of=as_of,
+                max_depth=path_depth if path_depth is not None else PATH_DEPTH,
+            )
+            # Same scoping as the hop, and for the same reason: the walk goes
+            # outward from entities the query named, so an `about` filtered
+            # answer must not get facts about other entities back through it.
+            if only is not None:
+                allowed = set(only)
+                path_ids = [e for e in path_ids if e in allowed]
+            if path_ids:
+                lists.append(path_ids)
+                list_weights.append(path_weight if path_weight is not None else 1.0)
         # Salience last, over the candidates the content channels found, so
         # it can reorder an answer but never add to one. It is a prior on
         # facts, not a signal about this query.
@@ -1267,12 +1325,11 @@ def query_memory(
         if salient:
             by_content = sorted(content, key=content.get, reverse=True)
             lists.append(salience.rank(conn, group_id, by_content))
-            if weights is not None:
-                # Salience is a prior on facts rather than a signal about this
-                # query, so it gets the expansion's weight rather than a
-                # content channel's. Full weight here would reintroduce
-                # exactly the problem the weight exists to test.
-                weights.append(expansion_weight or 1.0)
+            # Salience is a prior on facts rather than a signal about this
+            # query, so it gets the expansion's weight rather than a content
+            # channel's. Full weight here would reintroduce exactly the
+            # problem the weight exists to test.
+            list_weights.append(expansion_weight or 1.0)
         # Trust and lessons, last and in that order, over the candidates the
         # content channels already found. Same restraint as salience: they
         # reorder an answer and can never add to one. A fact nothing scored
@@ -1288,11 +1345,15 @@ def query_memory(
             advisory.append(lesson_mod.for_query(conn, group_id, sorted(content, key=content.get, reverse=True)))
         for extra in advisory:
             lists.append(extra)
-            if weights is not None:
-                weights.append(expansion_weight or 1.0)
+            list_weights.append(expansion_weight or 1.0)
+        # Passed only when something is actually weighted. An all-1.0 weight
+        # vector is arithmetically identical to None, but passing it always
+        # would mean every existing measurement ran down a different branch
+        # than the one it was taken on.
+        weights = list_weights if any(w != 1.0 for w in list_weights) else None
         fused = (
             reciprocal_rank_fusion(lists, k=k, weights=weights)
-            if (hops or salient or advisory) else content
+            if (hops or salient or advisory or path_ids) else content
         )
         by_score = sorted(fused, key=fused.get, reverse=True)
 
@@ -1350,7 +1411,8 @@ def query_memory(
             _missing_similarity(conn, group_id, query_embedding, unscored)
         )
     _annotate(
-        facts, similarity, set(vector_ids), set(lexical_ids), set(graph_ids)
+        facts, similarity, set(vector_ids), set(lexical_ids), set(graph_ids),
+        set(path_ids),
     )
 
     log_query_memory(
