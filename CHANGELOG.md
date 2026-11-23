@@ -7,6 +7,72 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## Unreleased
+
+**Multi hop retrieval: the chain between two named entities, as its own ranked
+list.** This is the v1b feature the README has been publishing a number for
+since the harness could score the shape, and it is the first time graph
+structure has earned a place in `query_memory` on measurement rather than on a
+plausible story.
+
+The received reading of three failed expansion experiments was that the graph
+does not help retrieval here. That reading was incomplete in a way the same
+ablation recorded: the one hop expansion raised multihop recall@10 from 0.635
+to 0.769 while moving MRR by +0.003. It finds the second fact. It ranks it
+badly, because it returns that fact somewhere inside fifty neighbours of
+whatever the query already matched.
+
+A multihop question is two entities with no edge between them, and its answer
+is both edges of the chain joining them through some third. `retrieval/paths.py`
+returns exactly those edges and returns them **adjacent**, so reciprocal rank
+fusion sees the two facts of one answer a rank apart instead of forty. Nothing
+else about the fusion changes.
+
+`echo-memory eval --ablate --shape multihop`, this author's store, n=259:
+
+    configuration        R@3     R@10    MRR     dMRR      95% CI
+    shipping             0.398   0.745   0.242      -       baseline
+    + graph hop          0.336   0.734   0.213   -0.0290  [-0.049,-0.008]
+    + path channel       0.494   0.764   0.280   +0.0378  [+0.024,+0.052]
+
+It is the only configuration in that table that moves MRR with an interval
+clear of zero. R@3 rising 0.398 to 0.494 is the adjacency claim coming true and
+is the largest move in the table.
+
+Three things the same run decided, so none of them is a judgement call. The
+fusion weight is 1.0, because 0.5 is worse and 2.0 is identical within noise,
+so no tuned constant is left behind. Depth stays at two edges, because three
+scores +0.0376 against two's +0.0378 and costs an extra query per side. And the
+hop and this channel **do not compose**: `+ path + hop` is +0.0216 with an
+interval including zero, worse than the path channel alone, because fifty
+neighbours outvote a two fact chain.
+
+What this is not: it is not the Personalised PageRank the design doc names for
+v1b. PPR ranks nodes by proximity to the seeds and scores the two edges of a
+chain independently, which is the defect being fixed rather than a different
+approach to it. PPR remains the right tool for the general associative case,
+and that case is `entity_single`, where expansion has measured at -0.099.
+
+Facts the channel found carry `path` in `matched`, so a caller showing its work
+can say which two things the chain joined.
+
+**Entity resolution is no longer indistinguishable from chance on this store,
+and that is not permission to turn silent merging back on.** `echo-memory
+calibrate` now reads 25 confirmed same and 155 confirmed distinct, AUC 0.763
+with a 95% interval of [0.620, 0.889]. The interval published until now,
+[0.421, 0.881] around AUC 0.666, included 0.5 and no longer does.
+
+The gate was never the AUC. It is precision at the bar where a merge happens
+without asking, and at HIGH_THRESHOLD 0.92 that is 80.0% over five reviewed
+pairs. One in five unattended merges fusing two different entities is not a
+trade worth making, and five is too thin to act on in either direction. The
+censoring caveat is also unchanged and is the harder half: every judged pair was
+already above the review bar, so recall over duplicates nobody was shown is not
+estimable from this data. A 20 pair random draw from below the bar returned 20
+obvious non duplicates, which is what a rare positive looks like in a space of
+269,000 pairs, and says the sampling has to be stratified near the bar rather
+than uniform.
+
 ## 0.6.2
 
 **Expansion can now follow links somebody asserted, instead of shared

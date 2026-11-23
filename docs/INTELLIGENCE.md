@@ -1481,6 +1481,8 @@ Every variable this branch adds, plus the two retrieval flags that gate it.
 | `ECHO_MEMORY_LESSONS` | **unset, off** | Lets derived lessons enter as a reordering channel. Never adds a candidate |
 | `ECHO_MEMORY_RERANK` | **unset, off** | Reorders the fused candidates by cosine to the query before truncating |
 | `ECHO_MEMORY_EXPANSION` | `structural` | What the graph hop may traverse when it runs. `authored` traverses only edges a caller typed as a relation between claims, then the facts on the far end. Does not turn the hop on; an unrecognised value raises at import |
+| `ECHO_MEMORY_PATHS` | **unset, off** | Adds the chain between two entities the query named as its own ranked list, both edges adjacent. Measured at +0.0378 MRR [+0.024, +0.052] on the multihop shape, n=259. On a query naming one entity, or two that already share an edge, it returns nothing before any traversal, which is the three shapes where expansion has measured as harmful. Do not enable alongside the graph hop: together they score worse than this alone |
+| `ECHO_MEMORY_PATH_DEPTH` | `2` | How many edges a chain may have. 3 is available and measured at +0.0376 against 2's +0.0378, so it costs a query per side and buys nothing on this store. Outside 2..3 raises |
 | `ECHO_MEMORY_MAX_GRAPH_WRITERS` | **unset, gate off** | 1 takes a graph wide write lock. Above 1 turns the gate off. Present but unparseable fails safe at 1. Costs 2.6x to 2.8x write throughput when on |
 | `ECHO_MEMORY_VERIFICATION_KEYS` | unset, unkeyed | `key_id:hexkey[,...]` for the verification chain. A malformed entry raises |
 | `ECHO_MEMORY_VERIFICATION_KEY_ID` | unset, first entry | Which of those signs from now on. A named key that is absent raises |

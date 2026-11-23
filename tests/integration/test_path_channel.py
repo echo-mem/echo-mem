@@ -374,7 +374,9 @@ def test_a_weight_applies_to_the_path_list_and_not_another(migrated_db):
             use_paths=True, path_weight=8.0,
         )
 
-    order = lambda r: [str(f["fact_id"]) for f in r["facts"]]  # noqa: E731
+    def order(r):
+        return [str(f["fact_id"]) for f in r["facts"]]
+
     assert order(heavy)[:2] == order(weighted)[:2] or order(heavy) != order(plain), (
         "raising the path weight changed nothing, so the weight is not "
         "reaching the path list"
