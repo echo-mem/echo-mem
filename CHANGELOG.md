@@ -28,24 +28,37 @@ returns exactly those edges and returns them **adjacent**, so reciprocal rank
 fusion sees the two facts of one answer a rank apart instead of forty. Nothing
 else about the fusion changes.
 
-`echo-memory eval --ablate --shape multihop`, this author's store, n=259:
+`echo-memory eval --ablate --limit 60`, this author's store, all four shapes:
 
-    configuration        R@3     R@10    MRR     dMRR      95% CI
-    shipping             0.398   0.745   0.242      -       baseline
-    + graph hop          0.336   0.734   0.213   -0.0290  [-0.049,-0.008]
-    + path channel       0.494   0.764   0.280   +0.0378  [+0.024,+0.052]
+    shape           shipping MRR   + path channel   dMRR      95% CI
+    entity_pair         0.734          0.734      +0.0000  [+0.000,+0.000]
+    entity_single       0.698          0.698      +0.0000  [+0.000,+0.000]
+    prose               0.975          0.975      +0.0000  [+0.000,+0.000]
+    multihop            0.199          0.276      +0.0772  [+0.045,+0.112]
 
-It is the only configuration in that table that moves MRR with an interval
-clear of zero. R@3 rising 0.398 to 0.494 is the adjacency claim coming true and
-is the largest move in the table.
+and on multihop, R@3 rises 0.283 to 0.500.
 
-Three things the same run decided, so none of them is a judgement call. The
-fusion weight is 1.0, because 0.5 is worse and 2.0 is identical within noise,
-so no tuned constant is left behind. Depth stays at two edges, because three
-scores +0.0376 against two's +0.0378 and costs an extra query per side. And the
-hop and this channel **do not compose**: `+ path + hop` is +0.0216 with an
-interval including zero, worse than the path channel alone, because fifty
-neighbours outvote a two fact chain.
+**The three zeroes are the result, as much as the gain is.** They are exact
+rather than noise: the channel returns nothing at all for a query naming one
+entity, or two that already share an edge, so the answer is byte identical to
+shipping. No previous expansion could do that. The graph hop costs -0.099 to
+-0.142 MRR on those same three shapes because it runs on every query and
+dilutes the ones a single fact answers, and that is why it has stayed off
+through three attempts.
+
+Two earlier versions of this were rejected by that same table, and both are
+recorded in `retrieval/paths.py` rather than quietly fixed, because each looked
+right. Declining the direct edge between two named entities is not the same as
+declining the pair, and the version that only did the former returned every
+two edge detour on exactly the questions one fact answers: -0.0535 MRR on
+entity_pair. And asking whether a node's NAME CONTAINS a query word, which is
+what the existing router does and is correct for the bool it computes, matches
+five or eight nodes for a two entity question; the version that did that
+declined every multihop case and scored +0.0000 everywhere.
+
+The fusion weight is 1.0 because the eval declined to need one, so no tuned
+constant is left behind. Depth stays at two edges. The hop and this channel do
+not compose and must not both be enabled.
 
 What this is not: it is not the Personalised PageRank the design doc names for
 v1b. PPR ranks nodes by proximity to the seeds and scores the two edges of a

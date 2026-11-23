@@ -135,6 +135,56 @@ def test_two_entities_that_already_share_an_edge_contribute_nothing(migrated_db)
     assert got == []
 
 
+def test_a_direct_edge_cancels_the_pair_even_when_a_detour_exists(migrated_db):
+    """The regression the eval caught, pinned so it cannot come back.
+
+    The first version declined the one edge chain and then carried on to depth
+    two, returning every detour joining the same two entities through some
+    other middle. Measured, that cost -0.0535 MRR on entity_pair, whose queries
+    name exactly this: two entities that ARE joined, asked about the fact that
+    joins them.
+
+    A question one fact answers does not become a chain question because a
+    longer route also exists.
+    """
+    with connect(migrated_db) as conn:
+        direct = _fact(conn, "alpha", "omega", "alpha calls omega directly",
+                       HashEmbedder())
+        detour_a = _fact(conn, "alpha", "the pool", "alpha borrows from the pool",
+                         HashEmbedder())
+        detour_b = _fact(conn, "the pool", "omega", "the pool pages omega",
+                         HashEmbedder())
+        got = paths.candidates(conn, GROUP, "alpha omega", limit=50)
+
+    assert got == [], (
+        "a detour was returned for two entities that already share an edge: "
+        f"{got} (direct={direct}, detour={detour_a},{detour_b})"
+    )
+
+
+def test_a_query_naming_more_than_two_entities_is_declined(migrated_db):
+    """The other half of the same regression, and the one `prose` exposed.
+
+    A prose query is a fact's own words with its entity names stripped, so any
+    node whose name merely contains a leftover word gets matched. The channel
+    then found two endpoints in a question about nothing in particular and
+    invented a chain between them: -0.0569 MRR.
+
+    The question this channel answers has exactly two ends. Anything that looks
+    like more is a substring collision.
+    """
+    with connect(migrated_db) as conn:
+        _fact(conn, "alpha", "the pool", "alpha borrows from the pool", HashEmbedder())
+        _fact(conn, "the pool", "omega", "the pool pages omega", HashEmbedder())
+        _fact(conn, "gamma", "delta", "gamma signals delta", HashEmbedder())
+
+        # Two named, unconnected: the shape this channel is for.
+        assert paths.candidates(conn, GROUP, "alpha omega", limit=50) != []
+        # Four named: a question with four ends is not a question about how two
+        # things relate.
+        assert paths.candidates(conn, GROUP, "alpha omega gamma delta", limit=50) == []
+
+
 def test_a_superseded_link_breaks_the_chain(migrated_db):
     """`as_of` is honoured, so a chain is the chain as the store believed it.
 

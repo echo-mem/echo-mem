@@ -79,44 +79,59 @@ against 44ms.
 
 ## What it measured
 
-`echo-memory eval --ablate --shape multihop`, this author's store, 2026-11-23,
-n=259. Every other row of that table is flat or worse; this is the only
-configuration that moves MRR with an interval clear of zero.
+`echo-memory eval --ablate --limit 60`, this author's store, 2026-11-23. All
+four shapes, because a channel measured only on the shape it was built for is
+the mistake that cost the graph hop three attempts.
 
-    configuration        R@3     R@10    MRR     dMRR      95% CI
-    shipping             0.398   0.745   0.242      -       baseline
-    + graph hop          0.336   0.734   0.213   -0.0290  [-0.049,-0.008]
-    + path channel       0.494   0.764   0.280   +0.0378  [+0.024,+0.052]
-    + path at 0.5        0.463   0.757   0.266   +0.0243  [+0.014,+0.036]
-    + path at 2.0        0.490   0.768   0.279   +0.0373  [+0.021,+0.054]
-    + path depth 3       0.490   0.768   0.280   +0.0376  [+0.024,+0.052]
-    + path + hop         0.456   0.780   0.264   +0.0216  [-0.003,+0.046]
+    shape           shipping MRR   + path channel   dMRR      95% CI
+    entity_pair         0.734          0.734      +0.0000  [+0.000,+0.000]
+    entity_single       0.698          0.698      +0.0000  [+0.000,+0.000]
+    prose               0.975          0.975      +0.0000  [+0.000,+0.000]
+    multihop            0.199          0.276      +0.0772  [+0.045,+0.112]
 
-Four things that table decides, so none of them has to be argued:
+and on multihop, R@3 rises 0.283 to 0.500.
 
-**R@3 is where it lands, 0.398 to 0.494.** That is the adjacency claim coming
-true and it is the largest move in the table. The chain's two facts arrive
-together or not at all, so the rank at which a question becomes answerable
-stops being the rank of whichever of the two the content channels happened to
-like less.
+**Those three zeroes are exact, not noise.** The channel returns nothing at all
+on a query naming one entity, or two that already share an edge, so the answer
+is byte identical to shipping. That is what every previous expansion could not
+do: the hop costs -0.099 to -0.142 MRR on these same three shapes, because it
+runs on every query and dilutes the ones a single fact answers.
 
-**The weight is 1.0 and nothing had to be tuned to get it.** 0.5 is worse
-(+0.0243) and 2.0 is the same within noise (+0.0373). fusion.py's rule is that
-nothing but the eval decides a weight; the eval declined to need one, which is
-the cheapest possible answer and the only one that does not leave a tuned
-constant behind.
+**R@3 doubling is the adjacency claim coming true**, and it is the largest move
+in the table. The chain's two facts arrive together or not at all, so the rank
+at which a question becomes answerable stops being the rank of whichever of the
+two the content channels happened to like less.
 
-**Depth 3 buys nothing: +0.0376 against +0.0378.** Every chain this store has
-is two edges long, so the third level is a query that finds what the second
-already found. DEFAULT_MAX_DEPTH stays 2 on evidence rather than on caution.
+## Two versions this measurement rejected
 
-**The hop and this channel do not compose.** `+ path + hop` is +0.0216 with an
-interval including zero, worse than the path channel alone. The hop puts fifty
-neighbours into the fusion and they outvote a two fact chain, which is the same
-dilution the hop has been measured doing three times. Do not enable both.
+Kept because each one looks right and the eval disagreed, which is the only
+reason either was found.
+
+**Declining the direct edge is not the same as declining the pair.** The first
+version refused a one edge chain between the two named entities and then
+carried on to depth two, returning every detour joining them through some other
+middle. entity_pair queries name two entities that ARE joined, so this fired on
+all of them: -0.0535 MRR [-0.102,-0.009], and prose -0.0569 [-0.111,-0.011].
+A question one fact answers does not become a chain question because a longer
+route also exists. `_any_adjacent` is the fix.
+
+**Asking whether a node's name contains a query word is backwards.** The second
+version matched that way, which is what `needs_expansion` does and is correct
+for the bool it computes. For deciding WHICH two entities a question is about
+it matched five or eight nodes per query, the cap declined them all, and the
+multihop gain went to +0.0000 while the three control shapes stayed clean. The
+fix is `named_nodes` asking the question the other way round: does this
+entity's name appear in what was typed. See that function for both failure
+directions.
+
+The lesson is the cheaper one of the two: a control shape that scores exactly
+0.0000 proves the channel declined, and a control shape is the only thing that
+can tell "correctly inert" from "broken".
 """
 
 from __future__ import annotations
+
+import re
 
 from echo_memory.infra.db import GRAPH_NAME as GRAPH
 
@@ -151,13 +166,28 @@ MAX_FRONTIER = 256
 #: was measured failing at.
 MAX_PATHS_PER_PAIR = 3
 
-#: Pairs of named entities considered.
+#: Entities a query may name and still be asking how two things relate.
 #:
-#: `needs_expansion` stops at eight nodes, which is 28 pairs. Most queries name
-#: two things; a query that appears to name eight has matched on a common
-#: substring and its pairs are noise. Six is the pairs available from four
-#: nodes, and four names in one question is already generous.
-MAX_PAIRS = 6
+#: This is a gate, and it was added because the first version did not have one
+#: and the eval caught it. Measured 2026-11-23, n=60 per shape, with the
+#: channel firing whenever two named nodes were found anywhere in the query:
+#:
+#:     shape           dMRR      95% CI
+#:     entity_pair    -0.0535  [-0.102,-0.009]
+#:     prose          -0.0569  [-0.111,-0.011]
+#:     multihop       +0.0495  [+0.013,+0.088]
+#:
+#: Two shapes clear of zero in the wrong direction is the same failure the
+#: neighbourhood hop has three times, arriving by a new route. `prose` is the
+#: one that names the cause: its queries are a fact's own words with the entity
+#: names stripped, so any node whose name merely CONTAINS a leftover word gets
+#: matched, and a question about nothing in particular acquires two endpoints
+#: and a chain between them.
+#:
+#: Two, because the question this channel answers has exactly two ends. A query
+#: that appears to name five entities has matched on common substrings, and the
+#: ten pairs it produces are noise with a path between them.
+MAX_NAMED_NODES = 2
 
 
 def _live(alias: str, as_of: int | None) -> str:
@@ -168,34 +198,94 @@ def _live(alias: str, as_of: int | None) -> str:
     return live_clause(alias, as_of)
 
 
+#: An entity name shorter than this is not evidence that a query named it.
+#:
+#: Containment is a substring test, so a node called `Q` is inside almost every
+#: question ever asked. The word boundary check below is the real guard and
+#: this is the cheap one that keeps the scan small.
+MIN_NAME = 3
+
+
 def named_nodes(conn, group_id: str, query: str) -> list[str]:
-    """Node ids whose name contains one of the query's terms.
+    """Node ids whose own name appears in the query.
 
-    Exact lexical containment, not embedding similarity, for the reason
-    `needs_expansion` gives: a near match would make the router its own
+    **The direction matters and the first version had it backwards.** It asked
+    whether a node's name CONTAINS one of the query's words, which is what
+    `needs_expansion` does. For deciding "is there more than one entity here at
+    all", a bool, that is fine. For deciding WHICH two entities a question is
+    about it is not, and the eval priced both failure directions:
+
+      - A multi word entity name tokenises into several words, and each of them
+        is a substring of other node names, so a two entity question matched
+        five or eight nodes and the cap below declined it. Measured: the whole
+        multihop gain went to +0.0000.
+      - A `prose` query is a fact's own words with the entity names removed,
+        and a leftover word like "pool" is inside `the pool`, `pool size` and
+        `connection pool`. A question about nothing in particular acquired two
+        endpoints. Measured: -0.0569 MRR.
+
+    Asking the question the other way round, does this entity's name appear in
+    what was typed, is both cheaper to justify and exactly what "the query
+    named it" means. A two entity question matches two nodes; a prose query
+    matches none, because its entity names were stripped.
+
+    Still exact lexical containment rather than embedding similarity, for the
+    reason `needs_expansion` gives: a near match would make the router its own
     retrieval problem with its own threshold to calibrate, and this system
-    already has one threshold whose confidence interval includes chance.
+    already has one threshold whose interval has only just stopped including
+    chance.
 
-    Ordered by id so the pairs below are stable across runs.
+    Ordered by id so the pair below is stable across runs.
     """
-    from echo_memory.retrieval.query_memory import prompt_terms
-
-    words = sorted(set(prompt_terms(query)))
-    if len(words) < 2:
+    text = " ".join(query.lower().split())
+    if not text:
         return []
     rows = conn.execute(
-        f"""SELECT n.id::text
+        f"""SELECT n.id::text, lower(n.properties ->> '"name"'::agtype) AS name
               FROM {GRAPH}."Node" n
              WHERE (n.properties ->> '"group_id"'::agtype) = %s
-               AND EXISTS (
-                   SELECT 1 FROM unnest(%s::text[]) AS w
-                    WHERE position(w IN lower(n.properties ->> '"name"'::agtype)) > 0
-               )
+               AND length(n.properties ->> '"name"'::agtype) >= %s
+               AND position(lower(n.properties ->> '"name"'::agtype) IN %s) > 0
              ORDER BY n.id
-             LIMIT 8""",
-        (group_id, words),
+             LIMIT 16""",
+        (group_id, MIN_NAME, text),
     ).fetchall()
-    return [str(r[0]) for r in rows]
+    # Word boundaries in Python rather than a Postgres regex, so the name does
+    # not have to be escaped into one. `pool` must not count as naming the node
+    # `pool` when the query says `poolsize`, and a substring test alone says it
+    # does.
+    found: list[str] = []
+    for node_id, name in rows:
+        if re.search(rf"(?<!\w){re.escape(str(name))}(?!\w)", text):
+            found.append(str(node_id))
+    return found
+
+
+def _any_adjacent(
+    conn, group_id: str, nodes: list[str], as_of: int | None
+) -> bool:
+    """Whether a live edge already joins any two of these nodes.
+
+    One indexed query, and the whole channel's routing decision. If the query's
+    two entities already share a fact, that fact is the answer and the chains
+    around it are noise: `needs_expansion` reached the same conclusion from the
+    other direction, and the eval priced getting it wrong at -0.0535 MRR on
+    entity_pair and -0.0569 on prose.
+    """
+    if len(nodes) < 2:
+        return False
+    live = _live("e", as_of)
+    (joined,) = conn.execute(
+        f"""SELECT count(*)
+              FROM {GRAPH}."FACT" e
+             WHERE (e.properties ->> '"group_id"'::agtype) = %s
+               AND {live}
+               AND e.start_id::text = ANY(%s)
+               AND e.end_id::text = ANY(%s)
+               AND e.start_id <> e.end_id""",
+        (group_id, nodes, nodes),
+    ).fetchone()
+    return int(joined) > 0
 
 
 def _incident(
@@ -357,14 +447,22 @@ def candidates(
             f"names is unknown"
         )
     nodes = named_nodes(conn, group_id, query)
-    if len(nodes) < 2:
+    if not 2 <= len(nodes) <= MAX_NAMED_NODES:
+        return []
+    # Being UNCONNECTED is the signal, which is the finding `needs_expansion`
+    # records and which this channel has to apply for itself because it runs
+    # independently of the hop's router.
+    #
+    # Skipping only the one edge chain, which is what the first version did,
+    # is not the same thing and measured -0.0535 MRR on entity_pair. Those
+    # queries name two entities that ARE joined; the direct edge was correctly
+    # declined and the search then carried on to depth two and returned every
+    # detour through some other middle. A question one fact answers does not
+    # become a chain question because a longer route also exists.
+    if _any_adjacent(conn, group_id, nodes, as_of):
         return []
 
-    pairs = [
-        (nodes[i], nodes[j])
-        for i in range(len(nodes))
-        for j in range(i + 1, len(nodes))
-    ][:MAX_PAIRS]
+    pairs = [(nodes[0], nodes[1])]
 
     out: list[str] = []
     seen: set[str] = set()
