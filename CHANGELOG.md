@@ -28,15 +28,18 @@ returns exactly those edges and returns them **adjacent**, so reciprocal rank
 fusion sees the two facts of one answer a rank apart instead of forty. Nothing
 else about the fusion changes.
 
-`echo-memory eval --ablate --limit 60`, this author's store, all four shapes:
+`echo-memory eval --ablate`, this author's store, all four shapes. Controls at
+limit 60, the target shape at full n=259:
 
     shape           shipping MRR   + path channel   dMRR      95% CI
     entity_pair         0.734          0.734      +0.0000  [+0.000,+0.000]
     entity_single       0.698          0.698      +0.0000  [+0.000,+0.000]
     prose               0.975          0.975      +0.0000  [+0.000,+0.000]
-    multihop            0.199          0.276      +0.0772  [+0.045,+0.112]
+    multihop            0.242          0.327      +0.0847  [+0.068,+0.102]
 
-and on multihop, R@3 rises 0.283 to 0.500.
+On multihop, R@3 rises 0.398 to 0.629 and R@10 0.745 to 0.803, +0.0579
+[+0.027, +0.089]. For comparison, the graph hop over the identical cases is
+-0.0290 [-0.049, -0.008].
 
 **The three zeroes are the result, as much as the gain is.** They are exact
 rather than noise: the channel returns nothing at all for a query naming one
@@ -56,9 +59,20 @@ what the existing router does and is correct for the bool it computes, matches
 five or eight nodes for a two entity question; the version that did that
 declined every multihop case and scored +0.0000 everywhere.
 
-The fusion weight is 1.0 because the eval declined to need one, so no tuned
-constant is left behind. Depth stays at two edges. The hop and this channel do
-not compose and must not both be enabled.
+Depth stays at two edges: three scores identically, +0.0847 either way, and
+costs a frontier expansion per side.
+
+Two things this entry claimed on a smaller run and now does not. The fusion
+weight is **not** settled: at full n, 0.5 is worse (+0.0544) but 2.0 is higher
+than 1.0, +0.1048 [+0.085, +0.125] against +0.0847 [+0.068, +0.102]. The
+intervals overlap and each is measured against shipping rather than against
+the other, so 2.0 is not established as better either; 1.0 stays the default
+as the untuned choice, and separating the two needs a paired comparison the
+harness does not currently do. And the hop and this channel **do** compose on
+this shape once the routing is right, `+ path + hop` scoring +0.0976 with the
+table's best R@10. That is not a reason to enable both, because the hop still
+costs -0.099 to -0.142 MRR on the three shapes where this channel costs
+exactly nothing. It does mean the hop's problem was never this channel.
 
 What this is not: it is not the Personalised PageRank the design doc names for
 v1b. PPR ranks nodes by proximity to the seeds and scores the two edges of a

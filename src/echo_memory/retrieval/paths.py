@@ -79,17 +79,57 @@ against 44ms.
 
 ## What it measured
 
-`echo-memory eval --ablate --limit 60`, this author's store, 2026-11-23. All
-four shapes, because a channel measured only on the shape it was built for is
-the mistake that cost the graph hop three attempts.
+`echo-memory eval --ablate`, this author's store, 2026-11-23. All four shapes,
+because a channel measured only on the shape it was built for is the mistake
+that cost the graph hop three attempts.
+
+Control shapes, limit 60:
 
     shape           shipping MRR   + path channel   dMRR      95% CI
     entity_pair         0.734          0.734      +0.0000  [+0.000,+0.000]
     entity_single       0.698          0.698      +0.0000  [+0.000,+0.000]
     prose               0.975          0.975      +0.0000  [+0.000,+0.000]
-    multihop            0.199          0.276      +0.0772  [+0.045,+0.112]
 
-and on multihop, R@3 rises 0.283 to 0.500.
+The multihop shape at full n=259:
+
+    configuration        R@3     R@10    MRR     dMRR      95% CI
+    shipping             0.398   0.745   0.242      -       baseline
+    + graph hop          0.336   0.734   0.213   -0.0290  [-0.049,-0.008]
+    + path channel       0.629   0.803   0.327   +0.0847  [+0.068,+0.102]
+    + path at 0.5        0.548   0.768   0.296   +0.0544  [+0.041,+0.069]
+    + path at 2.0        0.660   0.807   0.347   +0.1048  [+0.085,+0.125]
+    + path depth 3       0.629   0.803   0.327   +0.0847  [+0.068,+0.102]
+    + path + hop         0.645   0.857   0.340   +0.0976  [+0.077,+0.119]
+
+R@3 rises 0.398 to 0.629, and R@10 moves too, +0.0579 [+0.027, +0.089], which
+the limit 60 run could not resolve.
+
+## Two conclusions the full run took back
+
+Both were drawn from the limit 60 run and from the earlier, mis-routed
+versions, and both are recorded here rather than quietly edited, because an
+ablation table that only ever shows the current answer cannot be used to check
+whether a change helped.
+
+**The weight is not settled at 1.0.** The earlier reading was that 0.5 was
+worse and 2.0 identical, so no weight was needed. At n=259, 0.5 is still worse
+(+0.0544) but 2.0 is HIGHER than 1.0: +0.1048 [+0.085, +0.125] against
++0.0847 [+0.068, +0.102]. Those intervals overlap, and each is measured against
+shipping rather than against the other, so this does not establish that 2.0
+wins; it establishes that the previous claim was wrong. Separating them needs a
+paired comparison between two non-shipping configurations, which the harness
+does not currently do. 1.0 stays the default because it is the untuned choice
+and nothing has yet shown 2.0 is better, which is a different sentence from the
+one this file used to carry.
+
+**The hop and this channel do compose, on this shape.** The earlier reading,
+taken on the mis-routed version, was that they were worse together. With the
+routing corrected, `+ path + hop` is +0.0976 MRR and has the best R@10 in the
+table, +0.1120 [+0.069, +0.158]. That is not a recommendation to enable both:
+the hop still costs -0.099 to -0.142 MRR on the three shapes where this channel
+costs exactly nothing, so the pair is better only on multihop and worse
+overall. The honest form of the claim is that the hop's problem was never this
+channel, it is the hop's own behaviour on single fact questions.
 
 **Those three zeroes are exact, not noise.** The channel returns nothing at all
 on a query naming one entity, or two that already share an edge, so the answer
