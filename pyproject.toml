@@ -35,6 +35,11 @@ dev = [
     "mypy>=1.11,<3",
     "pytest>=8,<10",
     "pytest-cov>=5,<8",
+    # Required: pyproject sets `timeout` under [tool.pytest.ini_options], and
+    # pytest rejects an unknown setting as a usage error rather than ignoring
+    # it. Without this installed the suite exits in under a second having run
+    # nothing, which reads as a pass.
+    "pytest-timeout>=2.3,<3",
     "ruff>=0.6,<1",
     "build>=1,<2",
     "twine>=5,<8",
@@ -55,6 +60,20 @@ markers = [
     "eval: retrieval-quality evals against real data (reserved, not in use yet)",
 ]
 testpaths = ["tests"]
+# A ceiling, not a target. The slowest honest test in this suite is well under
+# a minute; 300s is loose enough that a busy machine will not trip it and
+# tight enough that a hang dies the same day.
+#
+# The point is the stack trace, not the limit. Without a timeout a blocked
+# test produces NO output at all, so a stuck run is indistinguishable from a
+# slow one - a run sat at 29% for ten and a half hours on 2026-11-25 and the
+# only way to find the test was to add this and read what it dumped.
+#
+# thread, not signal: the hangs worth catching here are inside C extensions
+# and socket reads, where a signal handler does not run until the call
+# returns, which is precisely when it never does.
+timeout = 300
+timeout_method = "thread"
 
 [tool.coverage.run]
 # Measured against the installed package rather than the source tree, because

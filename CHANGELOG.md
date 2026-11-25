@@ -7,6 +7,107 @@ and test work do not.
 Versions before 0.4.0 predate this file. Their history is in the git log and in
 the pull requests, which carry the reasoning rather than just the diff.
 
+## Unreleased
+
+**Multi hop retrieval: the chain between two named entities, as its own ranked
+list.** This is the v1b feature the README has been publishing a number for
+since the harness could score the shape, and it is the first time graph
+structure has earned a place in `query_memory` on measurement rather than on a
+plausible story.
+
+The received reading of three failed expansion experiments was that the graph
+does not help retrieval here. That reading was incomplete in a way the same
+ablation recorded: the one hop expansion raised multihop recall@10 from 0.635
+to 0.769 while moving MRR by +0.003. It finds the second fact. It ranks it
+badly, because it returns that fact somewhere inside fifty neighbours of
+whatever the query already matched.
+
+A multihop question is two entities with no edge between them, and its answer
+is both edges of the chain joining them through some third. `retrieval/paths.py`
+returns exactly those edges and returns them **adjacent**, so reciprocal rank
+fusion sees the two facts of one answer a rank apart instead of forty. Nothing
+else about the fusion changes.
+
+`echo-memory eval --ablate`, this author's store, all four shapes. Controls at
+limit 60, the target shape at full n=259:
+
+    shape           shipping MRR   + path channel   dMRR      95% CI
+    entity_pair         0.734          0.734      +0.0000  [+0.000,+0.000]
+    entity_single       0.698          0.698      +0.0000  [+0.000,+0.000]
+    prose               0.975          0.975      +0.0000  [+0.000,+0.000]
+    multihop            0.242          0.327      +0.0847  [+0.068,+0.102]
+
+On multihop, R@3 rises 0.398 to 0.629 and R@10 0.745 to 0.803, +0.0579
+[+0.027, +0.089]. For comparison, the graph hop over the identical cases is
+-0.0290 [-0.049, -0.008].
+
+**The three zeroes are the result, as much as the gain is.** They are exact
+rather than noise: the channel returns nothing at all for a query naming one
+entity, or two that already share an edge, so the answer is byte identical to
+shipping. No previous expansion could do that. The graph hop costs -0.099 to
+-0.142 MRR on those same three shapes because it runs on every query and
+dilutes the ones a single fact answers, and that is why it has stayed off
+through three attempts.
+
+Two earlier versions of this were rejected by that same table, and both are
+recorded in `retrieval/paths.py` rather than quietly fixed, because each looked
+right. Declining the direct edge between two named entities is not the same as
+declining the pair, and the version that only did the former returned every
+two edge detour on exactly the questions one fact answers: -0.0535 MRR on
+entity_pair. And asking whether a node's NAME CONTAINS a query word, which is
+what the existing router does and is correct for the bool it computes, matches
+five or eight nodes for a two entity question; the version that did that
+declined every multihop case and scored +0.0000 everywhere.
+
+Depth stays at two edges: three scores identically, +0.0847 either way, and
+costs a frontier expansion per side.
+
+Two things this entry claimed on a smaller run and now does not. The fusion
+weight is **not** settled: at full n, 0.5 is worse (+0.0544) but 2.0 is higher
+than 1.0, +0.1048 [+0.085, +0.125] against +0.0847 [+0.068, +0.102]. The
+intervals overlap and each is measured against shipping rather than against
+the other, so 2.0 is not established as better either; 1.0 stays the default
+as the untuned choice, and separating the two needs a paired comparison the
+harness does not currently do. And the hop and this channel **do** compose on
+this shape once the routing is right, `+ path + hop` scoring +0.0976 with the
+table's best R@10. That is not a reason to enable both, because the hop still
+costs -0.099 to -0.142 MRR on the three shapes where this channel costs
+exactly nothing. It does mean the hop's problem was never this channel.
+
+What this is not: it is not the Personalised PageRank the design doc names for
+v1b. PPR ranks nodes by proximity to the seeds and scores the two edges of a
+chain independently, which is the defect being fixed rather than a different
+approach to it. PPR remains the right tool for the general associative case,
+and that case is `entity_single`, where expansion has measured at -0.099.
+
+Facts the channel found carry `path` in `matched`, so a caller showing its work
+can say which two things the chain joined.
+
+**`ECHO_MEMORY_PATHS` defaults to on.** Every other expansion in this project
+ships off, and the reason is the three control shapes: a feature that helps one
+shape and costs the other three is a tuning knob, not a default. This one costs
+the other three exactly +0.0000 [+0.000, +0.000], because it returns nothing
+before any traversal on a query naming one entity or two that already share an
+edge. A default that cannot make the common case worse is a different
+proposition from one that trades. Set `ECHO_MEMORY_PATHS=0` to disable.
+
+**Entity resolution is no longer indistinguishable from chance on this store,
+and that is not permission to turn silent merging back on.** `echo-memory
+calibrate` now reads 25 confirmed same and 155 confirmed distinct, AUC 0.763
+with a 95% interval of [0.620, 0.889]. The interval published until now,
+[0.421, 0.881] around AUC 0.666, included 0.5 and no longer does.
+
+The gate was never the AUC. It is precision at the bar where a merge happens
+without asking, and at HIGH_THRESHOLD 0.92 that is 80.0% over five reviewed
+pairs. One in five unattended merges fusing two different entities is not a
+trade worth making, and five is too thin to act on in either direction. The
+censoring caveat is also unchanged and is the harder half: every judged pair was
+already above the review bar, so recall over duplicates nobody was shown is not
+estimable from this data. A 20 pair random draw from below the bar returned 20
+obvious non duplicates, which is what a rare positive looks like in a space of
+269,000 pairs, and says the sampling has to be stratified near the bar rather
+than uniform.
+
 ## 0.6.2
 
 **Expansion can now follow links somebody asserted, instead of shared
