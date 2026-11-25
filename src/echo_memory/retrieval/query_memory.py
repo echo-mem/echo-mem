@@ -618,14 +618,23 @@ ROUTE_EXPANSION = os.environ.get("ECHO_MEMORY_ROUTE_EXPANSION", "").lower() in (
 RERANK = os.environ.get("ECHO_MEMORY_RERANK", "").lower() in ("1", "true", "yes")
 
 # Whether the chain between two entities the query named enters as its own
-# ranked list. Off until the eval says otherwise, like everything else here.
+# ranked list. ON by default, which makes it the first graph expansion in this
+# project to earn that.
 #
 # This is not the graph hop and does not turn it on. The hop expands to every
 # fact touching either endpoint of a seed; this returns the edges of a path and
 # returns them adjacent, which is the distinction retrieval/paths.py exists to
-# test. The number it has to beat is published: multihop MRR 0.212 internally,
-# and LoCoMo multi hop recall@1 0.088.
-USE_PATHS = os.environ.get("ECHO_MEMORY_PATHS", "").lower() in ("1", "true", "yes")
+# test.
+#
+# The eval it had to beat, at n=259 multihop against shipping: MRR 0.242 ->
+# 0.327, a gain of +0.0847 with 95% CI [+0.068,+0.102]; R@3 0.398 -> 0.629;
+# R@10 +0.0579 [+0.027,+0.089]. The graph hop over the identical cases scores
+# -0.0290 [-0.049,-0.008]. Every control shape moves +0.0000 [+0.000,+0.000]
+# exactly, which is what makes defaulting it on safe: the shapes it does not
+# help, it does not touch.
+#
+# Set ECHO_MEMORY_PATHS=0 to turn it off.
+USE_PATHS = os.environ.get("ECHO_MEMORY_PATHS", "1").lower() in ("1", "true", "yes")
 
 # How deep a chain may be. Two is the shape the harness scores. See
 # retrieval/paths.py for why three is available and not enabled.

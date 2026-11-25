@@ -364,7 +364,7 @@ def test_the_channel_is_reachable_end_to_end(migrated_db):
 
     with connect(migrated_db) as conn:
         ids = _buried_chain(conn)
-        off = query_memory(conn, GROUP, "alpha omega", 10, _embedder())
+        off = query_memory(conn, GROUP, "alpha omega", 10, _embedder(), use_paths=False)
         on = query_memory(conn, GROUP, "alpha omega", 10, _embedder(), use_paths=True)
 
     def by_path(response):
@@ -389,7 +389,7 @@ def test_the_channel_puts_the_chain_in_an_answer_that_lacked_it(migrated_db):
 
     with connect(migrated_db) as conn:
         ids = _buried_chain(conn)
-        off = query_memory(conn, GROUP, "alpha omega", 4, _embedder())
+        off = query_memory(conn, GROUP, "alpha omega", 4, _embedder(), use_paths=False)
         on = query_memory(conn, GROUP, "alpha omega", 4, _embedder(), use_paths=True)
 
     chain = {ids["left"], ids["right"]}
@@ -432,3 +432,52 @@ def test_a_weight_applies_to_the_path_list_and_not_another(migrated_db):
         "reaching the path list"
     )
     assert order(heavy) != order(plain)
+
+
+def test_the_channel_is_on_by_default(migrated_db, monkeypatch):
+    """The default itself, pinned.
+
+    Every other test here passes `use_paths` explicitly, which is right for
+    testing the channel and leaves the default untested: flipping
+    ECHO_MEMORY_PATHS back off would not fail any of them. This one fails on
+    that change and forces the decision to be made deliberately, the same
+    reason a measurement is pinned beside an xfail rather than left implied.
+
+    `use_paths=None` is the path a real caller takes - query_memory resolves
+    it from the module constant - so this asserts the shipped behaviour and
+    not a default argument.
+    """
+    import echo_memory.retrieval.query_memory as qm
+
+    assert qm.USE_PATHS is True, (
+        "ECHO_MEMORY_PATHS no longer defaults on. That is a product decision, "
+        "not a tidy-up: the channel costs the three control shapes exactly "
+        "+0.0000 and gains +0.0847 [+0.068,+0.102] on multihop, which is why "
+        "it ships enabled. Change this assertion only alongside the "
+        "measurement that justifies it."
+    )
+
+    with connect(migrated_db) as conn:
+        ids = _buried_chain(conn)
+        default = qm.query_memory(conn, GROUP, "alpha omega", 10, _embedder())
+
+    by_path = {
+        str(f["fact_id"]) for f in default["facts"]
+        if "path" in (f.get("matched") or [])
+    }
+    assert by_path == {ids["left"], ids["right"]}, (
+        f"the channel did not run on a default call: {by_path}"
+    )
+
+    # And the env var still turns it off, which is the documented escape hatch.
+    monkeypatch.setenv("ECHO_MEMORY_PATHS", "0")
+    import importlib
+
+    reloaded = importlib.reload(qm)
+    try:
+        assert reloaded.USE_PATHS is False, (
+            "ECHO_MEMORY_PATHS=0 no longer disables the channel"
+        )
+    finally:
+        monkeypatch.delenv("ECHO_MEMORY_PATHS", raising=False)
+        importlib.reload(qm)

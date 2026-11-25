@@ -83,6 +83,14 @@ and that case is `entity_single`, where expansion has measured at -0.099.
 Facts the channel found carry `path` in `matched`, so a caller showing its work
 can say which two things the chain joined.
 
+**`ECHO_MEMORY_PATHS` defaults to on.** Every other expansion in this project
+ships off, and the reason is the three control shapes: a feature that helps one
+shape and costs the other three is a tuning knob, not a default. This one costs
+the other three exactly +0.0000 [+0.000, +0.000], because it returns nothing
+before any traversal on a query naming one entity or two that already share an
+edge. A default that cannot make the common case worse is a different
+proposition from one that trades. Set `ECHO_MEMORY_PATHS=0` to disable.
+
 **Entity resolution is no longer indistinguishable from chance on this store,
 and that is not permission to turn silent merging back on.** `echo-memory
 calibrate` now reads 25 confirmed same and 155 confirmed distinct, AUC 0.763
