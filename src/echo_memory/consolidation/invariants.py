@@ -133,7 +133,12 @@ class Verdict:
         return self.accepted
 
 
-def _words(text: str) -> str:
+def _words(text: str | None) -> str:
+    # None is a real input, not a defensive guard: every caller reads this out
+    # of a fact dict with .get, and an absent causal_hint or target is the
+    # normal case rather than an error. The body already collapsed it to the
+    # empty string; the annotation said otherwise, which is the half that was
+    # wrong.
     return " ".join(str(text or "").lower().split())
 
 
