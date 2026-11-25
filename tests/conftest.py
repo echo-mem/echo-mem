@@ -59,9 +59,10 @@ def _model_is_cached() -> bool:
     return any(any(d.iterdir()) for d in snapshots.iterdir() if d.is_dir())
 
 
-if os.environ.get("ECHO_MEMORY_TEST_ALLOW_HUB", "") not in ("1", "true", "yes"):
-    if _model_is_cached():
-        # setdefault, not assignment: an explicit value on the command line is
-        # the operator saying something, and this should not overrule it.
-        os.environ.setdefault("HF_HUB_OFFLINE", "1")
-        os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
+_allow_hub = os.environ.get("ECHO_MEMORY_TEST_ALLOW_HUB", "") in ("1", "true", "yes")
+
+if not _allow_hub and _model_is_cached():
+    # setdefault, not assignment: an explicit value on the command line is
+    # the operator saying something, and this should not overrule it.
+    os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    os.environ.setdefault("TRANSFORMERS_OFFLINE", "1")
